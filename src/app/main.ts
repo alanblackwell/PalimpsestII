@@ -14,6 +14,7 @@ import { CountLayer }           from '../layers/CountLayer.js'
 import { EventLayer }           from '../layers/EventLayer.js'
 import { DirectionLayer }       from '../layers/DirectionLayer.js'
 import { MathLayer }            from '../layers/MathLayer.js'
+import { TextLayer }            from '../layers/TextLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -56,6 +57,9 @@ const evaluator = new Evaluator(canvas)
 //   MathLayer      — a × b; slotA=AmountA (0.3), slotB=AmountHi (0.8)
 //   BindingLayer   — AmountA  → Math.slotA
 //   BindingLayer   — AmountHi → Math.slotB
+//   TextLayer      — "Palimpsest II"; pos=PointP, col=ColourC
+//   BindingLayer   — PointP   → Text.positionSlot
+//   BindingLayer   — ColourC  → Text.colourSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -114,6 +118,10 @@ const mathLayer = new MathLayer(2)   // 2 = a × b
 mathLayer.debugName = 'Math'
 mathLayer.bounds = { x: X, y: 854, width: W, height: 36 }
 
+const textLayer = new TextLayer('Palimpsest II')
+textLayer.debugName = 'Text'
+textLayer.bounds = { x: X, y: 904, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -128,6 +136,7 @@ eventLayer.insertAbove(selectLayer)
 countLayer.insertAbove(eventLayer)
 directionLayer.insertAbove(countLayer)
 mathLayer.insertAbove(directionLayer)
+textLayer.insertAbove(mathLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -140,13 +149,15 @@ BindingLayer.create(rateLayer,   eventLayer.rateSlot)      // Rate     → Event
 BindingLayer.create(eventLayer,  countLayer.eventSlot)     // Event    → Count.event
 BindingLayer.create(layerA,      mathLayer.slotA)          // AmountA  → Math.a
 BindingLayer.create(amountHi,    mathLayer.slotB)          // AmountHi → Math.b
+BindingLayer.create(pointLayer,  textLayer.positionSlot)   // PointP   → Text.pos
+BindingLayer.create(colourLayer, textLayer.colourSlot)     // ColourC  → Text.col
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(mathLayer)
+evaluator.setStack(textLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(mathLayer)
+interaction.setStack(textLayer)
 
 // ------------------------------------------------------------------
 // Resize
