@@ -79,6 +79,22 @@ export function boundingBoxContains(box: BoundingBox, p: Point): boolean {
 }
 
 // ------------------------------------------------------------
+// Typed value accessor interfaces
+// Layers that produce a specific value type implement the
+// corresponding interface. Consuming layers cast slot.source
+// to the interface to read the value without importing the
+// concrete class (avoids tight coupling between layer types).
+// ------------------------------------------------------------
+
+export interface AmountSource  { getAmount():    Amount    }
+export interface ColourSource  { getColour():    Colour    }
+export interface PointSource   { getPoint():     Point     }
+export interface DirectionSource { getDirection(): Direction }
+export interface RateSource    { getRate():      Rate      }
+export interface CountSource   { getCount():     Count     }
+export interface EventSource   { getEventTime(): EventValue }
+
+// ------------------------------------------------------------
 // Parameter slot states
 // ------------------------------------------------------------
 

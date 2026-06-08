@@ -69,6 +69,7 @@ export abstract class Layer extends Node {
   // Subclasses override to control compositing behaviour.
   renderStack(ctx: Ctx2D): void {
     this.layerBelow?.renderStack(ctx)
+    this.evaluate()    // pull value from dirty dependencies before drawing
     this.renderSelf(ctx)
   }
 
