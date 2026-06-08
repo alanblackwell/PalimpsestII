@@ -1,9 +1,10 @@
 // PalimpsestII — entry point
-import { Evaluator }    from '../dataflow/Evaluator.js'
-import { AmountLayer }  from '../layers/AmountLayer.js'
-import { ColourLayer }  from '../layers/ColourLayer.js'
-import { BindingLayer } from '../layers/BindingLayer.js'
-import { RootLayer }    from '../layers/RootLayer.js'
+import { Evaluator }         from '../dataflow/Evaluator.js'
+import { InteractionSystem } from '../interaction/InteractionSystem.js'
+import { AmountLayer }       from '../layers/AmountLayer.js'
+import { ColourLayer }       from '../layers/ColourLayer.js'
+import { BindingLayer }      from '../layers/BindingLayer.js'
+import { RootLayer }         from '../layers/RootLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -54,35 +55,11 @@ colourLayer.insertAbove(layerB)
 // The BindingLayer is auto-inserted between layerB and colourLayer.
 BindingLayer.create(layerA, layerB.slot)
 
-// Tell the evaluator about the top of the stack.
+// Tell the evaluator and interaction system about the top of the stack.
 evaluator.setStack(colourLayer)
 
-// ------------------------------------------------------------------
-// Interaction — route pointer events to the layer stack
-// ------------------------------------------------------------------
-let activeNode: ReturnType<typeof layerB.hitTest> = null
-
-canvas.addEventListener('pointerdown', e => {
-  const point = { x: e.offsetX, y: e.offsetY }
-  activeNode = layerB.hitTest(point)
-  if (activeNode && 'handlePointerDown' in activeNode) {
-    (activeNode as any).handlePointerDown(point)
-    canvas.setPointerCapture(e.pointerId)
-  }
-})
-
-canvas.addEventListener('pointermove', e => {
-  if (activeNode && 'handlePointerMove' in activeNode) {
-    (activeNode as any).handlePointerMove({ x: e.offsetX, y: e.offsetY })
-  }
-})
-
-canvas.addEventListener('pointerup', e => {
-  if (activeNode && 'handlePointerUp' in activeNode) {
-    (activeNode as any).handlePointerUp()
-  }
-  activeNode = null
-})
+const interaction = new InteractionSystem(canvas)
+interaction.setStack(colourLayer)
 
 // ------------------------------------------------------------------
 // Resize
