@@ -5,6 +5,7 @@ import { AmountLayer }       from '../layers/AmountLayer.js'
 import { ColourLayer }       from '../layers/ColourLayer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
+import { PointLayer }        from '../layers/PointLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -23,11 +24,12 @@ const evaluator = new Evaluator(canvas)
 // ------------------------------------------------------------------
 // Demo stack (bottom → top):
 //
-//   RootLayer  — checkerboard background, full canvas
-//   AmountA    — source, value=0.3
-//   AmountB    — consumer; slot bound to AmountA
-//   BindingLayer (auto-inserted by BindingLayer.create)
-//   ColourC    — colour picker (unbound)
+//   RootLayer    — checkerboard background, full canvas
+//   AmountA      — source, value=0.3
+//   AmountB      — consumer; slot bound to AmountA
+//   BindingLayer — auto-inserted by BindingLayer.create
+//   ColourC      — colour picker (unbound)
+//   PointP       — freely draggable point handle (unbound)
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -46,20 +48,25 @@ const colourLayer = new ColourLayer({ r: 1, g: 0.42, b: 0.17, a: 1 })
 colourLayer.debugName = 'ColourC'
 colourLayer.bounds = { x: X, y: 190, width: W, height: 170 }
 
+const pointLayer = new PointLayer({ x: 500, y: 250 })
+pointLayer.debugName = 'PointP'
+pointLayer.bounds = { x: X, y: 375, width: W, height: 30 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
 colourLayer.insertAbove(layerB)
+pointLayer.insertAbove(colourLayer)
 
 // Create a binding: AmountA → AmountB.slot.
 // The BindingLayer is auto-inserted between layerB and colourLayer.
 BindingLayer.create(layerA, layerB.slot)
 
 // Tell the evaluator and interaction system about the top of the stack.
-evaluator.setStack(colourLayer)
+evaluator.setStack(pointLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(colourLayer)
+interaction.setStack(pointLayer)
 
 // ------------------------------------------------------------------
 // Resize
