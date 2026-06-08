@@ -54,6 +54,10 @@ export type ImageValue = ImageBitmap | OffscreenCanvas | null
 // null before the first recompute.
 export type MaskValue = OffscreenCanvas | null
 
+// Collection value — an ordered sequence of Amount values [0, 1].
+// Used by step sequencers, lookup tables, and breakpoint banks.
+export type CollectionValue = readonly number[]
+
 // ------------------------------------------------------------
 // Rendering context
 // The visible canvas uses CanvasRenderingContext2D; off-screen
@@ -99,7 +103,8 @@ export interface RateSource      { getRate():      Rate       }
 export interface CountSource     { getCount():     Count      }
 export interface EventSource     { getEventTime(): EventValue }
 export interface ImageSource     { getImage():     ImageValue }
-export interface MaskSource      { getMask():      MaskValue  }
+export interface MaskSource       { getMask():       MaskValue       }
+export interface CollectionSource { getCollection(): CollectionValue  }
 
 // ------------------------------------------------------------
 // Parameter slot states

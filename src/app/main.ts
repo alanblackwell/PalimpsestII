@@ -19,6 +19,7 @@ import { ImageLayer }           from '../layers/ImageLayer.js'
 import { MaskLayer }            from '../layers/MaskLayer.js'
 import { CompositeLayer }       from '../layers/CompositeLayer.js'
 import { FilterLayer }          from '../layers/FilterLayer.js'
+import { CollectionLayer }      from '../layers/CollectionLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -78,6 +79,8 @@ const evaluator = new Evaluator(canvas)
 //   FilterLayer    — blur; source=CompositeLayer, intensity=AmountA
 //   BindingLayer   — Composite   → Filter.source
 //   BindingLayer   — AmountA     → Filter.intensity
+//   CollectionLayer — 4 values; stepSlot=EventLayer (steps on each pulse)
+//   BindingLayer   — Event → Collection.stepSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -160,6 +163,10 @@ const filterLayer = new FilterLayer(canvas.width, canvas.height)
 filterLayer.debugName = 'Filter'
 filterLayer.bounds = { x: X, y: 1154, width: W, height: 40 }
 
+const collectionLayer = new CollectionLayer([0.20, 0.50, 0.80, 0.40])
+collectionLayer.debugName = 'Collection'
+collectionLayer.bounds = { x: X, y: 1208, width: W, height: 90 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -180,6 +187,7 @@ maskLayer.insertAbove(imageLayer)
 imageLayer2.insertAbove(maskLayer)
 compositeLayer.insertAbove(imageLayer2)
 filterLayer.insertAbove(compositeLayer)
+collectionLayer.insertAbove(filterLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -201,15 +209,16 @@ BindingLayer.create(amountHi,    maskLayer.sizeSlot)       // AmountHi → Mask.
 BindingLayer.create(imageLayer,      compositeLayer.baseSlot)    // Image    → Composite.base
 BindingLayer.create(imageLayer2,     compositeLayer.blendSlot)   // Image2   → Composite.blend
 BindingLayer.create(maskLayer,       compositeLayer.maskSlot)    // Mask     → Composite.mask
-BindingLayer.create(compositeLayer,  filterLayer.sourceSlot)     // Composite→ Filter.source
-BindingLayer.create(layerA,          filterLayer.intensitySlot)  // AmountA  → Filter.intensity
+BindingLayer.create(compositeLayer,  filterLayer.sourceSlot)       // Composite  → Filter.source
+BindingLayer.create(layerA,          filterLayer.intensitySlot)    // AmountA    → Filter.intensity
+BindingLayer.create(eventLayer,      collectionLayer.stepSlot)     // Event      → Collection.step
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(filterLayer)
+evaluator.setStack(collectionLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(filterLayer)
+interaction.setStack(collectionLayer)
 
 // ------------------------------------------------------------------
 // Resize
