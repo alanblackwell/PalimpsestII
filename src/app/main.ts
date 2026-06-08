@@ -1,7 +1,7 @@
 // PalimpsestII — entry point
-import { Evaluator } from '../dataflow/Evaluator.js'
-import { graph }     from '../dataflow/Graph.js'
+import { Evaluator }   from '../dataflow/Evaluator.js'
 import { AmountLayer } from '../layers/AmountLayer.js'
+import { ColourLayer } from '../layers/ColourLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -18,24 +18,29 @@ app.appendChild(canvas)
 const evaluator = new Evaluator(canvas)
 
 // ------------------------------------------------------------------
-// Demo stack: two AmountLayers stacked vertically
+// Demo stack
 // ------------------------------------------------------------------
-const LAYER_W = 240
-const LAYER_H = 36
+const X = 40
+const W = 260
 
 const layerA = new AmountLayer(0.3)
 layerA.debugName = 'AmountA'
-layerA.bounds = { x: 40, y: 60, width: LAYER_W, height: LAYER_H }
+layerA.bounds = { x: X, y: 60, width: W, height: 36 }
 
 const layerB = new AmountLayer(0.7)
 layerB.debugName = 'AmountB'
-layerB.bounds = { x: 40, y: 110, width: LAYER_W, height: LAYER_H }
+layerB.bounds = { x: X, y: 110, width: W, height: 36 }
 
-// Wire B above A in the layer stack (layerA sits at the bottom unlinked).
+const colourLayer = new ColourLayer({ r: 1, g: 0.42, b: 0.17, a: 1 })
+colourLayer.debugName = 'ColourC'
+colourLayer.bounds = { x: X, y: 165, width: W, height: 170 }
+
+// Wire the stack bottom → top: layerA → layerB → colourLayer
 layerB.insertAbove(layerA)
+colourLayer.insertAbove(layerB)
 
 // Tell the evaluator about the top of the stack.
-evaluator.setStack(layerB)
+evaluator.setStack(colourLayer)
 
 // ------------------------------------------------------------------
 // Interaction — route pointer events to the layer stack
