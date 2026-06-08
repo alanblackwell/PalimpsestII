@@ -11,6 +11,7 @@ import { RateLayer }            from '../layers/RateLayer.js'
 import { AnimationPathLayer }   from '../layers/AnimationPathLayer.js'
 import { SelectLayer }          from '../layers/SelectLayer.js'
 import { CountLayer }           from '../layers/CountLayer.js'
+import { EventLayer }           from '../layers/EventLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -45,7 +46,10 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer — Rate   → Select.condSlot
 //   BindingLayer — AmountA → Select.slotA
 //   BindingLayer — AmountHi → Select.slotB
-//   CountLayer   — manual counter (unbound event slot)
+//   EventLayer   — pulse generator; rateSlot=Rate (fires at ~0.5 Hz)
+//   BindingLayer — Rate → Event.rateSlot
+//   CountLayer   — counts Event pulses; eventSlot=EventLayer
+//   BindingLayer — Event → Count.eventSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -88,9 +92,13 @@ const selectLayer = new SelectLayer()
 selectLayer.debugName = 'Select'
 selectLayer.bounds = { x: X, y: 620, width: W, height: 36 }
 
+const eventLayer = new EventLayer()
+eventLayer.debugName = 'Event'
+eventLayer.bounds = { x: X, y: 670, width: W, height: 36 }
+
 const countLayer = new CountLayer(0)
 countLayer.debugName = 'Count'
-countLayer.bounds = { x: X, y: 670, width: W, height: 36 }
+countLayer.bounds = { x: X, y: 720, width: W, height: 36 }
 
 // Wire the stack bottom → top
 layerA.insertAbove(root)
@@ -102,7 +110,8 @@ rateLayer.insertAbove(clockLayer)
 animPath.insertAbove(rateLayer)
 amountHi.insertAbove(animPath)
 selectLayer.insertAbove(amountHi)
-countLayer.insertAbove(selectLayer)
+eventLayer.insertAbove(selectLayer)
+countLayer.insertAbove(eventLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -111,6 +120,8 @@ BindingLayer.create(rateLayer,   animPath.positionSlot)    // Rate     → AnimP
 BindingLayer.create(rateLayer,   selectLayer.condSlot)     // Rate     → Select.cond
 BindingLayer.create(layerA,      selectLayer.slotA)        // AmountA  → Select.A
 BindingLayer.create(amountHi,    selectLayer.slotB)        // AmountHi → Select.B
+BindingLayer.create(rateLayer,   eventLayer.rateSlot)      // Rate     → Event.rate
+BindingLayer.create(eventLayer,  countLayer.eventSlot)     // Event    → Count.event
 
 // Tell the evaluator about the top of the stack and drive the clock.
 evaluator.setStack(countLayer)
