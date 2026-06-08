@@ -21,6 +21,7 @@ import { CompositeLayer }       from '../layers/CompositeLayer.js'
 import { FilterLayer }          from '../layers/FilterLayer.js'
 import { CollectionLayer }      from '../layers/CollectionLayer.js'
 import { NoiseLayer }           from '../layers/NoiseLayer.js'
+import { GradientLayer }        from '../layers/GradientLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -85,6 +86,10 @@ const evaluator = new Evaluator(canvas)
 //   NoiseLayer     — fbm4; timeSlot=Clock (animated), scaleSlot=AmountA
 //   BindingLayer   — Clock    → Noise.timeSlot
 //   BindingLayer   — AmountA  → Noise.scaleSlot
+//   GradientLayer  — linear; colA=ColourC, pos=PointP, dir=DirectionLayer
+//   BindingLayer   — ColourC     → Gradient.colourA
+//   BindingLayer   — PointP      → Gradient.position
+//   BindingLayer   — Direction   → Gradient.direction
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -175,6 +180,10 @@ const noiseLayer = new NoiseLayer()
 noiseLayer.debugName = 'Noise'
 noiseLayer.bounds = { x: X, y: 1312, width: W, height: 36 }
 
+const gradientLayer = new GradientLayer(canvas.width, canvas.height)
+gradientLayer.debugName = 'Gradient'
+gradientLayer.bounds = { x: X, y: 1362, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -197,6 +206,7 @@ compositeLayer.insertAbove(imageLayer2)
 filterLayer.insertAbove(compositeLayer)
 collectionLayer.insertAbove(filterLayer)
 noiseLayer.insertAbove(collectionLayer)
+gradientLayer.insertAbove(noiseLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -223,13 +233,16 @@ BindingLayer.create(layerA,          filterLayer.intensitySlot)    // AmountA   
 BindingLayer.create(eventLayer,      collectionLayer.stepSlot)     // Event      → Collection.step
 BindingLayer.create(clockLayer,      noiseLayer.timeSlot)           // Clock      → Noise.time
 BindingLayer.create(layerA,          noiseLayer.scaleSlot)          // AmountA    → Noise.scale
+BindingLayer.create(colourLayer,     gradientLayer.colourASlot)     // ColourC    → Gradient.colA
+BindingLayer.create(pointLayer,      gradientLayer.positionSlot)    // PointP     → Gradient.pos
+BindingLayer.create(directionLayer,  gradientLayer.directionSlot)   // Direction  → Gradient.dir
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(noiseLayer)
+evaluator.setStack(gradientLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(noiseLayer)
+interaction.setStack(gradientLayer)
 
 // ------------------------------------------------------------------
 // Resize
@@ -240,4 +253,5 @@ window.addEventListener('resize', () => {
   maskLayer.resize(window.innerWidth, window.innerHeight)
   compositeLayer.resize(window.innerWidth, window.innerHeight)
   filterLayer.resize(window.innerWidth, window.innerHeight)
+  gradientLayer.resize(window.innerWidth, window.innerHeight)
 })
