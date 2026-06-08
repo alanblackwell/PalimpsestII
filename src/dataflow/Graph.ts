@@ -73,7 +73,8 @@ export class Graph {
   // Returns true on success, false if the binding would create a cycle
   // or if source does not satisfy the slot's declared type.
   bind(source: Node, slot: ParameterSlot): boolean {
-    if (!source.types.has(slot.type)) return false
+    // null type = polymorphic slot; skip the type check.
+    if (slot.type !== null && !source.types.has(slot.type)) return false
     if (!this.canBind(source, slot.owner)) return false
     slot.bind(source)
     return true

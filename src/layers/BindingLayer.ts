@@ -251,7 +251,7 @@ export class BindingLayer extends Layer
 
     // Consumer label + slot type
     const consumer   = this._slot.owner
-    const label      = consumer.debugName + ' · ' + this._slot.type
+    const label      = consumer.debugName + ' · ' + (this._slot.type ?? 'any')
     ctx.font         = '11px monospace'
     ctx.fillStyle    = disabled ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.65)'
     ctx.textAlign    = 'right'

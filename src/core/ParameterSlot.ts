@@ -6,7 +6,9 @@ import type { Node } from './Node.js'
 // ------------------------------------------------------------
 
 export class ParameterSlot {
-  readonly type: ValueType
+  // null = polymorphic slot that accepts any source type.
+  // Used by SelectLayer's value inputs.
+  readonly type: ValueType | null
 
   private _state: SlotState = SlotState.Unbound
   private _source: Node | null = null
@@ -15,7 +17,7 @@ export class ParameterSlot {
   // Public so Graph can read it for cycle detection.
   readonly owner: Node
 
-  constructor(type: ValueType, owner: Node) {
+  constructor(type: ValueType | null, owner: Node) {
     this.type = type
     this.owner = owner
   }
