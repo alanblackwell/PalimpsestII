@@ -46,8 +46,9 @@ export type Count = number  // non-negative integer
 // The value is the timestamp of the most recent trigger (or null if never triggered).
 export type EventValue = number | null
 
-// Image and Mask values are held as OffscreenCanvas / ImageData;
-// the concrete representation is defined in render/types.ts.
+// Image value — a decoded bitmap ready for drawImage().
+// null when no image has been loaded yet.
+export type ImageValue = ImageBitmap | null
 
 // ------------------------------------------------------------
 // Rendering context
@@ -86,13 +87,14 @@ export function boundingBoxContains(box: BoundingBox, p: Point): boolean {
 // concrete class (avoids tight coupling between layer types).
 // ------------------------------------------------------------
 
-export interface AmountSource  { getAmount():    Amount    }
-export interface ColourSource  { getColour():    Colour    }
-export interface PointSource   { getPoint():     Point     }
-export interface DirectionSource { getDirection(): Direction }
-export interface RateSource    { getRate():      Rate      }
-export interface CountSource   { getCount():     Count     }
-export interface EventSource   { getEventTime(): EventValue }
+export interface AmountSource    { getAmount():    Amount     }
+export interface ColourSource    { getColour():    Colour     }
+export interface PointSource     { getPoint():     Point      }
+export interface DirectionSource { getDirection(): Direction  }
+export interface RateSource      { getRate():      Rate       }
+export interface CountSource     { getCount():     Count      }
+export interface EventSource     { getEventTime(): EventValue }
+export interface ImageSource     { getImage():     ImageValue }
 
 // ------------------------------------------------------------
 // Parameter slot states

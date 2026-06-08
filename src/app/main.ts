@@ -15,6 +15,7 @@ import { EventLayer }           from '../layers/EventLayer.js'
 import { DirectionLayer }       from '../layers/DirectionLayer.js'
 import { MathLayer }            from '../layers/MathLayer.js'
 import { TextLayer }            from '../layers/TextLayer.js'
+import { ImageLayer }           from '../layers/ImageLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -60,6 +61,9 @@ const evaluator = new Evaluator(canvas)
 //   TextLayer      — "Palimpsest II"; pos=PointP, col=ColourC
 //   BindingLayer   — PointP   → Text.positionSlot
 //   BindingLayer   — ColourC  → Text.colourSlot
+//   ImageLayer     — file picker; pos=PointP, opacity=AmountA
+//   BindingLayer   — PointP   → Image.positionSlot
+//   BindingLayer   — AmountA  → Image.opacitySlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -122,6 +126,10 @@ const textLayer = new TextLayer('Palimpsest II')
 textLayer.debugName = 'Text'
 textLayer.bounds = { x: X, y: 904, width: W, height: 36 }
 
+const imageLayer = new ImageLayer()
+imageLayer.debugName = 'Image'
+imageLayer.bounds = { x: X, y: 954, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -137,6 +145,7 @@ countLayer.insertAbove(eventLayer)
 directionLayer.insertAbove(countLayer)
 mathLayer.insertAbove(directionLayer)
 textLayer.insertAbove(mathLayer)
+imageLayer.insertAbove(textLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -151,13 +160,15 @@ BindingLayer.create(layerA,      mathLayer.slotA)          // AmountA  → Math.
 BindingLayer.create(amountHi,    mathLayer.slotB)          // AmountHi → Math.b
 BindingLayer.create(pointLayer,  textLayer.positionSlot)   // PointP   → Text.pos
 BindingLayer.create(colourLayer, textLayer.colourSlot)     // ColourC  → Text.col
+BindingLayer.create(pointLayer,  imageLayer.positionSlot)  // PointP   → Image.pos
+BindingLayer.create(layerA,      imageLayer.opacitySlot)   // AmountA  → Image.opacity
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(textLayer)
+evaluator.setStack(imageLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(textLayer)
+interaction.setStack(imageLayer)
 
 // ------------------------------------------------------------------
 // Resize
