@@ -46,9 +46,9 @@ export type Count = number  // non-negative integer
 // The value is the timestamp of the most recent trigger (or null if never triggered).
 export type EventValue = number | null
 
-// Image value — a decoded bitmap ready for drawImage().
-// null when no image has been loaded yet.
-export type ImageValue = ImageBitmap | null
+// Image value — a decoded bitmap or composited off-screen canvas,
+// ready for ctx.drawImage().  null when no content is available.
+export type ImageValue = ImageBitmap | OffscreenCanvas | null
 
 // Mask value — a greyscale OffscreenCanvas (white = included, black = excluded).
 // null before the first recompute.
