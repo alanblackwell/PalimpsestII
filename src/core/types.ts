@@ -50,6 +50,10 @@ export type EventValue = number | null
 // null when no image has been loaded yet.
 export type ImageValue = ImageBitmap | null
 
+// Mask value — a greyscale OffscreenCanvas (white = included, black = excluded).
+// null before the first recompute.
+export type MaskValue = OffscreenCanvas | null
+
 // ------------------------------------------------------------
 // Rendering context
 // The visible canvas uses CanvasRenderingContext2D; off-screen
@@ -95,6 +99,7 @@ export interface RateSource      { getRate():      Rate       }
 export interface CountSource     { getCount():     Count      }
 export interface EventSource     { getEventTime(): EventValue }
 export interface ImageSource     { getImage():     ImageValue }
+export interface MaskSource      { getMask():      MaskValue  }
 
 // ------------------------------------------------------------
 // Parameter slot states

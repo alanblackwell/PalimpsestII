@@ -16,6 +16,7 @@ import { DirectionLayer }       from '../layers/DirectionLayer.js'
 import { MathLayer }            from '../layers/MathLayer.js'
 import { TextLayer }            from '../layers/TextLayer.js'
 import { ImageLayer }           from '../layers/ImageLayer.js'
+import { MaskLayer }            from '../layers/MaskLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -64,6 +65,9 @@ const evaluator = new Evaluator(canvas)
 //   ImageLayer     — file picker; pos=PointP, opacity=AmountA
 //   BindingLayer   — PointP   → Image.positionSlot
 //   BindingLayer   — AmountA  → Image.opacitySlot
+//   MaskLayer      — ellipse; pos=PointP, size=AmountHi
+//   BindingLayer   — PointP   → Mask.positionSlot
+//   BindingLayer   — AmountHi → Mask.sizeSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -130,6 +134,10 @@ const imageLayer = new ImageLayer()
 imageLayer.debugName = 'Image'
 imageLayer.bounds = { x: X, y: 954, width: W, height: 36 }
 
+const maskLayer = new MaskLayer(canvas.width, canvas.height)
+maskLayer.debugName = 'Mask'
+maskLayer.bounds = { x: X, y: 1004, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -146,6 +154,7 @@ directionLayer.insertAbove(countLayer)
 mathLayer.insertAbove(directionLayer)
 textLayer.insertAbove(mathLayer)
 imageLayer.insertAbove(textLayer)
+maskLayer.insertAbove(imageLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -162,13 +171,15 @@ BindingLayer.create(pointLayer,  textLayer.positionSlot)   // PointP   → Text.
 BindingLayer.create(colourLayer, textLayer.colourSlot)     // ColourC  → Text.col
 BindingLayer.create(pointLayer,  imageLayer.positionSlot)  // PointP   → Image.pos
 BindingLayer.create(layerA,      imageLayer.opacitySlot)   // AmountA  → Image.opacity
+BindingLayer.create(pointLayer,  maskLayer.positionSlot)   // PointP   → Mask.pos
+BindingLayer.create(amountHi,    maskLayer.sizeSlot)       // AmountHi → Mask.size
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(imageLayer)
+evaluator.setStack(maskLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(imageLayer)
+interaction.setStack(maskLayer)
 
 // ------------------------------------------------------------------
 // Resize
@@ -176,4 +187,5 @@ interaction.setStack(imageLayer)
 window.addEventListener('resize', () => {
   evaluator.resize(window.innerWidth, window.innerHeight)
   root.resize(window.innerWidth, window.innerHeight)
+  maskLayer.resize(window.innerWidth, window.innerHeight)
 })
