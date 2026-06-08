@@ -12,6 +12,7 @@ import { AnimationPathLayer }   from '../layers/AnimationPathLayer.js'
 import { SelectLayer }          from '../layers/SelectLayer.js'
 import { CountLayer }           from '../layers/CountLayer.js'
 import { EventLayer }           from '../layers/EventLayer.js'
+import { DirectionLayer }       from '../layers/DirectionLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -50,6 +51,7 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer — Rate → Event.rateSlot
 //   CountLayer   — counts Event pulses; eventSlot=EventLayer
 //   BindingLayer — Event → Count.eventSlot
+//   DirectionLayer — manual dial (unbound magnitude slot)
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -100,6 +102,10 @@ const countLayer = new CountLayer(0)
 countLayer.debugName = 'Count'
 countLayer.bounds = { x: X, y: 720, width: W, height: 36 }
 
+const directionLayer = new DirectionLayer(Math.PI / 4, 0.7)
+directionLayer.debugName = 'Direction'
+directionLayer.bounds = { x: X, y: 770, width: W, height: 70 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -112,6 +118,7 @@ amountHi.insertAbove(animPath)
 selectLayer.insertAbove(amountHi)
 eventLayer.insertAbove(selectLayer)
 countLayer.insertAbove(eventLayer)
+directionLayer.insertAbove(countLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -124,11 +131,11 @@ BindingLayer.create(rateLayer,   eventLayer.rateSlot)      // Rate     → Event
 BindingLayer.create(eventLayer,  countLayer.eventSlot)     // Event    → Count.event
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(countLayer)
+evaluator.setStack(directionLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(countLayer)
+interaction.setStack(directionLayer)
 
 // ------------------------------------------------------------------
 // Resize
