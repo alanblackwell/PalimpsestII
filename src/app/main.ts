@@ -10,6 +10,7 @@ import { ClockLayer }           from '../layers/ClockLayer.js'
 import { RateLayer }            from '../layers/RateLayer.js'
 import { AnimationPathLayer }   from '../layers/AnimationPathLayer.js'
 import { SelectLayer }          from '../layers/SelectLayer.js'
+import { CountLayer }           from '../layers/CountLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -44,6 +45,7 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer — Rate   → Select.condSlot
 //   BindingLayer — AmountA → Select.slotA
 //   BindingLayer — AmountHi → Select.slotB
+//   CountLayer   — manual counter (unbound event slot)
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -86,6 +88,10 @@ const selectLayer = new SelectLayer()
 selectLayer.debugName = 'Select'
 selectLayer.bounds = { x: X, y: 620, width: W, height: 36 }
 
+const countLayer = new CountLayer(0)
+countLayer.debugName = 'Count'
+countLayer.bounds = { x: X, y: 670, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -96,6 +102,7 @@ rateLayer.insertAbove(clockLayer)
 animPath.insertAbove(rateLayer)
 amountHi.insertAbove(animPath)
 selectLayer.insertAbove(amountHi)
+countLayer.insertAbove(selectLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -106,11 +113,11 @@ BindingLayer.create(layerA,      selectLayer.slotA)        // AmountA  → Selec
 BindingLayer.create(amountHi,    selectLayer.slotB)        // AmountHi → Select.B
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(selectLayer)
+evaluator.setStack(countLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(selectLayer)
+interaction.setStack(countLayer)
 
 // ------------------------------------------------------------------
 // Resize
