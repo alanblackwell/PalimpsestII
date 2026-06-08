@@ -22,6 +22,7 @@ import { FilterLayer }          from '../layers/FilterLayer.js'
 import { CollectionLayer }      from '../layers/CollectionLayer.js'
 import { NoiseLayer }           from '../layers/NoiseLayer.js'
 import { GradientLayer }        from '../layers/GradientLayer.js'
+import { TransformLayer }       from '../layers/TransformLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -90,6 +91,10 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer   — ColourC     → Gradient.colourA
 //   BindingLayer   — PointP      → Gradient.position
 //   BindingLayer   — Direction   → Gradient.direction
+//   TransformLayer — translate+rotate+scale; source=GradientLayer, pos=PointP, dir=Direction
+//   BindingLayer   — GradientLayer → Transform.source
+//   BindingLayer   — PointP        → Transform.position
+//   BindingLayer   — Direction     → Transform.direction
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -184,6 +189,10 @@ const gradientLayer = new GradientLayer(canvas.width, canvas.height)
 gradientLayer.debugName = 'Gradient'
 gradientLayer.bounds = { x: X, y: 1362, width: W, height: 36 }
 
+const transformLayer = new TransformLayer(canvas.width, canvas.height)
+transformLayer.debugName = 'Transform'
+transformLayer.bounds = { x: X, y: 1412, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -207,6 +216,7 @@ filterLayer.insertAbove(compositeLayer)
 collectionLayer.insertAbove(filterLayer)
 noiseLayer.insertAbove(collectionLayer)
 gradientLayer.insertAbove(noiseLayer)
+transformLayer.insertAbove(gradientLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -236,13 +246,16 @@ BindingLayer.create(layerA,          noiseLayer.scaleSlot)          // AmountA  
 BindingLayer.create(colourLayer,     gradientLayer.colourASlot)     // ColourC    → Gradient.colA
 BindingLayer.create(pointLayer,      gradientLayer.positionSlot)    // PointP     → Gradient.pos
 BindingLayer.create(directionLayer,  gradientLayer.directionSlot)   // Direction  → Gradient.dir
+BindingLayer.create(gradientLayer,   transformLayer.sourceSlot)      // Gradient   → Transform.source
+BindingLayer.create(pointLayer,      transformLayer.positionSlot)    // PointP     → Transform.pos
+BindingLayer.create(directionLayer,  transformLayer.directionSlot)   // Direction  → Transform.dir
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(gradientLayer)
+evaluator.setStack(transformLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(gradientLayer)
+interaction.setStack(transformLayer)
 
 // ------------------------------------------------------------------
 // Resize
@@ -254,4 +267,5 @@ window.addEventListener('resize', () => {
   compositeLayer.resize(window.innerWidth, window.innerHeight)
   filterLayer.resize(window.innerWidth, window.innerHeight)
   gradientLayer.resize(window.innerWidth, window.innerHeight)
+  transformLayer.resize(window.innerWidth, window.innerHeight)
 })
