@@ -50,6 +50,15 @@ export type EventValue = number | null
 // the concrete representation is defined in render/types.ts.
 
 // ------------------------------------------------------------
+// Rendering context
+// The visible canvas uses CanvasRenderingContext2D; off-screen
+// caches use OffscreenCanvasRenderingContext2D. Both share the
+// same drawing API, so we use a union throughout.
+// ------------------------------------------------------------
+
+export type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+
+// ------------------------------------------------------------
 // Geometry
 // ------------------------------------------------------------
 

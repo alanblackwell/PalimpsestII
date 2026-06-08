@@ -12,7 +12,8 @@ export class ParameterSlot {
   private _source: Node | null = null
 
   // The owner is notified (marked dirty) whenever the source changes value.
-  private readonly owner: Node
+  // Public so Graph can read it for cycle detection.
+  readonly owner: Node
 
   constructor(type: ValueType, owner: Node) {
     this.type = type

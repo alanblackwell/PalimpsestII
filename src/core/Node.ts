@@ -30,6 +30,13 @@ export abstract class Node {
   protected readonly slots: ParameterSlot[] = []
 
   // ----------------------------------------------------------
+  // Evaluator hook
+  // Set by the Evaluator so that marking any node dirty triggers
+  // a render frame without nodes needing to import the Evaluator.
+  // ----------------------------------------------------------
+  static scheduleFrame: (() => void) | null = null
+
+  // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------
 
@@ -41,12 +48,26 @@ export abstract class Node {
     this._dependents.delete(node)
   }
 
+  // Expose the dependent set for read-only use by the Graph (cycle detection).
+  get dependents(): ReadonlySet<Node> {
+    return this._dependents
+  }
+
   markDirty(): void {
     if (this._dirty) return  // already dirty — stop propagation
     this._dirty = true
+    Node.scheduleFrame?.()   // notify the evaluator a frame is needed
     for (const dep of this._dependents) {
       dep.markDirty()
     }
+  }
+
+  // Force dirty regardless of current state (e.g. for initial state or
+  // after a bounds change that invalidates the cache).
+  forceDirty(): void {
+    this._dirty = true
+    Node.scheduleFrame?.()
+    for (const dep of this._dependents) dep.forceDirty()
   }
 
   get isDirty(): boolean { return this._dirty }
@@ -59,7 +80,7 @@ export abstract class Node {
   protected abstract recompute(): void
 
   // Evaluate this node (and any dirty dependencies first).
-  // Call this before reading the node's value or render output.
+  // Depth-first pull: resolves the dependency order naturally.
   evaluate(): void {
     for (const slot of this.slots) {
       if (slot.isActive) {
@@ -76,19 +97,19 @@ export abstract class Node {
   // Rendering
   // ----------------------------------------------------------
 
-  // Returns the cached render, evaluating first if dirty.
-  getrender(): OffscreenCanvas | null {
+  // Returns the cached render canvas, evaluating first if dirty.
+  getCachedRender(): OffscreenCanvas | null {
     this.evaluate()
     return this.cachedRender
   }
 
-  // Ensure the cached canvas matches the current bounds.
+  // Ensure the cached canvas exists and matches the current bounds.
   protected ensureCanvas(): OffscreenCanvas {
     const { width, height } = this.bounds
     if (
       this.cachedRender === null ||
-      this.cachedRender.width !== width ||
-      this.cachedRender.height !== height
+      this.cachedRender.width  !== Math.max(1, width) ||
+      this.cachedRender.height !== Math.max(1, height)
     ) {
       this.cachedRender = new OffscreenCanvas(
         Math.max(1, width),

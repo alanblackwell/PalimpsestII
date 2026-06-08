@@ -1,6 +1,7 @@
 import { Node } from './Node.js'
 import type { Layer } from './Layer.js'
 import { boundingBoxContains } from './types.js'
+import type { Ctx2D } from './types.js'
 
 // ------------------------------------------------------------
 // Region — a UI element that lives inside a Layer
@@ -49,7 +50,7 @@ export abstract class Region extends Node {
   // Rendering
   // ----------------------------------------------------------
 
-  abstract renderSelf(ctx: OffscreenCanvasRenderingContext2D): void
+  abstract renderSelf(ctx: Ctx2D): void
 
   protected recompute(): void {
     // Default: pull value from bound slot and update visual appearance.

@@ -1,4 +1,5 @@
 import { Node } from './Node.js'
+import type { Ctx2D } from './types.js'
 
 // ------------------------------------------------------------
 // Layer — a full participant in the dataflow graph and the stack
@@ -66,13 +67,13 @@ export abstract class Layer extends Node {
 
   // Render this layer and all layers below it onto g2d.
   // Subclasses override to control compositing behaviour.
-  renderStack(ctx: OffscreenCanvasRenderingContext2D): void {
+  renderStack(ctx: Ctx2D): void {
     this.layerBelow?.renderStack(ctx)
     this.renderSelf(ctx)
   }
 
   // Render just this layer's own content. Subclasses must implement.
-  abstract renderSelf(ctx: OffscreenCanvasRenderingContext2D): void
+  abstract renderSelf(ctx: Ctx2D): void
 
   // ----------------------------------------------------------
   // Hit testing
