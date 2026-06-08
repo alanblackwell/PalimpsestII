@@ -3,6 +3,7 @@ import { Evaluator }    from '../dataflow/Evaluator.js'
 import { AmountLayer }  from '../layers/AmountLayer.js'
 import { ColourLayer }  from '../layers/ColourLayer.js'
 import { BindingLayer } from '../layers/BindingLayer.js'
+import { RootLayer }    from '../layers/RootLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -19,18 +20,18 @@ app.appendChild(canvas)
 const evaluator = new Evaluator(canvas)
 
 // ------------------------------------------------------------------
-// Demo stack
+// Demo stack (bottom → top):
 //
-//   AmountA  (y=60)   — source, value=0.3
-//   AmountB  (y=110)  — consumer; slot bound to AmountA
-//   BindingLayer      — auto-positioned above AmountB (y=78)
-//   ColourC  (y=170)  — colour picker (unbound)
-//
-// BindingLayer.create() binds AmountA → AmountB.slot and inserts the
-// BindingLayer into the stack, demonstrating the binding visualisation.
+//   RootLayer  — checkerboard background, full canvas
+//   AmountA    — source, value=0.3
+//   AmountB    — consumer; slot bound to AmountA
+//   BindingLayer (auto-inserted by BindingLayer.create)
+//   ColourC    — colour picker (unbound)
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
+
+const root = new RootLayer(canvas.width, canvas.height)
 
 const layerA = new AmountLayer(0.3)
 layerA.debugName = 'AmountA'
@@ -45,12 +46,12 @@ colourLayer.debugName = 'ColourC'
 colourLayer.bounds = { x: X, y: 190, width: W, height: 170 }
 
 // Wire the stack bottom → top
+layerA.insertAbove(root)
 layerB.insertAbove(layerA)
 colourLayer.insertAbove(layerB)
 
-// Create a binding: AmountA drives AmountB's slot.
-// BindingLayer.create() binds the slot and inserts the BindingLayer
-// above AmountB, which correctly places it between layerB and colourLayer.
+// Create a binding: AmountA → AmountB.slot.
+// The BindingLayer is auto-inserted between layerB and colourLayer.
 BindingLayer.create(layerA, layerB.slot)
 
 // Tell the evaluator about the top of the stack.
@@ -88,4 +89,5 @@ canvas.addEventListener('pointerup', e => {
 // ------------------------------------------------------------------
 window.addEventListener('resize', () => {
   evaluator.resize(window.innerWidth, window.innerHeight)
+  root.resize(window.innerWidth, window.innerHeight)
 })
