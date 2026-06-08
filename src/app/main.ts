@@ -18,6 +18,7 @@ import { TextLayer }            from '../layers/TextLayer.js'
 import { ImageLayer }           from '../layers/ImageLayer.js'
 import { MaskLayer }            from '../layers/MaskLayer.js'
 import { CompositeLayer }       from '../layers/CompositeLayer.js'
+import { FilterLayer }          from '../layers/FilterLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -74,6 +75,9 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer   — ImageLayer  → Composite.base
 //   BindingLayer   — ImageLayer2 → Composite.blend
 //   BindingLayer   — MaskLayer   → Composite.mask
+//   FilterLayer    — blur; source=CompositeLayer, intensity=AmountA
+//   BindingLayer   — Composite   → Filter.source
+//   BindingLayer   — AmountA     → Filter.intensity
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -152,6 +156,10 @@ const compositeLayer = new CompositeLayer(canvas.width, canvas.height)
 compositeLayer.debugName = 'Composite'
 compositeLayer.bounds = { x: X, y: 1104, width: W, height: 36 }
 
+const filterLayer = new FilterLayer(canvas.width, canvas.height)
+filterLayer.debugName = 'Filter'
+filterLayer.bounds = { x: X, y: 1154, width: W, height: 40 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -171,6 +179,7 @@ imageLayer.insertAbove(textLayer)
 maskLayer.insertAbove(imageLayer)
 imageLayer2.insertAbove(maskLayer)
 compositeLayer.insertAbove(imageLayer2)
+filterLayer.insertAbove(compositeLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -189,16 +198,18 @@ BindingLayer.create(pointLayer,  imageLayer.positionSlot)  // PointP   → Image
 BindingLayer.create(layerA,      imageLayer.opacitySlot)   // AmountA  → Image.opacity
 BindingLayer.create(pointLayer,  maskLayer.positionSlot)   // PointP   → Mask.pos
 BindingLayer.create(amountHi,    maskLayer.sizeSlot)       // AmountHi → Mask.size
-BindingLayer.create(imageLayer,  compositeLayer.baseSlot)  // Image    → Composite.base
-BindingLayer.create(imageLayer2, compositeLayer.blendSlot) // Image2   → Composite.blend
-BindingLayer.create(maskLayer,   compositeLayer.maskSlot)  // Mask     → Composite.mask
+BindingLayer.create(imageLayer,      compositeLayer.baseSlot)    // Image    → Composite.base
+BindingLayer.create(imageLayer2,     compositeLayer.blendSlot)   // Image2   → Composite.blend
+BindingLayer.create(maskLayer,       compositeLayer.maskSlot)    // Mask     → Composite.mask
+BindingLayer.create(compositeLayer,  filterLayer.sourceSlot)     // Composite→ Filter.source
+BindingLayer.create(layerA,          filterLayer.intensitySlot)  // AmountA  → Filter.intensity
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(compositeLayer)
+evaluator.setStack(filterLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(compositeLayer)
+interaction.setStack(filterLayer)
 
 // ------------------------------------------------------------------
 // Resize
@@ -208,4 +219,5 @@ window.addEventListener('resize', () => {
   root.resize(window.innerWidth, window.innerHeight)
   maskLayer.resize(window.innerWidth, window.innerHeight)
   compositeLayer.resize(window.innerWidth, window.innerHeight)
+  filterLayer.resize(window.innerWidth, window.innerHeight)
 })
