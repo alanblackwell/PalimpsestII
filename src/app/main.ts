@@ -20,6 +20,7 @@ import { MaskLayer }            from '../layers/MaskLayer.js'
 import { CompositeLayer }       from '../layers/CompositeLayer.js'
 import { FilterLayer }          from '../layers/FilterLayer.js'
 import { CollectionLayer }      from '../layers/CollectionLayer.js'
+import { NoiseLayer }           from '../layers/NoiseLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -81,6 +82,9 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer   — AmountA     → Filter.intensity
 //   CollectionLayer — 4 values; stepSlot=EventLayer (steps on each pulse)
 //   BindingLayer   — Event → Collection.stepSlot
+//   NoiseLayer     — fbm4; timeSlot=Clock (animated), scaleSlot=AmountA
+//   BindingLayer   — Clock    → Noise.timeSlot
+//   BindingLayer   — AmountA  → Noise.scaleSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -167,6 +171,10 @@ const collectionLayer = new CollectionLayer([0.20, 0.50, 0.80, 0.40])
 collectionLayer.debugName = 'Collection'
 collectionLayer.bounds = { x: X, y: 1208, width: W, height: 90 }
 
+const noiseLayer = new NoiseLayer()
+noiseLayer.debugName = 'Noise'
+noiseLayer.bounds = { x: X, y: 1312, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -188,6 +196,7 @@ imageLayer2.insertAbove(maskLayer)
 compositeLayer.insertAbove(imageLayer2)
 filterLayer.insertAbove(compositeLayer)
 collectionLayer.insertAbove(filterLayer)
+noiseLayer.insertAbove(collectionLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -212,13 +221,15 @@ BindingLayer.create(maskLayer,       compositeLayer.maskSlot)    // Mask     →
 BindingLayer.create(compositeLayer,  filterLayer.sourceSlot)       // Composite  → Filter.source
 BindingLayer.create(layerA,          filterLayer.intensitySlot)    // AmountA    → Filter.intensity
 BindingLayer.create(eventLayer,      collectionLayer.stepSlot)     // Event      → Collection.step
+BindingLayer.create(clockLayer,      noiseLayer.timeSlot)           // Clock      → Noise.time
+BindingLayer.create(layerA,          noiseLayer.scaleSlot)          // AmountA    → Noise.scale
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(collectionLayer)
+evaluator.setStack(noiseLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(collectionLayer)
+interaction.setStack(noiseLayer)
 
 // ------------------------------------------------------------------
 // Resize
