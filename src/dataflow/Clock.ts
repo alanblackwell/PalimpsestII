@@ -18,8 +18,8 @@ import { graph } from './Graph.js'
 export class Clock extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Amount])
 
-  private _elapsed  = 0   // total seconds since start
-  private _startTs: number | null = null
+  private _elapsed  = 0    // total seconds since start
+  protected _startTs: number | null = null  // protected: ClockLayer adjusts for pause/resume
 
   constructor() {
     super()

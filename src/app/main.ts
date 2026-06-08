@@ -6,6 +6,8 @@ import { ColourLayer }       from '../layers/ColourLayer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { PointLayer }        from '../layers/PointLayer.js'
+import { ClockLayer }        from '../layers/ClockLayer.js'
+import { RateLayer }         from '../layers/RateLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -30,6 +32,9 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer — auto-inserted by BindingLayer.create
 //   ColourC      — colour picker (unbound)
 //   PointP       — freely draggable point handle (unbound)
+//   Clock        — continuously advancing time source; drives rAF loop
+//   RateLayer    — Clock → cycling phase at 1.0 Hz (draggable rate)
+//   BindingLayer — auto-inserted: Clock → RateLayer.timeSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -52,21 +57,32 @@ const pointLayer = new PointLayer({ x: 500, y: 250 })
 pointLayer.debugName = 'PointP'
 pointLayer.bounds = { x: X, y: 375, width: W, height: 30 }
 
+const clockLayer = new ClockLayer()
+clockLayer.debugName = 'Clock'
+clockLayer.bounds = { x: X, y: 420, width: W, height: 30 }
+
+const rateLayer = new RateLayer(1.0)
+rateLayer.debugName = 'Rate'
+rateLayer.bounds = { x: X, y: 465, width: W, height: 44 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
 colourLayer.insertAbove(layerB)
 pointLayer.insertAbove(colourLayer)
+clockLayer.insertAbove(pointLayer)
+rateLayer.insertAbove(clockLayer)
 
-// Create a binding: AmountA → AmountB.slot.
-// The BindingLayer is auto-inserted between layerB and colourLayer.
-BindingLayer.create(layerA, layerB.slot)
+// Bindings
+BindingLayer.create(layerA, layerB.slot)          // AmountA → AmountB
+BindingLayer.create(clockLayer, rateLayer.timeSlot) // Clock → RateLayer.time
 
-// Tell the evaluator and interaction system about the top of the stack.
-evaluator.setStack(pointLayer)
+// Tell the evaluator about the top of the stack and drive the clock.
+evaluator.setStack(rateLayer)
+evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(pointLayer)
+interaction.setStack(rateLayer)
 
 // ------------------------------------------------------------------
 // Resize
