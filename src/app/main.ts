@@ -13,6 +13,7 @@ import { SelectLayer }          from '../layers/SelectLayer.js'
 import { CountLayer }           from '../layers/CountLayer.js'
 import { EventLayer }           from '../layers/EventLayer.js'
 import { DirectionLayer }       from '../layers/DirectionLayer.js'
+import { MathLayer }            from '../layers/MathLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -52,6 +53,9 @@ const evaluator = new Evaluator(canvas)
 //   CountLayer   — counts Event pulses; eventSlot=EventLayer
 //   BindingLayer — Event → Count.eventSlot
 //   DirectionLayer — manual dial (unbound magnitude slot)
+//   MathLayer      — a × b; slotA=AmountA (0.3), slotB=AmountHi (0.8)
+//   BindingLayer   — AmountA  → Math.slotA
+//   BindingLayer   — AmountHi → Math.slotB
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -106,6 +110,10 @@ const directionLayer = new DirectionLayer(Math.PI / 4, 0.7)
 directionLayer.debugName = 'Direction'
 directionLayer.bounds = { x: X, y: 770, width: W, height: 70 }
 
+const mathLayer = new MathLayer(2)   // 2 = a × b
+mathLayer.debugName = 'Math'
+mathLayer.bounds = { x: X, y: 854, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -119,6 +127,7 @@ selectLayer.insertAbove(amountHi)
 eventLayer.insertAbove(selectLayer)
 countLayer.insertAbove(eventLayer)
 directionLayer.insertAbove(countLayer)
+mathLayer.insertAbove(directionLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -129,13 +138,15 @@ BindingLayer.create(layerA,      selectLayer.slotA)        // AmountA  → Selec
 BindingLayer.create(amountHi,    selectLayer.slotB)        // AmountHi → Select.B
 BindingLayer.create(rateLayer,   eventLayer.rateSlot)      // Rate     → Event.rate
 BindingLayer.create(eventLayer,  countLayer.eventSlot)     // Event    → Count.event
+BindingLayer.create(layerA,      mathLayer.slotA)          // AmountA  → Math.a
+BindingLayer.create(amountHi,    mathLayer.slotB)          // AmountHi → Math.b
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(directionLayer)
+evaluator.setStack(mathLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(directionLayer)
+interaction.setStack(mathLayer)
 
 // ------------------------------------------------------------------
 // Resize
