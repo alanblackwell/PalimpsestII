@@ -1,13 +1,14 @@
 // PalimpsestII — entry point
-import { Evaluator }         from '../dataflow/Evaluator.js'
-import { InteractionSystem } from '../interaction/InteractionSystem.js'
-import { AmountLayer }       from '../layers/AmountLayer.js'
-import { ColourLayer }       from '../layers/ColourLayer.js'
-import { BindingLayer }      from '../layers/BindingLayer.js'
-import { RootLayer }         from '../layers/RootLayer.js'
-import { PointLayer }        from '../layers/PointLayer.js'
-import { ClockLayer }        from '../layers/ClockLayer.js'
-import { RateLayer }         from '../layers/RateLayer.js'
+import { Evaluator }            from '../dataflow/Evaluator.js'
+import { InteractionSystem }    from '../interaction/InteractionSystem.js'
+import { AmountLayer }          from '../layers/AmountLayer.js'
+import { ColourLayer }          from '../layers/ColourLayer.js'
+import { BindingLayer }         from '../layers/BindingLayer.js'
+import { RootLayer }            from '../layers/RootLayer.js'
+import { PointLayer }           from '../layers/PointLayer.js'
+import { ClockLayer }           from '../layers/ClockLayer.js'
+import { RateLayer }            from '../layers/RateLayer.js'
+import { AnimationPathLayer }   from '../layers/AnimationPathLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -29,12 +30,14 @@ const evaluator = new Evaluator(canvas)
 //   RootLayer    — checkerboard background, full canvas
 //   AmountA      — source, value=0.3
 //   AmountB      — consumer; slot bound to AmountA
-//   BindingLayer — auto-inserted by BindingLayer.create
+//   BindingLayer — AmountA → AmountB
 //   ColourC      — colour picker (unbound)
 //   PointP       — freely draggable point handle (unbound)
 //   Clock        — continuously advancing time source; drives rAF loop
-//   RateLayer    — Clock → cycling phase at 1.0 Hz (draggable rate)
-//   BindingLayer — auto-inserted: Clock → RateLayer.timeSlot
+//   RateLayer    — Clock → cycling phase at 1.0 Hz
+//   BindingLayer — Clock → RateLayer.timeSlot
+//   AnimPath     — elliptical path driven by RateLayer output
+//   BindingLayer — RateLayer → AnimPath.positionSlot
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -61,9 +64,13 @@ const clockLayer = new ClockLayer()
 clockLayer.debugName = 'Clock'
 clockLayer.bounds = { x: X, y: 420, width: W, height: 30 }
 
-const rateLayer = new RateLayer(1.0)
+const rateLayer = new RateLayer(0.5)
 rateLayer.debugName = 'Rate'
 rateLayer.bounds = { x: X, y: 465, width: W, height: 44 }
+
+const animPath = new AnimationPathLayer()
+animPath.debugName = 'AnimPath'
+animPath.bounds = { x: X, y: 524, width: W, height: 30 }
 
 // Wire the stack bottom → top
 layerA.insertAbove(root)
@@ -72,17 +79,19 @@ colourLayer.insertAbove(layerB)
 pointLayer.insertAbove(colourLayer)
 clockLayer.insertAbove(pointLayer)
 rateLayer.insertAbove(clockLayer)
+animPath.insertAbove(rateLayer)
 
-// Bindings
-BindingLayer.create(layerA, layerB.slot)          // AmountA → AmountB
-BindingLayer.create(clockLayer, rateLayer.timeSlot) // Clock → RateLayer.time
+// Bindings (each auto-inserts a BindingLayer above the consumer)
+BindingLayer.create(layerA,   layerB.slot)            // AmountA → AmountB
+BindingLayer.create(clockLayer, rateLayer.timeSlot)   // Clock   → Rate.time
+BindingLayer.create(rateLayer,  animPath.positionSlot) // Rate    → AnimPath.pos
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(rateLayer)
+evaluator.setStack(animPath)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(rateLayer)
+interaction.setStack(animPath)
 
 // ------------------------------------------------------------------
 // Resize
