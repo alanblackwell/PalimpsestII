@@ -23,6 +23,7 @@ import { CollectionLayer }      from '../layers/CollectionLayer.js'
 import { NoiseLayer }           from '../layers/NoiseLayer.js'
 import { GradientLayer }        from '../layers/GradientLayer.js'
 import { TransformLayer }       from '../layers/TransformLayer.js'
+import { SequencerLayer }       from '../layers/SequencerLayer.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -95,6 +96,9 @@ const evaluator = new Evaluator(canvas)
 //   BindingLayer   — GradientLayer → Transform.source
 //   BindingLayer   — PointP        → Transform.position
 //   BindingLayer   — Direction     → Transform.direction
+//   SequencerLayer — 4-step linear; rateSlot=Rate, eventSlot=Event
+//   BindingLayer   — Rate  → Sequencer.rate
+//   BindingLayer   — Event → Sequencer.event
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -193,6 +197,10 @@ const transformLayer = new TransformLayer(canvas.width, canvas.height)
 transformLayer.debugName = 'Transform'
 transformLayer.bounds = { x: X, y: 1412, width: W, height: 36 }
 
+const sequencerLayer = new SequencerLayer(canvas.width, canvas.height)
+sequencerLayer.debugName = 'Sequencer'
+sequencerLayer.bounds = { x: X, y: 1462, width: W, height: 128 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -217,6 +225,7 @@ collectionLayer.insertAbove(filterLayer)
 noiseLayer.insertAbove(collectionLayer)
 gradientLayer.insertAbove(noiseLayer)
 transformLayer.insertAbove(gradientLayer)
+sequencerLayer.insertAbove(transformLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -249,13 +258,15 @@ BindingLayer.create(directionLayer,  gradientLayer.directionSlot)   // Direction
 BindingLayer.create(gradientLayer,   transformLayer.sourceSlot)      // Gradient   → Transform.source
 BindingLayer.create(pointLayer,      transformLayer.positionSlot)    // PointP     → Transform.pos
 BindingLayer.create(directionLayer,  transformLayer.directionSlot)   // Direction  → Transform.dir
+BindingLayer.create(rateLayer,       sequencerLayer.rateSlot)         // Rate       → Sequencer.rate
+BindingLayer.create(eventLayer,      sequencerLayer.eventSlot)        // Event      → Sequencer.event
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(transformLayer)
+evaluator.setStack(sequencerLayer)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(transformLayer)
+interaction.setStack(sequencerLayer)
 
 // ------------------------------------------------------------------
 // Resize
@@ -268,4 +279,5 @@ window.addEventListener('resize', () => {
   filterLayer.resize(window.innerWidth, window.innerHeight)
   gradientLayer.resize(window.innerWidth, window.innerHeight)
   transformLayer.resize(window.innerWidth, window.innerHeight)
+  sequencerLayer.resize(window.innerWidth, window.innerHeight)
 })
