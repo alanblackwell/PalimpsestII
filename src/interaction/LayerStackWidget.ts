@@ -52,7 +52,7 @@ const SEL_R = 168; const SEL_G = 240; const SEL_B = 240
 const SEL_BG      = `rgb(${SEL_R},${SEL_G},${SEL_B})`
 const SEL_TINT    = `rgba(${SEL_R},${SEL_G},${SEL_B},0.32)`
 const SEL_BORDER  = `rgba(60,160,160,0.85)`
-const TOP_MARGIN  = 20
+const TOP_MARGIN  = 28   // room for the current-layer label strip above the first card
 const MIN_SPACING = 22      // minimum gap between successive card tops
 const GAP_CURRENT = 40      // gap above the current card (must exceed shadow bleed ~15px)
 const LABEL_RATIO = 0.13    // label height as fraction of card height
@@ -75,16 +75,6 @@ export class LayerStackWidget {
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
-    // Make the canvas focusable so it receives keyboard events.
-    canvas.tabIndex = 0
-    // Arrow-key navigation on both document (works before first click)
-    // and the canvas element itself (works when canvas has focus).
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowUp')   { this.navigateUp();   e.preventDefault() }
-      if (e.key === 'ArrowDown') { this.navigateDown(); e.preventDefault() }
-    }
-    document.addEventListener('keydown', onKey)
-    canvas.addEventListener('keydown',   onKey)
   }
 
   // ------------------------------------------------------------------
@@ -109,6 +99,13 @@ export class LayerStackWidget {
   set selected(l: Layer | null) { this._selected = l }
 
   get widgetWidth(): number { return WIDGET_W }
+
+  // Handle a key press. Returns true if the key was consumed.
+  handleKey(key: string): boolean {
+    if (key === 'ArrowUp')   { this.navigateUp();   return true }
+    if (key === 'ArrowDown') { this.navigateDown(); return true }
+    return false
+  }
 
   // Move current layer one step up in the stack (towards topmost).
   navigateUp(): void {
@@ -258,20 +255,20 @@ export class LayerStackWidget {
   }
 
   private _drawCurrentLabel(ctx: Ctx2D): void {
-    const H  = this._canvas.height
-    const lh = 20
+    const lh = TOP_MARGIN - 2   // fits exactly in the top margin above the first card
+    if (lh < 8) return
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.72)'
-    ctx.fillRect(0, H - lh, WIDGET_W, lh)
+    ctx.fillRect(0, 0, WIDGET_W, lh)
     if (this._selected !== null) {
       const tc = this._typeColor(this._selected)
       ctx.fillStyle = tc
-      ctx.fillRect(0, H - lh, 3, lh)
+      ctx.fillRect(0, 0, 3, lh)
       ctx.fillStyle    = 'rgba(255,255,255,0.90)'
       ctx.font         = '11px monospace'
       ctx.textAlign    = 'left'
       ctx.textBaseline = 'middle'
-      ctx.fillText(`▸ ${this._selected.debugName}  [↑↓ to navigate]`, 8, H - lh / 2)
+      ctx.fillText(`▸ ${this._selected.debugName}`, 8, lh / 2)
     }
     ctx.restore()
   }

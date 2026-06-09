@@ -81,6 +81,7 @@ export class InteractionSystem {
   private readonly _onMove:   (e: PointerEvent) => void
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
+  private readonly _onKey:    (e: KeyboardEvent) => void
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
@@ -89,11 +90,14 @@ export class InteractionSystem {
     this._onMove   = e => this._handleMove(e)
     this._onUp     = e => this._handleUp(e)
     this._onCancel = e => this._handleUp(e)   // treat cancel like up
+    this._onKey    = e => this._handleKey(e)
 
     canvas.addEventListener('pointerdown',   this._onDown)
     canvas.addEventListener('pointermove',   this._onMove)
     canvas.addEventListener('pointerup',     this._onUp)
     canvas.addEventListener('pointercancel', this._onCancel)
+    // Key events on document so they fire even before the canvas is clicked.
+    document.addEventListener('keydown',     this._onKey)
   }
 
   // ----------------------------------------------------------
@@ -115,6 +119,7 @@ export class InteractionSystem {
     this._canvas.removeEventListener('pointermove',   this._onMove)
     this._canvas.removeEventListener('pointerup',     this._onUp)
     this._canvas.removeEventListener('pointercancel', this._onCancel)
+    document.removeEventListener('keydown',           this._onKey)
   }
 
   // ----------------------------------------------------------
@@ -194,6 +199,12 @@ export class InteractionSystem {
     this._active.node.handlePointerUp?.()
     this._active = null
     this._updateHoverCursor(e)
+  }
+
+  private _handleKey(e: KeyboardEvent): void {
+    if (this._widget !== null) {
+      if (this._widget.handleKey(e.key)) e.preventDefault()
+    }
   }
 
   // ----------------------------------------------------------
