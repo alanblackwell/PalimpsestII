@@ -90,8 +90,24 @@ export class ColourLayer extends Layer implements ColourSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
+  }
+
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
+
+    // Update picker bounds to this pill's position
+    const px = ColourLayer.PAD_X
+    const py = ColourLayer.PAD_Y
+    const lh = ColourLayer.LABEL_H
+    this._picker.bounds = {
+      x:      x + px,
+      y:      y + py,
+      width:  Math.max(0, width  - px * 2),
+      height: Math.max(0, height - py * 2 - lh),
+    }
 
     const r = Math.min(height / 2, 10)
     ctx.save()

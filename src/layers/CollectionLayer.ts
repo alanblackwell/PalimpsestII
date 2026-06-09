@@ -70,6 +70,7 @@ export class CollectionLayer extends Layer
 
   // Drag state for bar editing
   private _dragBarIndex: number = -1
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(initial: readonly number[] = [0.20, 0.50, 0.80, 0.40]) {
     super()
@@ -125,8 +126,9 @@ export class CollectionLayer extends Layer
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    const b = this._cpBounds ?? this.bounds
     // Control row buttons
-    if (boundingBoxContains(this._decrBtnBounds(), point)) {
+    if (boundingBoxContains(this._decrBtnBounds(b), point)) {
       if (this._values.length > MIN_N) {
         this._values.pop()
         this._stepIndex  = this._stepIndex % this._values.length
@@ -135,7 +137,7 @@ export class CollectionLayer extends Layer
       }
       return true
     }
-    if (boundingBoxContains(this._incrBtnBounds(), point)) {
+    if (boundingBoxContains(this._incrBtnBounds(b), point)) {
       if (this._values.length < MAX_N) {
         this._values.push(0.5)
         this.markDirty()
@@ -144,10 +146,10 @@ export class CollectionLayer extends Layer
     }
 
     // Bar area — find which bar was clicked
-    const idx = this._barIndexAt(point)
+    const idx = this._barIndexAt(point, b)
     if (idx >= 0) {
       this._dragBarIndex = idx
-      this._setBarValue(idx, point)
+      this._setBarValue(idx, point, b)
       return true
     }
 
@@ -156,7 +158,8 @@ export class CollectionLayer extends Layer
 
   handlePointerMove(point: Point): void {
     if (this._dragBarIndex >= 0) {
-      this._setBarValue(this._dragBarIndex, point)
+      const b = this._cpBounds ?? this.bounds
+      this._setBarValue(this._dragBarIndex, point, b)
     }
   }
 
@@ -165,7 +168,8 @@ export class CollectionLayer extends Layer
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -173,8 +177,15 @@ export class CollectionLayer extends Layer
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
+
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
 
     ctx.save()
 
@@ -190,22 +201,22 @@ export class CollectionLayer extends Layer
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    this._renderControlRow(ctx)
-    this._renderBars(ctx)
+    this._renderControlRow(ctx, b)
+    this._renderBars(ctx, b)
 
     ctx.restore()
   }
 
   // ── Control row ─────────────────────────────────────────────
 
-  private _renderControlRow(ctx: Ctx2D): void {
-    const { x, y, width } = this.bounds
+  private _renderControlRow(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width } = b
     const midY = y + ROW1_H / 2
     const n    = this._values.length
 
     // [−] count [+]
-    const db = this._decrBtnBounds()
-    const ib = this._incrBtnBounds()
+    const db = this._decrBtnBounds(b)
+    const ib = this._incrBtnBounds(b)
     this._drawBtn(ctx, db, '−', n > MIN_N ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.20)')
     ctx.font         = '11px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.85)'
@@ -251,10 +262,10 @@ export class CollectionLayer extends Layer
 
   // ── Value bars ───────────────────────────────────────────────
 
-  private _renderBars(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+  private _renderBars(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width } = b
     const n       = this._values.length
-    const barArea = this._barAreaBounds()
+    const barArea = this._barAreaBounds(b)
     const bw      = (barArea.width - (n - 1) * BAR_GAP) / n
 
     for (let i = 0; i < n; i++) {
@@ -310,8 +321,8 @@ export class CollectionLayer extends Layer
   // Private helpers
   // ----------------------------------------------------------
 
-  private _barAreaBounds() {
-    const { x, y, width, height } = this.bounds
+  private _barAreaBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, width, height } = b ?? this.bounds
     return {
       x:      x + BAR_PAD,
       y:      y + ROW1_H + 6,
@@ -320,8 +331,8 @@ export class CollectionLayer extends Layer
     }
   }
 
-  private _barIndexAt(point: Point): number {
-    const ba = this._barAreaBounds()
+  private _barIndexAt(point: Point, b?: { x: number; y: number; width: number; height: number }): number {
+    const ba = this._barAreaBounds(b)
     if (!boundingBoxContains(ba, point)) return -1
     const n  = this._values.length
     const bw = (ba.width - (n - 1) * BAR_GAP) / n
@@ -330,20 +341,20 @@ export class CollectionLayer extends Layer
     return idx >= 0 && idx < n ? idx : -1
   }
 
-  private _setBarValue(idx: number, point: Point): void {
-    const ba = this._barAreaBounds()
+  private _setBarValue(idx: number, point: Point, b?: { x: number; y: number; width: number; height: number }): void {
+    const ba = this._barAreaBounds(b)
     const t  = 1 - Math.max(0, Math.min(1, (point.y - ba.y) / ba.height))
     this._values[idx] = t
     this.markDirty()
   }
 
-  private _decrBtnBounds() {
-    const { x, y } = this.bounds
+  private _decrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y } = b ?? this.bounds
     return { x: x + 8, y: y + (ROW1_H - BTN) / 2, width: BTN, height: BTN }
   }
 
-  private _incrBtnBounds() {
-    const db = this._decrBtnBounds()
+  private _incrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const db = this._decrBtnBounds(b)
     return { x: db.x + BTN + 18, y: db.y, width: BTN, height: BTN }
   }
 

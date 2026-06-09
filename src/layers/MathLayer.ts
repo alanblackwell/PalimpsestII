@@ -86,6 +86,7 @@ export class MathLayer extends Layer implements AmountSource {
   private _result:  Amount = 0
   private _aValue:  number = 0
   private _bValue:  number = 0
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(opIndex = 2) {
     super()
@@ -143,16 +144,17 @@ export class MathLayer extends Layer implements AmountSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._prevBtnBounds(), point)) {
+    const b = this._cpBounds ?? this.bounds
+    if (boundingBoxContains(this._prevBtnBounds(b), point)) {
       this.cyclePrev()
       return true
     }
-    if (boundingBoxContains(this._nextBtnBounds(), point)) {
+    if (boundingBoxContains(this._nextBtnBounds(b), point)) {
       this.cycleNext()
       return true
     }
     // Clicking the op label itself also cycles forward.
-    if (boundingBoxContains(this._opLabelBounds(), point)) {
+    if (boundingBoxContains(this._opLabelBounds(b), point)) {
       this.cycleNext()
       return true
     }
@@ -160,7 +162,8 @@ export class MathLayer extends Layer implements AmountSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -168,9 +171,15 @@ export class MathLayer extends Layer implements AmountSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY   = y + height / 2
     const op     = OPS[this._opIndex]
     const binary = op.arity === 2
@@ -190,10 +199,10 @@ export class MathLayer extends Layer implements AmountSource {
     ctx.fill()
 
     // [◀] prev button
-    this._drawNavBtn(ctx, this._prevBtnBounds(), '◀', midY)
+    this._drawNavBtn(ctx, this._prevBtnBounds(b), '◀', midY)
 
     // Op label zone (click to cycle)
-    const opB = this._opLabelBounds()
+    const opB = this._opLabelBounds(b)
     ctx.fillStyle = 'rgba(255,255,255,0.07)'
     ctx.beginPath()
     ctx.roundRect(opB.x, opB.y, opB.width, opB.height, 3)
@@ -205,10 +214,10 @@ export class MathLayer extends Layer implements AmountSource {
     ctx.fillText(op.label, opB.x + opB.width / 2, midY)
 
     // [▶] next button
-    this._drawNavBtn(ctx, this._nextBtnBounds(), '▶', midY)
+    this._drawNavBtn(ctx, this._nextBtnBounds(b), '▶', midY)
 
     // Value columns — right section
-    const valStart = this._nextBtnBounds().x + BTN_W + 10
+    const valStart = this._nextBtnBounds(b).x + BTN_W + 10
     ctx.font      = '11px monospace'
     ctx.textAlign = 'left'
 
@@ -260,18 +269,18 @@ export class MathLayer extends Layer implements AmountSource {
 
   // Button / zone geometry — all derived from bounds
 
-  private _prevBtnBounds() {
-    const { x, y, height } = this.bounds
+  private _prevBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, height } = b ?? this.bounds
     return { x: x + 8, y: y + (height - BTN_H) / 2, width: BTN_W, height: BTN_H }
   }
 
-  private _opLabelBounds() {
-    const pb = this._prevBtnBounds()
+  private _opLabelBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const pb = this._prevBtnBounds(b)
     return { x: pb.x + BTN_W + 4, y: pb.y, width: OP_W, height: BTN_H }
   }
 
-  private _nextBtnBounds() {
-    const ob = this._opLabelBounds()
+  private _nextBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const ob = this._opLabelBounds(b)
     return { x: ob.x + OP_W + 4, y: ob.y, width: BTN_W, height: BTN_H }
   }
 }

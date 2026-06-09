@@ -50,6 +50,7 @@ export class CountLayer extends Layer implements CountSource {
 
   // Last seen event timestamp — used to detect new pulses.
   private _lastEventTime: EventValue = null
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(initial: Count = 0) {
     super()
@@ -113,15 +114,16 @@ export class CountLayer extends Layer implements CountSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._decrBtnBounds(), point)) {
+    const b = this._cpBounds ?? this.bounds
+    if (boundingBoxContains(this._decrBtnBounds(b), point)) {
       this.decrement()
       return true
     }
-    if (boundingBoxContains(this._incrBtnBounds(), point)) {
+    if (boundingBoxContains(this._incrBtnBounds(b), point)) {
       this.increment()
       return true
     }
-    if (boundingBoxContains(this._resetBtnBounds(), point)) {
+    if (boundingBoxContains(this._resetBtnBounds(b), point)) {
       this.reset()
       return true
     }
@@ -129,7 +131,8 @@ export class CountLayer extends Layer implements CountSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -137,9 +140,15 @@ export class CountLayer extends Layer implements CountSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY = y + height / 2
 
     ctx.save()
@@ -157,12 +166,12 @@ export class CountLayer extends Layer implements CountSource {
     ctx.fill()
 
     // [−] button
-    const decrB = this._decrBtnBounds()
+    const decrB = this._decrBtnBounds(b)
     this._drawBtn(ctx, decrB, '−',
       this._count > 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.18)')
 
     // Count value — centred between the two stepper buttons
-    const incrB  = this._incrBtnBounds()
+    const incrB  = this._incrBtnBounds(b)
     const valCx  = (decrB.x + decrB.width + incrB.x) / 2
     ctx.font         = '13px monospace'
     ctx.fillStyle    = this._eventSlot.isActive
@@ -176,7 +185,7 @@ export class CountLayer extends Layer implements CountSource {
     this._drawBtn(ctx, incrB, '+', 'rgba(255,255,255,0.75)')
 
     // [↺] reset button
-    this._drawBtn(ctx, this._resetBtnBounds(), '↺', 'rgba(255,255,255,0.45)')
+    this._drawBtn(ctx, this._resetBtnBounds(b), '↺', 'rgba(255,255,255,0.45)')
 
     ctx.restore()
   }
@@ -204,19 +213,19 @@ export class CountLayer extends Layer implements CountSource {
   }
 
   // Layout: [−] at left after accent stripe; [+] immediately after; [↺] at right edge.
-  private _decrBtnBounds() {
-    const { x, y, height } = this.bounds
+  private _decrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, height } = b ?? this.bounds
     const s = BTN
     return { x: x + 10, y: y + (height - s) / 2, width: s, height: s }
   }
 
-  private _incrBtnBounds() {
-    const db = this._decrBtnBounds()
+  private _incrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const db = this._decrBtnBounds(b)
     return { x: db.x + BTN + BTN_G, y: db.y, width: BTN, height: BTN }
   }
 
-  private _resetBtnBounds() {
-    const { x, y, width, height } = this.bounds
+  private _resetBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, width, height } = b ?? this.bounds
     const s = BTN
     return { x: x + width - BTN_M - s, y: y + (height - s) / 2, width: s, height: s }
   }

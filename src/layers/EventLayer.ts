@@ -55,6 +55,7 @@ export class EventLayer extends Layer implements EventSource {
 
   private _eventTime: EventValue = null   // ms timestamp of last pulse
   private _prevPhase: number     = 0      // for wrap detection
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor() {
     super()
@@ -111,11 +112,12 @@ export class EventLayer extends Layer implements EventSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._fireBtnBounds(), point)) {
+    const b = this._cpBounds ?? this.bounds
+    if (boundingBoxContains(this._fireBtnBounds(b), point)) {
       this.fire()
       return true
     }
-    if (boundingBoxContains(this._clearBtnBounds(), point)) {
+    if (boundingBoxContains(this._clearBtnBounds(b), point)) {
       this.clearEvent()
       return true
     }
@@ -123,7 +125,8 @@ export class EventLayer extends Layer implements EventSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -131,9 +134,17 @@ export class EventLayer extends Layer implements EventSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+    // ── Status blob on main canvas ─────────────────────────
+    this._renderBlob(ctx)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY = y + height / 2
     const now  = performance.now()
 
@@ -152,7 +163,7 @@ export class EventLayer extends Layer implements EventSource {
     ctx.fill()
 
     // [▶ FIRE] button
-    const fb = this._fireBtnBounds()
+    const fb = this._fireBtnBounds(b)
     ctx.fillStyle = 'rgba(224,224,96,0.15)'
     ctx.beginPath()
     ctx.roundRect(fb.x, fb.y, fb.width, fb.height, 4)
@@ -164,7 +175,7 @@ export class EventLayer extends Layer implements EventSource {
     ctx.fillText('▶ FIRE', fb.x + fb.width / 2, fb.y + fb.height / 2)
 
     // Last-trigger label — fades from bright to dim over 1 s
-    const clearB = this._clearBtnBounds()
+    const clearB = this._clearBtnBounds(b)
     const labelX = fb.x + fb.width + 10
     const labelR = clearB.x - 8
     ctx.font         = '11px monospace'
@@ -182,8 +193,8 @@ export class EventLayer extends Layer implements EventSource {
       // Blend from yellow to white as it fades
       const r = Math.round(255)
       const g = Math.round(255)
-      const b = Math.round(bright * 96)
-      ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(2)})`
+      const bv = Math.round(bright * 96)
+      ctx.fillStyle = `rgba(${r},${g},${bv},${alpha.toFixed(2)})`
       const ageSec  = age < 100 ? age.toFixed(1) + ' s ago' : '—'
       // Right-align within label zone to keep layout stable
       ctx.textAlign = 'right'
@@ -194,9 +205,6 @@ export class EventLayer extends Layer implements EventSource {
     this._drawBtn(ctx, clearB, '↺', 'rgba(255,255,255,0.40)')
 
     ctx.restore()
-
-    // ── Status blob on main canvas ─────────────────────────
-    this._renderBlob(ctx)
   }
 
   private _renderBlob(ctx: Ctx2D): void {
@@ -250,14 +258,14 @@ export class EventLayer extends Layer implements EventSource {
     ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
   }
 
-  private _clearBtnBounds() {
-    const { x, y, width, height } = this.bounds
+  private _clearBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, width, height } = b ?? this.bounds
     const s = BTN
     return { x: x + width - BTN_M - s, y: y + (height - s) / 2, width: s, height: s }
   }
 
-  private _fireBtnBounds() {
-    const { x, y, height } = this.bounds
+  private _fireBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, height } = b ?? this.bounds
     const fw = 58   // wide enough for "▶ FIRE"
     const fh = 22
     return { x: x + 10, y: y + (height - fh) / 2, width: fw, height: fh }

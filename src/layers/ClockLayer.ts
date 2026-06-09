@@ -33,6 +33,7 @@ export class ClockLayer extends Clock implements AmountSource {
   private _paused         = false
   private _holdElapsed    = 0       // elapsed captured at the moment of pause
   private _resumePending  = false   // true between resume() and the next tick()
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // Button layout constants.
   private static readonly BTN   = 20
@@ -107,11 +108,12 @@ export class ClockLayer extends Clock implements AmountSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._pauseBtnBounds(), point)) {
+    const b = this._cpBounds ?? this.bounds
+    if (boundingBoxContains(this._pauseBtnBounds(b), point)) {
       this.togglePause()
       return true
     }
-    if (boundingBoxContains(this._resetBtnBounds(), point)) {
+    if (boundingBoxContains(this._resetBtnBounds(b), point)) {
       this.reset()
       return true
     }
@@ -119,7 +121,8 @@ export class ClockLayer extends Clock implements AmountSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -127,9 +130,15 @@ export class ClockLayer extends Clock implements AmountSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY = y + height / 2
 
     ctx.save()
@@ -163,10 +172,10 @@ export class ClockLayer extends Clock implements AmountSource {
     }
 
     // Play/pause button
-    this._drawBtn(ctx, this._pauseBtnBounds(), this._paused ? '▶' : '⏸', ACCENT)
+    this._drawBtn(ctx, this._pauseBtnBounds(b), this._paused ? '▶' : '⏸', ACCENT)
 
     // Reset button
-    this._drawBtn(ctx, this._resetBtnBounds(), '↺', 'rgba(255,255,255,0.55)')
+    this._drawBtn(ctx, this._resetBtnBounds(b), '↺', 'rgba(255,255,255,0.55)')
 
     ctx.restore()
   }
@@ -193,15 +202,15 @@ export class ClockLayer extends Clock implements AmountSource {
     ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
   }
 
-  private _resetBtnBounds() {
-    const { x, y, width, height } = this.bounds
+  private _resetBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, width, height } = b ?? this.bounds
     const m = ClockLayer.BTN_M
     const s = ClockLayer.BTN
     return { x: x + width - m - s, y: y + (height - s) / 2, width: s, height: s }
   }
 
-  private _pauseBtnBounds() {
-    const rb = this._resetBtnBounds()
+  private _pauseBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const rb = this._resetBtnBounds(b)
     const s  = ClockLayer.BTN
     const g  = ClockLayer.BTN_G
     return { x: rb.x - s - g, y: rb.y, width: s, height: s }

@@ -49,6 +49,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   private _angle:     number = 0    // radians; 0 = right (+x), CCW positive
   private _magnitude: number = 0.7  // [0, 1]
   private _dragging   = false
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(angle = 0, magnitude = 0.7) {
     super()
@@ -89,7 +90,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    const c = this._dialCentre()
+    const c = this._dialCentre(this._cpBounds ?? this.bounds)
     const dx = point.x - c.x
     const dy = point.y - c.y
     if (dx * dx + dy * dy <= DIAL_R * DIAL_R) {
@@ -109,7 +110,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    const c  = this._dialCentre()
+    const c  = this._dialCentre(this._cpBounds ?? this.bounds)
     const dx = point.x - c.x
     const dy = point.y - c.y
     return dx * dx + dy * dy <= DIAL_R * DIAL_R ? this : null
@@ -120,11 +121,17 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY = y + height / 2
-    const c    = this._dialCentre()
+    const c    = this._dialCentre(b)
 
     ctx.save()
 
@@ -222,13 +229,13 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _dialCentre(): Point {
-    const { x, y, height } = this.bounds
+  private _dialCentre(b?: { x: number; y: number; width: number; height: number }): Point {
+    const { x, y, height } = b ?? this.bounds
     return { x: x + DIAL_OX + DIAL_R, y: y + height / 2 }
   }
 
   private _applyPointer(point: Point): void {
-    const c  = this._dialCentre()
+    const c  = this._dialCentre(this._cpBounds ?? this.bounds)
     const dx = point.x - c.x
     const dy = point.y - c.y
     this._angle = Math.atan2(dy, dx)

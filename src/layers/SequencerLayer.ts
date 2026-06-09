@@ -117,6 +117,7 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
 
   // Drag state for dot editing
   private _dragIdx: number = -1
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
@@ -223,7 +224,8 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._decrBtnBounds(), point)) {
+    const b = this._cpBounds ?? this.bounds
+    if (boundingBoxContains(this._decrBtnBounds(b), point)) {
       if (this._points.length > MIN_N) {
         this._points.pop()
         this._stepIndex = this._stepIndex % this._points.length
@@ -231,18 +233,18 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
       }
       return true
     }
-    if (boundingBoxContains(this._incrBtnBounds(), point)) {
+    if (boundingBoxContains(this._incrBtnBounds(b), point)) {
       if (this._points.length < MAX_N) {
         this._points.push({ x: 0.5, y: 0.5 })
         this.markDirty()
       }
       return true
     }
-    if (boundingBoxContains(this._prevBtnBounds(), point)) { this.cyclePrev(); return true }
-    if (boundingBoxContains(this._labelBounds(),   point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
+    if (boundingBoxContains(this._prevBtnBounds(b), point)) { this.cyclePrev(); return true }
+    if (boundingBoxContains(this._labelBounds(b),   point)) { this.cycleNext(); return true }
+    if (boundingBoxContains(this._nextBtnBounds(b), point)) { this.cycleNext(); return true }
 
-    const pv = this._previewBounds()
+    const pv = this._previewBounds(b)
     if (boundingBoxContains(pv, point)) {
       const idx = this._dotIndexAt(point, pv)
       if (idx >= 0) {
@@ -257,7 +259,8 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
 
   handlePointerMove(point: Point): void {
     if (this._dragIdx >= 0) {
-      this._setDotFromPoint(this._dragIdx, point, this._previewBounds())
+      const b = this._cpBounds ?? this.bounds
+      this._setDotFromPoint(this._dragIdx, point, this._previewBounds(b))
     }
   }
 
@@ -266,7 +269,8 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
+      ? this : null
   }
 
   // ----------------------------------------------------------
@@ -274,8 +278,15 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+  }
+
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
 
     ctx.save()
 
@@ -291,22 +302,22 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    this._renderControlRow(ctx)
-    this._renderPreview(ctx)
+    this._renderControlRow(ctx, b)
+    this._renderPreview(ctx, b)
 
     ctx.restore()
   }
 
   // ── Control row ─────────────────────────────────────────────
 
-  private _renderControlRow(ctx: Ctx2D): void {
-    const { x, y, width } = this.bounds
+  private _renderControlRow(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width } = b
     const midY = y + ROW1_H / 2
     const n    = this._points.length
 
     // [−] count [+]
-    const db = this._decrBtnBounds()
-    const ib = this._incrBtnBounds()
+    const db = this._decrBtnBounds(b)
+    const ib = this._incrBtnBounds(b)
     this._drawBtn(ctx, db, '−', n > MIN_N ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.20)')
     ctx.font         = '11px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.85)'
@@ -316,8 +327,8 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
     this._drawBtn(ctx, ib, '+', n < MAX_N ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.20)')
 
     // [◀] interp [▶]
-    this._drawNavBtn(ctx, this._prevBtnBounds(), '◀', midY)
-    const lb = this._labelBounds()
+    this._drawNavBtn(ctx, this._prevBtnBounds(b), '◀', midY)
+    const lb = this._labelBounds(b)
     ctx.fillStyle = 'rgba(255,255,255,0.07)'
     ctx.beginPath()
     ctx.roundRect(lb.x, lb.y, lb.width, lb.height, 3)
@@ -327,7 +338,7 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(INTERP_MODES[this._interpIndex]!, lb.x + lb.width / 2, midY)
-    this._drawNavBtn(ctx, this._nextBtnBounds(), '▶', midY)
+    this._drawNavBtn(ctx, this._nextBtnBounds(b), '▶', midY)
 
     // Slot indicators (right side)
     const slots = [
@@ -353,9 +364,9 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
 
   // ── Preview ──────────────────────────────────────────────────
 
-  private _renderPreview(ctx: Ctx2D): void {
-    const { x, y, width } = this.bounds
-    const pv   = this._previewBounds()
+  private _renderPreview(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width } = b
+    const pv   = this._previewBounds(b)
     const n    = this._points.length
     const mode = INTERP_MODES[this._interpIndex]!
 
@@ -459,33 +470,33 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
 
   // Geometry
 
-  private _decrBtnBounds() {
-    const { x, y } = this.bounds
+  private _decrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y } = b ?? this.bounds
     return { x: x + 8, y: y + (ROW1_H - BTN) / 2, width: BTN, height: BTN }
   }
 
-  private _incrBtnBounds() {
-    const db = this._decrBtnBounds()
+  private _incrBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const db = this._decrBtnBounds(b)
     return { x: db.x + BTN + 18, y: db.y, width: BTN, height: BTN }
   }
 
-  private _prevBtnBounds() {
-    const ib = this._incrBtnBounds()
+  private _prevBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const ib = this._incrBtnBounds(b)
     return { x: ib.x + BTN + 10, y: ib.y, width: NAV_W, height: NAV_H }
   }
 
-  private _labelBounds() {
-    const pb = this._prevBtnBounds()
+  private _labelBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const pb = this._prevBtnBounds(b)
     return { x: pb.x + NAV_W + 4, y: pb.y, width: LABEL_W, height: NAV_H }
   }
 
-  private _nextBtnBounds() {
-    const lb = this._labelBounds()
+  private _nextBtnBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const lb = this._labelBounds(b)
     return { x: lb.x + LABEL_W + 4, y: lb.y, width: NAV_W, height: NAV_H }
   }
 
-  private _previewBounds() {
-    const { x, y, width, height } = this.bounds
+  private _previewBounds(b?: { x: number; y: number; width: number; height: number }) {
+    const { x, y, width, height } = b ?? this.bounds
     return {
       x:      x + PRV_PAD,
       y:      y + ROW1_H + PRV_PAD,

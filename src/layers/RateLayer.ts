@@ -48,6 +48,7 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
   private _phase:     Amount = 0   // output: cycling [0, 1]
   private _rateHz:    Rate   = 1   // current rate in Hz
   private _timeValue: number = 0   // last time input (for display)
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   private static readonly PAD_X   = 10
   private static readonly PAD_Y   = 8
@@ -116,11 +117,30 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
+    if (this.bounds.width <= 0 || this.bounds.height <= 0) return
+    this._drawPill(ctx, this.bounds)
+    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    this._cpBounds = cp
+    this._drawPill(ctx, cp)
+    // ── Phase arc on main canvas ───────────────────────────
+    this._renderPhaseArc(ctx)
+  }
 
+  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const { x, y, width, height } = b
     const midY  = y + height / 2
     const labelX = x + width - RateLayer.LABEL_W + 4
+
+    // Update slider bounds to this pill's position
+    const px = RateLayer.PAD_X
+    const py = RateLayer.PAD_Y
+    const lw = RateLayer.LABEL_W
+    this._rateSlider.bounds = {
+      x:      x + px,
+      y:      y + py,
+      width:  Math.max(0, width  - px * 2 - lw),
+      height: Math.max(0, height - py * 2),
+    }
 
     ctx.save()
 
@@ -154,9 +174,6 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
     ctx.fillText('φ ' + this._phase.toFixed(2), labelX, midY + 7)
 
     ctx.restore()
-
-    // ── Phase arc on main canvas ───────────────────────────
-    this._renderPhaseArc(ctx)
   }
 
   private _renderPhaseArc(ctx: Ctx2D): void {

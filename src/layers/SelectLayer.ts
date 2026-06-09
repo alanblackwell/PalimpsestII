@@ -97,6 +97,7 @@ export class SelectLayer extends Layer
   private _useA:       boolean        = false
   private _valueType:  ValueType | null = null
   private _activeNode: import('../core/Node.js').Node | null = null
+  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor() {
     super()
@@ -224,6 +225,54 @@ export class SelectLayer extends Layer
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText(condStr, btnBx + btnW + 8, midY)
+
+    // Output value (right side)
+    this._renderOutput(ctx, x + width - 8, midY)
+
+    ctx.restore()
+
+    // Canvas panel overlay
+    const cp = { x: 300, y: 50, width: 260, height }
+    this._cpBounds = cp
+    this._renderCanvasOverlay(ctx)
+  }
+
+  private _renderCanvasOverlay(ctx: Ctx2D): void {
+    const cp = this._cpBounds
+    if (!cp) return
+    const { x, y, width, height } = cp
+    const midY = y + height / 2
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // Large A or B label showing selected branch
+    const branchLabel = this._useA ? 'A' : 'B'
+    ctx.font      = 'bold 20px monospace'
+    ctx.fillStyle = ACCENT
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(branchLabel, x + 14, midY)
+
+    // Condition value
+    const condStr = this.condSlot.isActive
+      ? 'c:' + this._condValue.toFixed(2)
+      : 'c:—'
+    ctx.font      = '11px monospace'
+    ctx.fillStyle = this.condSlot.isActive ? 'rgba(255,255,255,0.70)' : 'rgba(255,255,255,0.28)'
+    ctx.textAlign = 'left'
+    ctx.fillText(condStr, x + 44, midY)
 
     // Output value (right side)
     this._renderOutput(ctx, x + width - 8, midY)

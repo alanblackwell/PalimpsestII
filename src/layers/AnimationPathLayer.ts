@@ -190,12 +190,11 @@ export class AnimationPathLayer extends Layer implements PointSource {
   // Rendering
   // ----------------------------------------------------------
 
-  renderSelf(ctx: Ctx2D): void {
-    this._renderPath(ctx)
-  }
+  renderSelf(_ctx: Ctx2D): void {}
 
   renderPanel(ctx: Ctx2D): void {
     this._renderLabel(ctx)
+    this._renderPath(ctx)
   }
 
   private _renderLabel(ctx: Ctx2D): void {
