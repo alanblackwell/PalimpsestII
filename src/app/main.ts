@@ -9,7 +9,7 @@ import { RootLayer }            from '../layers/RootLayer.js'
 import { PointLayer }           from '../layers/PointLayer.js'
 import { ClockLayer }           from '../layers/ClockLayer.js'
 import { RateLayer }            from '../layers/RateLayer.js'
-import { AnimationPathLayer }   from '../layers/AnimationPathLayer.js'
+import { PathLayer }            from '../layers/PathLayer.js'
 import { SelectLayer }          from '../layers/SelectLayer.js'
 import { CountLayer }           from '../layers/CountLayer.js'
 import { EventLayer }           from '../layers/EventLayer.js'
@@ -133,7 +133,7 @@ const rateLayer = new RateLayer(0.5)
 rateLayer.debugName = 'Rate'
 rateLayer.bounds = { x: X, y: 465, width: W, height: 44 }
 
-const animPath = new AnimationPathLayer()
+const animPath = new PathLayer()
 animPath.debugName = 'AnimPath'
 animPath.bounds = { x: X, y: 524, width: W, height: 30 }
 
@@ -244,7 +244,7 @@ ellipseLayer.insertAbove(rectLayer)
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
 BindingLayer.create(clockLayer,  rateLayer.timeSlot)       // Clock    → Rate.time
-BindingLayer.create(rateLayer,   animPath.positionSlot)    // Rate     → AnimPath.pos
+BindingLayer.create(rateLayer,   animPath.phaseSlot)        // Rate     → AnimPath.phase
 BindingLayer.create(rateLayer,   selectLayer.condSlot)     // Rate     → Select.cond
 BindingLayer.create(layerA,      selectLayer.slotA)        // AmountA  → Select.A
 BindingLayer.create(amountHi,    selectLayer.slotB)        // AmountHi → Select.B

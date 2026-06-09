@@ -1,5 +1,5 @@
 import { ShapeLayer } from './ShapeLayer.js'
-import type { Colour, Ctx2D } from '../core/types.js'
+import type { Colour, Ctx2D, Point } from '../core/types.js'
 
 export class EllipseLayer extends ShapeLayer {
   protected drawShape(
@@ -17,5 +17,22 @@ export class EllipseLayer extends ShapeLayer {
     ctx.ellipse(cx, cy, w / 2, h / 2, angle, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
+  }
+
+  samplePerimeter(t: number): Point {
+    const t0    = ((t % 1) + 1) % 1
+    const angle = t0 * Math.PI * 2
+    const cx    = this._cx
+    const cy    = this._cy
+    const w     = this._width
+    const h     = this._height
+    const a     = this._angle
+    const lx    = (w / 2) * Math.cos(angle)
+    const ly    = (h / 2) * Math.sin(angle)
+    const cos   = Math.cos(a), sin = Math.sin(a)
+    return {
+      x: cx + lx * cos - ly * sin,
+      y: cy + lx * sin + ly * cos,
+    }
   }
 }

@@ -7,6 +7,7 @@ import {
   type Amount, type AmountSource,
   type Ctx2D,
 } from '../core/types.js'
+import { graph } from '../dataflow/Graph.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -14,15 +15,16 @@ import {
 //
 // Provides:
 //   • Center position, width, height, rotation angle
-//   • Three input slots: positionSlot (Point), colourSlot (Colour),
-//     opacitySlot (Amount)
+//   • Four input slots: positionSlot (Point), colourSlot (Colour),
+//     opacitySlot (Amount), phaseSlot (Amount)
 //   • Ten interactive handles: center (move), four edge midpoints
 //     (symmetric resize), four corners (symmetric resize), one
 //     rotation handle (upper-right of bounding box)
 //   • renderSelf  — draws shape content via abstract drawShape()
 //   • renderPanel — strip pill + canvas panel pill + handle overlays
+//   • PointSource output — current point at phase along perimeter
 //
-// Subclasses implement drawShape() only.
+// Subclasses implement drawShape() and samplePerimeter().
 
 const ACCENT    = '#e8a04a'   // warm amber — shape type colour
 const HANDLE_R  = 5           // handle square/circle half-size (px)
@@ -44,8 +46,8 @@ const H_ROTATE = 9
 
 type BBox = { x: number; y: number; width: number; height: number }
 
-export abstract class ShapeLayer extends Layer {
-  readonly types: ReadonlySet<ValueType> = new Set()   // terminal
+export abstract class ShapeLayer extends Layer implements PointSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
   protected _cx:     number
   protected _cy:     number
@@ -59,6 +61,10 @@ export abstract class ShapeLayer extends Layer {
   readonly positionSlot: ParameterSlot
   readonly colourSlot:   ParameterSlot
   readonly opacitySlot:  ParameterSlot
+  readonly phaseSlot:    ParameterSlot
+
+  private _phase:        number = 0
+  private _currentPoint: Point  = { x: 0, y: 0 }
 
   // Drag state
   private _dragHandle          = -1
@@ -80,7 +86,10 @@ export abstract class ShapeLayer extends Layer {
     this.positionSlot = new ParameterSlot(ValueType.Point,  this)
     this.colourSlot   = new ParameterSlot(ValueType.Colour, this)
     this.opacitySlot  = new ParameterSlot(ValueType.Amount, this)
-    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot)
+    this.phaseSlot    = new ParameterSlot(ValueType.Amount, this)
+    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot)
+    this._currentPoint = { x: cx, y: cy }
+    graph.register(this)
   }
 
   // ----------------------------------------------------------
@@ -96,6 +105,11 @@ export abstract class ShapeLayer extends Layer {
     colour: Colour,
     opacity: number,
   ): void
+
+  /** Return canvas coordinate at t ∈ [0, 1) on the shape's perimeter. */
+  abstract samplePerimeter(t: number): Point
+
+  getPoint(): Point { return { ...this._currentPoint } }
 
   // ----------------------------------------------------------
   // Node
@@ -113,6 +127,10 @@ export abstract class ShapeLayer extends Layer {
     if (this.opacitySlot.isActive) {
       this._opacity = (this.opacitySlot.source as AmountSource).getAmount() as Amount
     }
+    if (this.phaseSlot.isActive) {
+      this._phase = (this.phaseSlot.source as AmountSource).getAmount()
+    }
+    this._currentPoint = this.samplePerimeter(this._phase)
   }
 
   // ----------------------------------------------------------
@@ -129,6 +147,9 @@ export abstract class ShapeLayer extends Layer {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, { x: 300, y: 50, width: 260, height: h })
     this._drawHandles(ctx)
+    if (this.phaseSlot.isActive) {
+      this._drawPhaseIndicator(ctx)
+    }
   }
 
   // ----------------------------------------------------------
@@ -326,6 +347,21 @@ export abstract class ShapeLayer extends Layer {
       }
     }
 
+    ctx.restore()
+  }
+
+  private _drawPhaseIndicator(ctx: Ctx2D): void {
+    const cp = this._currentPoint
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.arc(cp.x, cp.y, 8, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2)
+    ctx.fill()
     ctx.restore()
   }
 
