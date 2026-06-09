@@ -137,7 +137,8 @@ export class InteractionSystem {
   }
 
   private _hitTest(point: Point): Node | null {
-    return this._stackTop?.hitTest(point) ?? null
+    const top = this._widget?.selected ?? this._stackTop
+    return top?.hitTest(point) ?? null
   }
 
   // Returns true if the node belongs to the currently-selected layer
