@@ -53,6 +53,7 @@ const SEL_TINT    = `rgba(${SEL_R},${SEL_G},${SEL_B},0.32)`
 const SEL_BORDER  = `rgba(60,160,160,0.85)`
 const TOP_MARGIN  = 20
 const MIN_SPACING = 22      // minimum gap between successive card tops
+const GAP_CURRENT = 14      // extra pixels of gap above the current card
 const LABEL_RATIO = 0.13    // label height as fraction of card height
 
 // ─────────────────────────────────────────────────────────────
@@ -71,7 +72,14 @@ export class LayerStackWidget {
   private _dragY       = 0      // current absolute pointer y
   private _dropIndex   = -1     // insertion index in _layers when dropped
 
-  constructor(canvas: HTMLCanvasElement) { this._canvas = canvas }
+  constructor(canvas: HTMLCanvasElement) {
+    this._canvas = canvas
+    // Arrow-key navigation: up/down moves the current layer.
+    window.addEventListener('keydown', (e: KeyboardEvent) => {
+      if (e.key === 'ArrowUp')   { this.navigateUp();   e.preventDefault() }
+      if (e.key === 'ArrowDown') { this.navigateDown(); e.preventDefault() }
+    })
+  }
 
   // ------------------------------------------------------------------
   // Public API
@@ -95,6 +103,22 @@ export class LayerStackWidget {
 
   get widgetWidth(): number { return WIDGET_W }
 
+  // Move current layer one step up in the stack (towards topmost).
+  navigateUp(): void {
+    const ci = this._currentIndex()
+    if (ci < this._layers.length - 1) {
+      this._selected = this._layers[ci + 1] ?? this._selected
+    }
+  }
+
+  // Move current layer one step down in the stack (towards root).
+  navigateDown(): void {
+    const ci = this._currentIndex()
+    if (ci > 0) {
+      this._selected = this._layers[ci - 1] ?? this._selected
+    }
+  }
+
   // ------------------------------------------------------------------
   // Geometry
   // ------------------------------------------------------------------
@@ -107,14 +131,56 @@ export class LayerStackWidget {
     const n  = this._layers.length
     if (n <= 1) return 0
     const ch = this._cardH()
-    const available = this._canvas.height - TOP_MARGIN - ch
+    // The gap at the current card costs an extra ch + GAP_CURRENT beyond normal spacing,
+    // so subtract that from the available height before calculating per-card spacing.
+    const available = this._canvas.height - TOP_MARGIN - ch - ch - GAP_CURRENT
     return Math.max(MIN_SPACING, Math.floor(available / (n - 1)))
   }
 
+  private _currentIndex(): number {
+    return this._selected !== null ? this._layers.indexOf(this._selected) : -1
+  }
+
   // y-coordinate of the top-left of the card for layer at index i.
-  // i = 0 (root) → near the bottom; i = N-1 (top) → near TOP_MARGIN.
+  //
+  // The stack is rendered in two sections separated by a gap at the current
+  // card, so the current card is always fully visible:
+  //
+  //   ┌──────────────────────┐  ← TOP_MARGIN
+  //   │  card N-1 (topmost)  │
+  //      ...overlapping...
+  //   │  card ci+1           │
+  //   └──────────────────────┘
+  //          GAP_CURRENT px
+  //   ┌──────────────────────┐  ← fully visible current card
+  //   │  card ci  (current)  │
+  //   └──────────────────────┘
+  //   │  card ci-1           │
+  //      ...overlapping...
+  //   │  card 0  (root)      │
+  //
+  // i = 0 (root) → near bottom;  i = N-1 (topmost) → near TOP_MARGIN.
   private _cardY(i: number, sp: number): number {
-    return TOP_MARGIN + (this._layers.length - 1 - i) * sp
+    const ci = this._currentIndex()
+    const n  = this._layers.length
+    const ch = this._cardH()
+
+    if (ci < 0) {
+      // No current layer — normal uniform layout.
+      return TOP_MARGIN + (n - 1 - i) * sp
+    }
+
+    // Y of the current card's top edge.
+    // If current is the topmost card, it sits at TOP_MARGIN.
+    // Otherwise it sits one full card-height + GAP_CURRENT below the bottom
+    // edge of the card above it.
+    const currentY = ci === n - 1
+      ? TOP_MARGIN
+      : TOP_MARGIN + (n - 2 - ci) * sp + ch + GAP_CURRENT
+
+    if (i > ci)  return TOP_MARGIN + (n - 1 - i) * sp   // above section
+    if (i === ci) return currentY                          // current card
+    return currentY + (ci - i) * sp                       // below section
   }
 
   // During a drag, shift cards above / below the gap to open space.
