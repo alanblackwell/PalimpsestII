@@ -1,0 +1,380 @@
+import { Layer } from '../core/Layer.js'
+import { ParameterSlot } from '../core/ParameterSlot.js'
+import {
+  ValueType,
+  type Colour, type ColourSource,
+  type Point,  type PointSource,
+  type Amount, type AmountSource,
+  type Ctx2D,
+} from '../core/types.js'
+
+// ------------------------------------------------------------
+// ShapeLayer — abstract base for rectangle and ellipse layers
+// ------------------------------------------------------------
+//
+// Provides:
+//   • Center position, width, height, rotation angle
+//   • Three input slots: positionSlot (Point), colourSlot (Colour),
+//     opacitySlot (Amount)
+//   • Ten interactive handles: center (move), four edge midpoints
+//     (symmetric resize), four corners (symmetric resize), one
+//     rotation handle (upper-right of bounding box)
+//   • renderSelf  — draws shape content via abstract drawShape()
+//   • renderPanel — strip pill + canvas panel pill + handle overlays
+//
+// Subclasses implement drawShape() only.
+
+const ACCENT    = '#e8a04a'   // warm amber — shape type colour
+const HANDLE_R  = 5           // handle square/circle half-size (px)
+const HIT_R     = 12          // pointer hit radius (px)
+const MIN_SIZE  = 20          // minimum width / height (px)
+const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
+
+// Handle index constants
+const H_CENTER = 0
+const H_LEFT   = 1
+const H_RIGHT  = 2
+const H_TOP    = 3
+const H_BOTTOM = 4
+const H_TL     = 5
+const H_TR     = 6
+const H_BL     = 7
+const H_BR     = 8
+const H_ROTATE = 9
+
+type BBox = { x: number; y: number; width: number; height: number }
+
+export abstract class ShapeLayer extends Layer {
+  readonly types: ReadonlySet<ValueType> = new Set()   // terminal
+
+  protected _cx:     number
+  protected _cy:     number
+  protected _width:  number
+  protected _height: number
+  protected _angle:  number = 0   // radians
+
+  protected _colour:  Colour = { r: 1, g: 1, b: 1, a: 1 }
+  protected _opacity: number = 1
+
+  readonly positionSlot: ParameterSlot
+  readonly colourSlot:   ParameterSlot
+  readonly opacitySlot:  ParameterSlot
+
+  // Drag state
+  private _dragHandle          = -1
+  private _dragStartPtr:  Point = { x: 0, y: 0 }
+  private _dragStartCx         = 0
+  private _dragStartCy         = 0
+  private _dragStartW          = 0
+  private _dragStartH          = 0
+  private _dragStartAngle      = 0
+  private _rotLocalAngle       = 0   // atan2 of rot handle in local space
+
+  constructor(cx: number, cy: number, width: number, height: number) {
+    super()
+    this._cx     = cx
+    this._cy     = cy
+    this._width  = width
+    this._height = height
+
+    this.positionSlot = new ParameterSlot(ValueType.Point,  this)
+    this.colourSlot   = new ParameterSlot(ValueType.Colour, this)
+    this.opacitySlot  = new ParameterSlot(ValueType.Amount, this)
+    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot)
+  }
+
+  // ----------------------------------------------------------
+  // Subclass contract
+  // ----------------------------------------------------------
+
+  /** Draw the shape at the given canvas-space parameters. */
+  protected abstract drawShape(
+    ctx: Ctx2D,
+    cx: number, cy: number,
+    w: number, h: number,
+    angle: number,
+    colour: Colour,
+    opacity: number,
+  ): void
+
+  // ----------------------------------------------------------
+  // Node
+  // ----------------------------------------------------------
+
+  protected recompute(): void {
+    if (this.positionSlot.isActive) {
+      const p = (this.positionSlot.source as PointSource).getPoint()
+      this._cx = p.x
+      this._cy = p.y
+    }
+    if (this.colourSlot.isActive) {
+      this._colour = (this.colourSlot.source as ColourSource).getColour()
+    }
+    if (this.opacitySlot.isActive) {
+      this._opacity = (this.opacitySlot.source as AmountSource).getAmount() as Amount
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Rendering
+  // ----------------------------------------------------------
+
+  renderSelf(ctx: Ctx2D): void {
+    this.drawShape(ctx, this._cx, this._cy,
+      this._width, this._height, this._angle, this._colour, this._opacity)
+  }
+
+  renderPanel(ctx: Ctx2D): void {
+    const h = this.bounds.height
+    this._drawPill(ctx, this.bounds)
+    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: h })
+    this._drawHandles(ctx)
+  }
+
+  // ----------------------------------------------------------
+  // Hit testing
+  // ----------------------------------------------------------
+
+  get isInteractive(): boolean { return true }
+
+  protected override hitTestSelf(point: Point): this | null {
+    const r2 = HIT_R * HIT_R
+    for (const h of this._handlePositions()) {
+      const dx = point.x - h.x
+      const dy = point.y - h.y
+      if (dx * dx + dy * dy <= r2) return this
+    }
+    return null
+  }
+
+  // ----------------------------------------------------------
+  // Interaction
+  // ----------------------------------------------------------
+
+  handlePointerDown(point: Point): boolean {
+    const handles = this._handlePositions()
+    let best = -1, bestD2 = HIT_R * HIT_R
+    for (let i = 0; i < handles.length; i++) {
+      const h = handles[i]!
+      const d2 = (point.x - h.x) ** 2 + (point.y - h.y) ** 2
+      if (d2 < bestD2) { bestD2 = d2; best = i }
+    }
+    if (best < 0) return false
+
+    this._dragHandle     = best
+    this._dragStartPtr   = { ...point }
+    this._dragStartCx    = this._cx
+    this._dragStartCy    = this._cy
+    this._dragStartW     = this._width
+    this._dragStartH     = this._height
+    this._dragStartAngle = this._angle
+
+    // Pre-compute the local angle of the rotation handle for smooth rotation
+    if (best === H_ROTATE) {
+      const hw = this._width / 2, hh = this._height / 2
+      this._rotLocalAngle = Math.atan2(-(hh + ROT_OFF), hw + ROT_OFF)
+    }
+
+    this.markDirty()
+    return true
+  }
+
+  handlePointerMove(point: Point): void {
+    if (this._dragHandle < 0) return
+
+    const dx = point.x - this._dragStartPtr.x
+    const dy = point.y - this._dragStartPtr.y
+
+    if (this._dragHandle === H_CENTER && !this.positionSlot.isActive) {
+      this._cx = this._dragStartCx + dx
+      this._cy = this._dragStartCy + dy
+
+    } else if (this._dragHandle === H_ROTATE) {
+      // Angle that places rotation handle at the pointer
+      this._angle = Math.atan2(point.y - this._cy, point.x - this._cx)
+                  - this._rotLocalAngle
+
+    } else {
+      // Symmetric resize: project delta into local (unrotated) space
+      const cos = Math.cos(-this._dragStartAngle)
+      const sin = Math.sin(-this._dragStartAngle)
+      const lx  = dx * cos - dy * sin
+      const ly  = dx * sin + dy * cos
+
+      const hw = this._dragStartW / 2
+      const hh = this._dragStartH / 2
+
+      switch (this._dragHandle) {
+        case H_LEFT:    this._width  = Math.max(MIN_SIZE, 2 * (hw - lx)); break
+        case H_RIGHT:   this._width  = Math.max(MIN_SIZE, 2 * (hw + lx)); break
+        case H_TOP:     this._height = Math.max(MIN_SIZE, 2 * (hh - ly)); break
+        case H_BOTTOM:  this._height = Math.max(MIN_SIZE, 2 * (hh + ly)); break
+        case H_TL:
+          this._width  = Math.max(MIN_SIZE, 2 * (hw - lx))
+          this._height = Math.max(MIN_SIZE, 2 * (hh - ly))
+          break
+        case H_TR:
+          this._width  = Math.max(MIN_SIZE, 2 * (hw + lx))
+          this._height = Math.max(MIN_SIZE, 2 * (hh - ly))
+          break
+        case H_BL:
+          this._width  = Math.max(MIN_SIZE, 2 * (hw - lx))
+          this._height = Math.max(MIN_SIZE, 2 * (hh + ly))
+          break
+        case H_BR:
+          this._width  = Math.max(MIN_SIZE, 2 * (hw + lx))
+          this._height = Math.max(MIN_SIZE, 2 * (hh + ly))
+          break
+      }
+    }
+
+    this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._dragHandle = -1
+  }
+
+  // ----------------------------------------------------------
+  // Private helpers
+  // ----------------------------------------------------------
+
+  /** Ten handle positions in canvas space, accounting for rotation. */
+  private _handlePositions(): Point[] {
+    const { _cx: cx, _cy: cy, _angle } = this
+    const hw  = this._width  / 2
+    const hh  = this._height / 2
+    const cos = Math.cos(_angle)
+    const sin = Math.sin(_angle)
+    const T   = (lx: number, ly: number): Point => ({
+      x: cx + lx * cos - ly * sin,
+      y: cy + lx * sin + ly * cos,
+    })
+    return [
+      T(0,           0          ),   // 0  center
+      T(-hw,         0          ),   // 1  left edge
+      T(hw,          0          ),   // 2  right edge
+      T(0,          -hh         ),   // 3  top edge
+      T(0,           hh         ),   // 4  bottom edge
+      T(-hw,        -hh         ),   // 5  top-left corner
+      T(hw,         -hh         ),   // 6  top-right corner
+      T(-hw,         hh         ),   // 7  bottom-left corner
+      T(hw,          hh         ),   // 8  bottom-right corner
+      T(hw + ROT_OFF, -(hh + ROT_OFF)),  // 9  rotation
+    ]
+  }
+
+  private _drawHandles(ctx: Ctx2D): void {
+    const handles = this._handlePositions()
+    const active  = this._dragHandle
+
+    ctx.save()
+    ctx.setLineDash([])
+
+    // Bounding-box outline
+    const [, , , , , tl, tr, br, bl] = handles
+    if (tl && tr && br && bl) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.60)'
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.moveTo(tl.x, tl.y)
+      ctx.lineTo(tr.x, tr.y)
+      ctx.lineTo(br.x, br.y)
+      ctx.lineTo(bl.x, bl.y)
+      ctx.closePath()
+      ctx.stroke()
+    }
+
+    // Dashed line from TR corner to rotation handle
+    const rot = handles[H_ROTATE]!
+    if (tr && rot) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.30)'
+      ctx.lineWidth   = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath()
+      ctx.moveTo(tr.x, tr.y)
+      ctx.lineTo(rot.x, rot.y)
+      ctx.stroke()
+      ctx.setLineDash([])
+    }
+
+    // Handle markers
+    for (let i = 0; i < handles.length; i++) {
+      const h  = handles[i]!
+      const lit = i === active
+
+      ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+      ctx.lineWidth   = 1
+
+      if (i === H_ROTATE) {
+        ctx.fillStyle = lit ? '#ffffff' : 'rgba(232,160,74,0.85)'
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+      } else if (i === H_CENTER) {
+        ctx.fillStyle = lit ? ACCENT : 'rgba(232,160,74,0.70)'
+        ctx.beginPath()
+        ctx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+      } else {
+        ctx.fillStyle = lit ? '#ffffff' : 'rgba(255,255,255,0.80)'
+        const s = HANDLE_R
+        ctx.fillRect(h.x - s, h.y - s, s * 2, s * 2)
+        ctx.strokeRect(h.x - s, h.y - s, s * 2, s * 2)
+      }
+    }
+
+    ctx.restore()
+  }
+
+  private _drawPill(ctx: Ctx2D, b: BBox): void {
+    const { x, y, width, height } = b
+    if (width <= 0 || height <= 0) return
+
+    const midY = y + height / 2
+    const c    = this._colour
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // Colour swatch
+    ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
+    ctx.beginPath()
+    ctx.arc(x + 16, midY, 5, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+    ctx.lineWidth   = 1
+    ctx.stroke()
+
+    // Dimensions
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(
+      `${Math.round(this._width)} × ${Math.round(this._height)}`,
+      x + 28, midY,
+    )
+
+    // Angle (right side)
+    const deg = ((this._angle * 180 / Math.PI) % 360 + 360) % 360
+    ctx.fillStyle = 'rgba(255,255,255,0.50)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`∠ ${deg.toFixed(0)}°`, x + width - 8, midY)
+
+    ctx.restore()
+  }
+}

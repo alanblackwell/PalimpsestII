@@ -25,6 +25,8 @@ import { NoiseLayer }           from '../layers/NoiseLayer.js'
 import { GradientLayer }        from '../layers/GradientLayer.js'
 import { TransformLayer }       from '../layers/TransformLayer.js'
 import { SequencerLayer }       from '../layers/SequencerLayer.js'
+import { RectLayer }           from '../layers/RectLayer.js'
+import { EllipseLayer }        from '../layers/EllipseLayer.js'
 import { LayerStackWidget }    from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------------
@@ -203,6 +205,14 @@ const sequencerLayer = new SequencerLayer(canvas.width, canvas.height)
 sequencerLayer.debugName = 'Sequencer'
 sequencerLayer.bounds = { x: X, y: 1462, width: W, height: 128 }
 
+const rectLayer = new RectLayer(canvas.width / 2, canvas.height / 2, 200, 120)
+rectLayer.debugName = 'Rect'
+rectLayer.bounds = { x: X, y: 1604, width: W, height: 36 }
+
+const ellipseLayer = new EllipseLayer(canvas.width / 2 + 60, canvas.height / 2 - 80, 160, 100)
+ellipseLayer.debugName = 'Ellipse'
+ellipseLayer.bounds = { x: X, y: 1654, width: W, height: 36 }
+
 // Wire the stack bottom → top
 layerA.insertAbove(root)
 layerB.insertAbove(layerA)
@@ -228,6 +238,8 @@ noiseLayer.insertAbove(collectionLayer)
 gradientLayer.insertAbove(noiseLayer)
 transformLayer.insertAbove(gradientLayer)
 sequencerLayer.insertAbove(transformLayer)
+rectLayer.insertAbove(sequencerLayer)
+ellipseLayer.insertAbove(rectLayer)
 
 // Bindings (each auto-inserts a BindingLayer above the consumer)
 BindingLayer.create(layerA,      layerB.slot)              // AmountA  → AmountB
@@ -264,7 +276,7 @@ BindingLayer.create(rateLayer,       sequencerLayer.rateSlot)         // Rate   
 BindingLayer.create(eventLayer,      sequencerLayer.eventSlot)        // Event      → Sequencer.event
 
 // Tell the evaluator about the top of the stack and drive the clock.
-let stackTop: Layer = sequencerLayer
+let stackTop: Layer = ellipseLayer
 while (stackTop.layerAbove !== null) stackTop = stackTop.layerAbove
 evaluator.setStack(stackTop)
 evaluator.setClock(clockLayer)
