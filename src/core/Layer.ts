@@ -73,8 +73,17 @@ export abstract class Layer extends Node {
     this.renderSelf(ctx)
   }
 
-  // Render just this layer's own content. Subclasses must implement.
-  abstract renderSelf(ctx: Ctx2D): void
+  // Render just this layer's own content. Subclasses may override.
+  renderSelf(_ctx: Ctx2D): void {}
+
+  // Render just this layer's panel UI. Subclasses may override.
+  renderPanel(_ctx: Ctx2D): void {}
+
+  // Render the panel UI for this layer and all layers below it.
+  renderPanelStack(ctx: Ctx2D): void {
+    this.layerBelow?.renderPanelStack(ctx)
+    this.renderPanel(ctx)
+  }
 
   // ----------------------------------------------------------
   // Hit testing

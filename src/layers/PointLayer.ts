@@ -88,7 +88,7 @@ export class PointLayer extends Layer implements PointSource {
   // Rendering
   // ----------------------------------------------------------
 
-  renderSelf(ctx: Ctx2D): void {
+  renderPanel(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
 
     // ── Label bar (stack panel) ────────────────────────────

@@ -116,7 +116,7 @@ export class AmountLayer extends Layer implements AmountSource {
   // Rendering
   // ----------------------------------------------------------
 
-  renderSelf(ctx: Ctx2D): void {
+  renderPanel(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
 

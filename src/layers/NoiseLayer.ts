@@ -228,13 +228,11 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     ctx.drawImage(this._noiseCanvas as CanvasImageSource, 0, 0, cw, ch)
     ctx.globalAlpha = 1
     ctx.restore()
-
-    this._renderPanel(ctx)
   }
 
   // ── Stack panel ─────────────────────────────────────────────
 
-  private _renderPanel(ctx: Ctx2D): void {
+  renderPanel(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
 

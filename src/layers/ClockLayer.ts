@@ -126,7 +126,7 @@ export class ClockLayer extends Clock implements AmountSource {
   // Rendering
   // ----------------------------------------------------------
 
-  override renderSelf(ctx: Ctx2D): void {
+  renderPanel(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
 

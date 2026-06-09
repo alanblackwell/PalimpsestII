@@ -1,6 +1,7 @@
 // PalimpsestII — entry point
 import { Evaluator }            from '../dataflow/Evaluator.js'
 import { InteractionSystem }    from '../interaction/InteractionSystem.js'
+import { Layer }                from '../core/Layer.js'
 import { AmountLayer }          from '../layers/AmountLayer.js'
 import { ColourLayer }          from '../layers/ColourLayer.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
@@ -262,11 +263,13 @@ BindingLayer.create(rateLayer,       sequencerLayer.rateSlot)         // Rate   
 BindingLayer.create(eventLayer,      sequencerLayer.eventSlot)        // Event      → Sequencer.event
 
 // Tell the evaluator about the top of the stack and drive the clock.
-evaluator.setStack(sequencerLayer)
+let stackTop: Layer = sequencerLayer
+while (stackTop.layerAbove !== null) stackTop = stackTop.layerAbove
+evaluator.setStack(stackTop)
 evaluator.setClock(clockLayer)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(sequencerLayer)
+interaction.setStack(stackTop)
 
 // ------------------------------------------------------------------
 // Resize

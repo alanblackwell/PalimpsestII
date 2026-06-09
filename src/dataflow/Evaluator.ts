@@ -116,6 +116,7 @@ export class Evaluator {
     // renderStack evaluates each layer (depth-first pull) then composites
     // bottom-to-top onto ctx.
     this._stackTop.renderStack(this.ctx)
+    this._stackTop.renderPanelStack(this.ctx)
   }
 
   // ----------------------------------------------------------

@@ -173,13 +173,16 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    this._renderPanel(ctx)
     this._renderPreview(ctx)
+  }
+
+  renderPanel(ctx: Ctx2D): void {
+    this._renderPanelImpl(ctx)
   }
 
   // ── Stack panel ─────────────────────────────────────────────
 
-  private _renderPanel(ctx: Ctx2D): void {
+  private _renderPanelImpl(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
 
