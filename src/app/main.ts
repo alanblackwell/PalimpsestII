@@ -27,6 +27,7 @@ import { TransformLayer }       from '../layers/TransformLayer.js'
 import { SequencerLayer }       from '../layers/SequencerLayer.js'
 import { RectLayer }           from '../layers/RectLayer.js'
 import { EllipseLayer }        from '../layers/EllipseLayer.js'
+import { MenuLayer }           from '../layers/MenuLayer.js'
 import { LayerStackWidget }    from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------------
@@ -277,20 +278,37 @@ BindingLayer.create(directionLayer,  transformLayer.directionSlot)   // Directio
 BindingLayer.create(rateLayer,       sequencerLayer.rateSlot)         // Rate       → Sequencer.rate
 BindingLayer.create(eventLayer,      sequencerLayer.eventSlot)        // Event      → Sequencer.event
 
-// Tell the evaluator about the top of the stack and drive the clock.
+// Find the true top of the stack (may have BindingLayers above ellipseLayer).
 let stackTop: Layer = ellipseLayer
 while (stackTop.layerAbove !== null) stackTop = stackTop.layerAbove
-evaluator.setStack(stackTop)
+
 evaluator.setClock(clockLayer)
 
 const widget = new LayerStackWidget(canvas)
-widget.setStack(stackTop)
 evaluator.setLayerStackWidget(widget)
 
 const interaction = new InteractionSystem(canvas)
-interaction.setStack(stackTop)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
+
+// MenuLayer sits at the very top — must be created after widget and interaction
+// are available so the onAdded callback can reference them.
+const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+  let top: Layer = menuLayer
+  while (top.layerAbove !== null) top = top.layerAbove
+  evaluator.setStack(top)
+  widget.setStack(top)
+  interaction.setStack(top)
+  widget.selected = newLayer
+})
+menuLayer.debugName = 'Menu'
+menuLayer.bounds    = { x: X, y: 1704, width: W, height: 36 }
+menuLayer.insertAbove(stackTop)
+
+// menuLayer is now the top; no bindings sit above it.
+evaluator.setStack(menuLayer)
+widget.setStack(menuLayer)
+interaction.setStack(menuLayer)
 
 // ------------------------------------------------------------------
 // Resize
