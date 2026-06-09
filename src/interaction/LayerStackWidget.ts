@@ -1,4 +1,5 @@
 import { Layer }     from '../core/Layer.js'
+import { Node }      from '../core/Node.js'
 import { ValueType } from '../core/types.js'
 import type { Ctx2D, Point, Colour } from '../core/types.js'
 
@@ -53,7 +54,7 @@ const SEL_TINT    = `rgba(${SEL_R},${SEL_G},${SEL_B},0.32)`
 const SEL_BORDER  = `rgba(60,160,160,0.85)`
 const TOP_MARGIN  = 20
 const MIN_SPACING = 22      // minimum gap between successive card tops
-const GAP_CURRENT = 14      // extra pixels of gap above the current card
+const GAP_CURRENT = 40      // gap above the current card (must exceed shadow bleed ~15px)
 const LABEL_RATIO = 0.13    // label height as fraction of card height
 
 // ─────────────────────────────────────────────────────────────
@@ -92,9 +93,10 @@ export class LayerStackWidget {
       if (!l.isInfrastructure) this._layers.unshift(l)   // root at [0]
       l = l.layerBelow
     }
-    // Default selection: topmost layer
+    // Default selection: second-from-top, so the gap is visible immediately.
     if (this._selected === null || !this._layers.includes(this._selected)) {
-      this._selected = this._layers[this._layers.length - 1] ?? null
+      const n = this._layers.length
+      this._selected = this._layers[Math.max(0, n - 2)] ?? null
     }
   }
 
@@ -108,6 +110,7 @@ export class LayerStackWidget {
     const ci = this._currentIndex()
     if (ci < this._layers.length - 1) {
       this._selected = this._layers[ci + 1] ?? this._selected
+      Node.scheduleFrame()
     }
   }
 
@@ -116,6 +119,7 @@ export class LayerStackWidget {
     const ci = this._currentIndex()
     if (ci > 0) {
       this._selected = this._layers[ci - 1] ?? this._selected
+      Node.scheduleFrame()
     }
   }
 
@@ -485,6 +489,7 @@ export class LayerStackWidget {
     const hit = this._hitTest(pt)
     if (hit !== null) {
       this._selected    = hit
+      Node.scheduleFrame()
       this._dragLayer   = hit
       const i           = this._layers.indexOf(hit)
       this._dragOffsetY = pt.y - this._cardY(i, this._spacing())
