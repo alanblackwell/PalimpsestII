@@ -30,6 +30,7 @@ export class Evaluator {
   private _layerStackWidget: LayerStackWidget | null = null
   private _continuous               = false
   private _animFrameId: number | null = null
+  private _displayMode              = false
 
   // Performance counters (useful during development).
   private _frameCount = 0
@@ -113,6 +114,15 @@ export class Evaluator {
     if (this._continuous) this.scheduleFrame()
   }
 
+  // Toggle between edit mode (UI overlays visible) and display mode
+  // (only rendered canvas content, no controls or layer stack widget).
+  toggleDisplayMode(): void {
+    this._displayMode = !this._displayMode
+    this.scheduleFrame()
+  }
+
+  get displayMode(): boolean { return this._displayMode }
+
   private render(): void {
     if (this._stackTop === null) return
 
@@ -126,12 +136,14 @@ export class Evaluator {
     const renderTop = this._layerStackWidget?.selected ?? this._stackTop
     renderTop.renderStack(this.ctx)
 
-    // Render the current layer's control elements (label bar + interactive
-    // handle).  All other layers' controls are hidden.
-    renderTop.renderPanel(this.ctx)
+    if (!this._displayMode) {
+      // Render the current layer's control elements (label bar + interactive
+      // handle).  All other layers' controls are hidden.
+      renderTop.renderPanel(this.ctx)
 
-    // Overlay the LayerStackWidget on the left strip.
-    this._layerStackWidget?.render(this.ctx)
+      // Overlay the LayerStackWidget on the left strip.
+      this._layerStackWidget?.render(this.ctx)
+    }
   }
 
   // ----------------------------------------------------------

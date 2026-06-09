@@ -82,6 +82,7 @@ export class InteractionSystem {
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
+  private _spaceAction: (() => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
@@ -111,6 +112,11 @@ export class InteractionSystem {
 
   setLayerStackWidget(w: LayerStackWidget): void {
     this._widget = w
+  }
+
+  // Register a callback invoked when the user presses Space.
+  setSpaceAction(fn: () => void): void {
+    this._spaceAction = fn
   }
 
   // Remove all event listeners.  Call when the canvas is torn down.
@@ -216,6 +222,11 @@ export class InteractionSystem {
   }
 
   private _handleKey(e: KeyboardEvent): void {
+    if (e.key === ' ') {
+      this._spaceAction?.()
+      e.preventDefault()
+      return
+    }
     if (this._widget !== null) {
       if (this._widget.handleKey(e.key)) e.preventDefault()
     }

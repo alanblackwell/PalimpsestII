@@ -276,6 +276,7 @@ evaluator.setLayerStackWidget(widget)
 const interaction = new InteractionSystem(canvas)
 interaction.setStack(stackTop)
 interaction.setLayerStackWidget(widget)
+interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 
 // ------------------------------------------------------------------
 // Resize
