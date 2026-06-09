@@ -246,6 +246,7 @@ BindingLayer.create(layerA,      layerB.slot)              // AmountA  → Amoun
 BindingLayer.create(clockLayer,  rateLayer.timeSlot)       // Clock    → Rate.time
 BindingLayer.create(rateLayer,   animPath.phaseSlot)        // Rate     → AnimPath.phase
 BindingLayer.create(rateLayer,   rectLayer.phaseSlot)        // Rate     → Rect.phase
+BindingLayer.create(rateLayer,   ellipseLayer.phaseSlot)     // Rate     → Ellipse.phase
 BindingLayer.create(rateLayer,   selectLayer.condSlot)     // Rate     → Select.cond
 BindingLayer.create(layerA,      selectLayer.slotA)        // AmountA  → Select.A
 BindingLayer.create(amountHi,    selectLayer.slotB)        // AmountHi → Select.B
