@@ -154,6 +154,55 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
     ctx.fillText('φ ' + this._phase.toFixed(2), labelX, midY + 7)
 
     ctx.restore()
+
+    // ── Phase arc on main canvas ───────────────────────────
+    this._renderPhaseArc(ctx)
+  }
+
+  private _renderPhaseArc(ctx: Ctx2D): void {
+    const cw   = ctx.canvas.width
+    const ch   = ctx.canvas.height
+    const cx   = (cw + 280) / 2   // centre of main area (right of 280px widget strip)
+    const cy   = ch / 2
+    const R    = 36                // outer radius
+    const r    = 22                // inner radius (ring)
+
+    const sweep = this._phase * Math.PI * 2
+    const start = -Math.PI / 2    // 12 o'clock
+
+    ctx.save()
+
+    // Track ring background
+    ctx.beginPath()
+    ctx.arc(cx, cy, R, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(232,126,126,0.18)'
+    ctx.lineWidth   = R - r
+    ctx.stroke()
+
+    // Filled arc representing current phase
+    if (this._phase > 0) {
+      ctx.beginPath()
+      ctx.arc(cx, cy, R, start, start + sweep)
+      ctx.strokeStyle = `rgba(232,126,126,${this._timeSlot.isActive ? '0.80' : '0.35'})`
+      ctx.lineWidth   = R - r
+      ctx.stroke()
+    }
+
+    // Hz label in centre
+    ctx.font         = 'bold 12px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.70)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this._rateHz.toFixed(1) + ' Hz', cx, cy - 6)
+
+    // Phase value below Hz
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = this._timeSlot.isActive
+      ? 'rgba(232,196,74,0.85)'
+      : 'rgba(255,255,255,0.30)'
+    ctx.fillText('φ ' + this._phase.toFixed(2), cx, cy + 8)
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------

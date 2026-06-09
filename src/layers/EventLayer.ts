@@ -194,6 +194,39 @@ export class EventLayer extends Layer implements EventSource {
     this._drawBtn(ctx, clearB, '↺', 'rgba(255,255,255,0.40)')
 
     ctx.restore()
+
+    // ── Status blob on main canvas ─────────────────────────
+    this._renderBlob(ctx)
+  }
+
+  private _renderBlob(ctx: Ctx2D): void {
+    const cw   = ctx.canvas.width
+    const ch   = ctx.canvas.height
+    const bx   = (cw + 280) / 2   // centre of main area (right of 280px widget strip)
+    const by   = ch / 2
+    const now  = performance.now()
+
+    const age    = this._eventTime !== null ? (now - this._eventTime) / 1000 : Infinity
+    const bright = Math.max(0, 1 - age)
+
+    // Always draw a dim resting dot so users can find the indicator
+    const restR = 10
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(bx, by, restR, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(224,224,96,0.15)'
+    ctx.fill()
+
+    if (bright > 0) {
+      // Bright flash that expands and fades over 1 s
+      const flashR = restR + bright * 22
+      ctx.beginPath()
+      ctx.arc(bx, by, flashR, 0, Math.PI * 2)
+      ctx.fillStyle = `rgba(224,224,96,${(bright * 0.7).toFixed(2)})`
+      ctx.fill()
+    }
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
