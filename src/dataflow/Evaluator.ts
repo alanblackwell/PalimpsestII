@@ -129,21 +129,43 @@ export class Evaluator {
     const { width, height } = this.canvas
     this.ctx.clearRect(0, 0, width, height)
 
-    // Render from the root up to (and including) the current layer.
-    // Layers above the current layer are not composited onto the canvas,
-    // but their values are still pulled on-demand via slot dependencies
-    // when lower layers read from them during evaluate().
     const renderTop = this._layerStackWidget?.selected ?? this._stackTop
-    renderTop.renderStack(this.ctx)
 
-    if (!this._displayMode) {
-      // Render the current layer's control elements (label bar + interactive
-      // handle).  All other layers' controls are hidden.
-      renderTop.renderPanel(this.ctx)
-
-      // Overlay the LayerStackWidget on the left strip.
-      this._layerStackWidget?.render(this.ctx)
+    if (this._displayMode) {
+      // Display mode: plain composite, no depth effects.
+      renderTop.renderStack(this.ctx)
+      return
     }
+
+    // Edit mode: walk the chain bottom→top so each layer can be rendered
+    // with individual alpha/filter settings.
+    const layers: Layer[] = []
+    for (let l: Layer | null = renderTop; l !== null; l = l.layerBelow) {
+      layers.unshift(l)
+    }
+    const topIdx = layers.length - 1
+
+    for (let i = 0; i <= topIdx; i++) {
+      const layer = layers[i]!
+      const depth = topIdx - i   // 0 = current layer, 1 = one below, …
+
+      layer.evaluate()
+      this.ctx.save()
+
+      if (depth === 0) {
+        // Current layer floats above the rest with a drop shadow.
+        this.ctx.filter = 'drop-shadow(0px 6px 18px rgba(0,0,0,0.60))'
+      } else {
+        // Layers below fade progressively with depth.
+        this.ctx.globalAlpha = Math.max(0.08, Math.pow(0.72, depth))
+      }
+
+      layer.renderSelf(this.ctx)
+      this.ctx.restore()
+    }
+
+    renderTop.renderPanel(this.ctx)
+    this._layerStackWidget?.render(this.ctx)
   }
 
   // ----------------------------------------------------------
