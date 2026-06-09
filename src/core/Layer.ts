@@ -20,6 +20,10 @@ export abstract class Layer extends Node {
   // Whether this layer is currently selected by the user.
   selected: boolean = false
 
+  // Infrastructure layers (e.g. BindingLayer) are hidden in the
+  // LayerStackWidget and excluded from user-facing layer lists.
+  readonly isInfrastructure: boolean = false
+
   // ----------------------------------------------------------
   // Stack operations
   // ----------------------------------------------------------

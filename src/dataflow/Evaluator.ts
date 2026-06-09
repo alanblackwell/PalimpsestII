@@ -1,6 +1,7 @@
 import { Node } from '../core/Node.js'
 import { Layer } from '../core/Layer.js'
 import { Clock } from './Clock.js'
+import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------
 // Evaluator — drives the render loop and wires everything together
@@ -24,8 +25,9 @@ export class Evaluator {
   private readonly canvas: HTMLCanvasElement
   private readonly ctx: CanvasRenderingContext2D
 
-  private _stackTop: Layer | null  = null
-  private _clock:    Clock | null  = null
+  private _stackTop:         Layer | null  = null
+  private _clock:            Clock | null  = null
+  private _layerStackWidget: LayerStackWidget | null = null
   private _continuous               = false
   private _animFrameId: number | null = null
 
@@ -52,6 +54,10 @@ export class Evaluator {
   setStack(top: Layer): void {
     this._stackTop = top
     this.scheduleFrame()
+  }
+
+  setLayerStackWidget(w: LayerStackWidget): void {
+    this._layerStackWidget = w
   }
 
   // Attach a Clock.  When a Clock is present, the Evaluator runs
@@ -116,7 +122,9 @@ export class Evaluator {
     // renderStack evaluates each layer (depth-first pull) then composites
     // bottom-to-top onto ctx.
     this._stackTop.renderStack(this.ctx)
-    this._stackTop.renderPanelStack(this.ctx)
+
+    // Overlay the LayerStackWidget on the left strip.
+    this._layerStackWidget?.render(this.ctx)
   }
 
   // ----------------------------------------------------------

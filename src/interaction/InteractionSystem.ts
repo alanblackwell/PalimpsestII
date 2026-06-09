@@ -1,6 +1,7 @@
-import type { Layer } from '../core/Layer.js'
-import type { Node }  from '../core/Node.js'
-import type { Point } from '../core/types.js'
+import type { Layer }           from '../core/Layer.js'
+import type { Node }            from '../core/Node.js'
+import type { Point }           from '../core/types.js'
+import type { LayerStackWidget } from './LayerStackWidget.js'
 
 // ------------------------------------------------------------
 // InteractionSystem — routes canvas pointer events to the stack
@@ -65,9 +66,15 @@ export class InteractionSystem {
   // The topmost layer of the stack, used for hit-testing.
   private _stackTop: Layer | null = null
 
+  // Optional LayerStackWidget — events within its strip are routed here first.
+  private _widget: LayerStackWidget | null = null
+
   // The node currently handling a drag gesture, and the pointer
   // that owns it (to support multi-touch correctly).
   private _active: { node: Draggable; pointerId: number } | null = null
+
+  // True while a pointer gesture is being handled by the LayerStackWidget.
+  private _widgetCapture = false
 
   // Bound listener references retained so destroy() can remove them.
   private readonly _onDown:   (e: PointerEvent) => void
@@ -98,6 +105,10 @@ export class InteractionSystem {
     this._stackTop = top
   }
 
+  setLayerStackWidget(w: LayerStackWidget): void {
+    this._widget = w
+  }
+
   // Remove all event listeners.  Call when the canvas is torn down.
   destroy(): void {
     this._canvas.removeEventListener('pointerdown',   this._onDown)
@@ -125,10 +136,22 @@ export class InteractionSystem {
   private _handleDown(e: PointerEvent): void {
     // If we are already tracking a pointer, ignore additional ones.
     // (Multi-touch is not yet supported.)
-    if (this._active !== null) return
-    if (this._stackTop === null) return
+    if (this._active !== null || this._widgetCapture) return
 
     const point = this._point(e)
+
+    // Route to the LayerStackWidget first if the pointer is in its strip.
+    if (this._widget !== null && this._widget.inBounds(point)) {
+      if (this._widget.handlePointerDown(point)) {
+        this._widgetCapture = true
+        this._canvas.setPointerCapture(e.pointerId)
+        this._setCursor('grabbing')
+      }
+      return
+    }
+
+    if (this._stackTop === null) return
+
     const node  = this._hitTest(point)
 
     if (node === null || !isDraggable(node)) return
@@ -142,10 +165,15 @@ export class InteractionSystem {
   }
 
   private _handleMove(e: PointerEvent): void {
+    const point = this._point(e)
+    if (this._widgetCapture) {
+      this._widget?.handlePointerMove(point)
+      return
+    }
     if (this._active !== null) {
       // Deliver move to the captured node only.
       if (e.pointerId !== this._active.pointerId) return
-      this._active.node.handlePointerMove?.(this._point(e))
+      this._active.node.handlePointerMove?.(point)
     } else {
       // No active drag — update the hover cursor.
       this._updateHoverCursor(e)
@@ -153,6 +181,13 @@ export class InteractionSystem {
   }
 
   private _handleUp(e: PointerEvent): void {
+    const point = this._point(e)
+    if (this._widgetCapture) {
+      this._widget?.handlePointerUp(point)
+      this._widgetCapture = false
+      this._updateHoverCursor(e)
+      return
+    }
     if (this._active === null) return
     if (e.pointerId !== this._active.pointerId) return
 
@@ -170,11 +205,16 @@ export class InteractionSystem {
   }
 
   private _updateHoverCursor(e: PointerEvent): void {
+    const point = this._point(e)
+    if (this._widget !== null && this._widget.inBounds(point)) {
+      this._setCursor('pointer')
+      return
+    }
     if (this._stackTop === null) {
       this._setCursor('default')
       return
     }
-    const node = this._hitTest(this._point(e))
+    const node = this._hitTest(point)
     if (node !== null && isDraggable(node) && isInteractive(node)) {
       this._setCursor('pointer')
     } else {

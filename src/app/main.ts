@@ -25,6 +25,7 @@ import { NoiseLayer }           from '../layers/NoiseLayer.js'
 import { GradientLayer }        from '../layers/GradientLayer.js'
 import { TransformLayer }       from '../layers/TransformLayer.js'
 import { SequencerLayer }       from '../layers/SequencerLayer.js'
+import { LayerStackWidget }    from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -268,8 +269,13 @@ while (stackTop.layerAbove !== null) stackTop = stackTop.layerAbove
 evaluator.setStack(stackTop)
 evaluator.setClock(clockLayer)
 
+const widget = new LayerStackWidget(canvas)
+widget.setStack(stackTop)
+evaluator.setLayerStackWidget(widget)
+
 const interaction = new InteractionSystem(canvas)
 interaction.setStack(stackTop)
+interaction.setLayerStackWidget(widget)
 
 // ------------------------------------------------------------------
 // Resize

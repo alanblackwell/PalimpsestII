@@ -79,6 +79,7 @@ export class BindingLayer extends Layer
              DirectionSource, RateSource, CountSource, EventSource {
 
   readonly types: ReadonlySet<ValueType>
+  override readonly isInfrastructure = true
 
   private readonly _source: Node
   private readonly _slot:   ParameterSlot
