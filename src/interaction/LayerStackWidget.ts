@@ -75,11 +75,16 @@ export class LayerStackWidget {
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
-    // Arrow-key navigation: up/down moves the current layer.
-    window.addEventListener('keydown', (e: KeyboardEvent) => {
+    // Make the canvas focusable so it receives keyboard events.
+    canvas.tabIndex = 0
+    // Arrow-key navigation on both document (works before first click)
+    // and the canvas element itself (works when canvas has focus).
+    const onKey = (e: KeyboardEvent) => {
       if (e.key === 'ArrowUp')   { this.navigateUp();   e.preventDefault() }
       if (e.key === 'ArrowDown') { this.navigateDown(); e.preventDefault() }
-    })
+    }
+    document.addEventListener('keydown', onKey)
+    canvas.addEventListener('keydown',   onKey)
   }
 
   // ------------------------------------------------------------------
@@ -207,10 +212,18 @@ export class LayerStackWidget {
   private _hitTest(pt: Point): Layer | null {
     const sp = this._spacing()
     const ch = this._cardH()
-    // Test from topmost layer downwards (highest z wins)
-    for (let i = this._layers.length - 1; i >= 0; i--) {
-      const y = this._cardY(i, sp)
-      if (pt.y >= y && pt.y < y + ch) return this._layers[i] ?? null
+    const ci = this._currentIndex()
+    const n  = this._layers.length
+    // Test from topmost (drawn last, highest z) downward.
+    // Hit area matches the *visible* portion of each card:
+    //   • current card and root (fully visible) → full ch
+    //   • all others → only the sp-pixel peek at their top edge
+    // This prevents the large topmost-card area from eating clicks
+    // that were intended for middle-stack cards.
+    for (let i = n - 1; i >= 0; i--) {
+      const y    = this._cardY(i, sp)
+      const hitH = (i === ci || i === 0) ? ch : sp
+      if (pt.y >= y && pt.y < y + hitH) return this._layers[i] ?? null
     }
     return null
   }
@@ -239,6 +252,28 @@ export class LayerStackWidget {
     if (this._dragLayer !== null) {
       this._drawCard(ctx, this._dragLayer, this._dragY, CARD_W, ch, true)
     }
+
+    // Current-layer name strip at the very bottom of the widget area.
+    this._drawCurrentLabel(ctx)
+  }
+
+  private _drawCurrentLabel(ctx: Ctx2D): void {
+    const H  = this._canvas.height
+    const lh = 20
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.72)'
+    ctx.fillRect(0, H - lh, WIDGET_W, lh)
+    if (this._selected !== null) {
+      const tc = this._typeColor(this._selected)
+      ctx.fillStyle = tc
+      ctx.fillRect(0, H - lh, 3, lh)
+      ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+      ctx.font         = '11px monospace'
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(`▸ ${this._selected.debugName}  [↑↓ to navigate]`, 8, H - lh / 2)
+    }
+    ctx.restore()
   }
 
   // ── Card ──────────────────────────────────────────────────────────
@@ -486,6 +521,7 @@ export class LayerStackWidget {
 
   handlePointerDown(pt: Point): boolean {
     if (!this.inBounds(pt)) return false
+    this._canvas.focus()   // ensure canvas receives subsequent key events
     const hit = this._hitTest(pt)
     if (hit !== null) {
       this._selected    = hit
