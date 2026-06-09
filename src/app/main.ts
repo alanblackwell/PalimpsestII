@@ -28,6 +28,7 @@ import { SequencerLayer }       from '../layers/SequencerLayer.js'
 import { RectLayer }           from '../layers/RectLayer.js'
 import { EllipseLayer }        from '../layers/EllipseLayer.js'
 import { MenuLayer }           from '../layers/MenuLayer.js'
+import { DeletionLayer }       from '../layers/DeletionLayer.js'
 import { LayerStackWidget }    from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------------
@@ -109,6 +110,9 @@ const X = 40
 const W = 260
 
 const root = new RootLayer(canvas.width, canvas.height)
+
+const deletionLayer = new DeletionLayer()
+deletionLayer.bounds = { x: X, y: 24, width: W, height: 36 }
 
 const layerA = new AmountLayer(0.3)
 layerA.debugName = 'AmountA'
@@ -215,7 +219,8 @@ ellipseLayer.debugName = 'Ellipse'
 ellipseLayer.bounds = { x: X, y: 1654, width: W, height: 36 }
 
 // Wire the stack bottom → top
-layerA.insertAbove(root)
+deletionLayer.insertAbove(root)
+layerA.insertAbove(deletionLayer)
 layerB.insertAbove(layerA)
 colourLayer.insertAbove(layerB)
 pointLayer.insertAbove(colourLayer)
@@ -291,19 +296,38 @@ const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 
-// MenuLayer sits at the very top — must be created after widget and interaction
-// are available so the onAdded callback can reference them.
-const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+// Helper: refresh evaluator + widget + interaction after stack mutations.
+const refreshStack = (selectLayer?: Layer) => {
   let top: Layer = menuLayer
   while (top.layerAbove !== null) top = top.layerAbove
   evaluator.setStack(top)
   widget.setStack(top)
   interaction.setStack(top)
-  widget.selected = newLayer
+  if (selectLayer !== undefined) widget.selected = selectLayer
+}
+
+// MenuLayer sits at the very top — must be created after widget and interaction
+// are available so the onAdded callback can reference them.
+const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+  refreshStack(newLayer)
 })
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 1704, width: W, height: 36 }
 menuLayer.insertAbove(stackTop)
+
+// DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
+deletionLayer.setRestoreCallback((layer) => {
+  layer.insertAbove(deletionLayer)
+  refreshStack(layer)
+})
+
+// Delete key: archive the currently selected layer into DeletionLayer.
+interaction.setDeleteAction(() => {
+  const layer = widget.selected
+  if (layer === null || layer === deletionLayer || layer === root || layer === menuLayer) return
+  deletionLayer.archive(layer)
+  refreshStack()
+})
 
 // menuLayer is now the top; no bindings sit above it.
 evaluator.setStack(menuLayer)
