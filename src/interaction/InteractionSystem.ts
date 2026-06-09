@@ -134,6 +134,17 @@ export class InteractionSystem {
     return this._stackTop?.hitTest(point) ?? null
   }
 
+  // Returns true if the node belongs to the currently-selected layer
+  // (or there is no selection, in which case all nodes are accepted).
+  private _isOnCurrentLayer(node: Node): boolean {
+    const current = this._widget?.selected ?? null
+    if (current === null) return true
+    if ((node as unknown) === current) return true
+    // Region owned by the current layer
+    if ('parentLayer' in node && (node as { parentLayer: unknown }).parentLayer === current) return true
+    return false
+  }
+
   // ----------------------------------------------------------
   // Event handlers
   // ----------------------------------------------------------
@@ -160,6 +171,9 @@ export class InteractionSystem {
     const node  = this._hitTest(point)
 
     if (node === null || !isDraggable(node)) return
+
+    // Only accept interaction on nodes belonging to the current layer.
+    if (!this._isOnCurrentLayer(node)) return
 
     // Let the node decide whether to accept the event.
     if (!node.handlePointerDown(point)) return
@@ -226,7 +240,7 @@ export class InteractionSystem {
       return
     }
     const node = this._hitTest(point)
-    if (node !== null && isDraggable(node) && isInteractive(node)) {
+    if (node !== null && isDraggable(node) && isInteractive(node) && this._isOnCurrentLayer(node)) {
       this._setCursor('pointer')
     } else {
       this._setCursor('default')

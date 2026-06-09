@@ -126,6 +126,10 @@ export class Evaluator {
     const renderTop = this._layerStackWidget?.selected ?? this._stackTop
     renderTop.renderStack(this.ctx)
 
+    // Render the current layer's control elements (label bar + interactive
+    // handle).  All other layers' controls are hidden.
+    renderTop.renderPanel(this.ctx)
+
     // Overlay the LayerStackWidget on the left strip.
     this._layerStackWidget?.render(this.ctx)
   }
