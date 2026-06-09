@@ -119,9 +119,12 @@ export class Evaluator {
     const { width, height } = this.canvas
     this.ctx.clearRect(0, 0, width, height)
 
-    // renderStack evaluates each layer (depth-first pull) then composites
-    // bottom-to-top onto ctx.
-    this._stackTop.renderStack(this.ctx)
+    // Render from the root up to (and including) the current layer.
+    // Layers above the current layer are not composited onto the canvas,
+    // but their values are still pulled on-demand via slot dependencies
+    // when lower layers read from them during evaluate().
+    const renderTop = this._layerStackWidget?.selected ?? this._stackTop
+    renderTop.renderStack(this.ctx)
 
     // Overlay the LayerStackWidget on the left strip.
     this._layerStackWidget?.render(this.ctx)
