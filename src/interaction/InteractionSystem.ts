@@ -269,7 +269,8 @@ export class InteractionSystem {
       return
     }
     if (this._widget !== null) {
-      if (this._widget.handleKey(e.key)) e.preventDefault()
+      const key = e.shiftKey ? `Shift+${e.key}` : e.key
+      if (this._widget.handleKey(key)) e.preventDefault()
     }
   }
 

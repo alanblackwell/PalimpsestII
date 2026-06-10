@@ -103,8 +103,10 @@ export class LayerStackWidget {
 
   // Handle a key press. Returns true if the key was consumed.
   handleKey(key: string): boolean {
-    if (key === 'ArrowUp')   { this.navigateUp();    return true }
-    if (key === 'ArrowDown') { this.navigateDown();  return true }
+    if (key === 'Shift+ArrowUp')   { this.moveUp();      return true }
+    if (key === 'Shift+ArrowDown') { this.moveDown();    return true }
+    if (key === 'ArrowUp')         { this.navigateUp();  return true }
+    if (key === 'ArrowDown')       { this.navigateDown(); return true }
     if (key === 'h' || key === 'H') { this.toggleVisible(); return true }
     return false
   }
@@ -121,7 +123,7 @@ export class LayerStackWidget {
     const ci = this._currentIndex()
     if (ci < this._layers.length - 1) {
       this._selected = this._layers[ci + 1] ?? this._selected
-      Node.scheduleFrame()
+      Node.scheduleFrame?.()
     }
   }
 
@@ -130,8 +132,32 @@ export class LayerStackWidget {
     const ci = this._currentIndex()
     if (ci > 0) {
       this._selected = this._layers[ci - 1] ?? this._selected
-      Node.scheduleFrame()
+      Node.scheduleFrame?.()
     }
+  }
+
+  // Reorder: move selected layer one position higher (Shift+ArrowUp).
+  moveUp(): void {
+    const ci = this._currentIndex()
+    if (ci < 0 || ci >= this._layers.length - 1) return
+    const layer = this._layers[ci]!
+    const to    = ci + 1
+    this._layers.splice(ci, 1)
+    this._layers.splice(to, 0, layer)
+    this._reorderLiveStack(layer, to)
+    Node.scheduleFrame?.()
+  }
+
+  // Reorder: move selected layer one position lower (Shift+ArrowDown).
+  moveDown(): void {
+    const ci = this._currentIndex()
+    if (ci <= 0) return
+    const layer = this._layers[ci]!
+    const to    = ci - 1
+    this._layers.splice(ci, 1)
+    this._layers.splice(to, 0, layer)
+    this._reorderLiveStack(layer, to)
+    Node.scheduleFrame?.()
   }
 
   // ------------------------------------------------------------------
@@ -655,13 +681,14 @@ export class LayerStackWidget {
     const to    = Math.max(0, Math.min(this._layers.length - 1, this._dropIndex))
     if (from === to) return
 
-    // Reorder in the display list.
     this._layers.splice(from, 1)
     this._layers.splice(to,   0, layer)
+    this._reorderLiveStack(layer, to)
+  }
 
-    // Reorder in the live layer stack.
-    // "to" 0 = root position, N-1 = topmost.
-    // In the stack, higher index = higher layer = layerAbove.
+  // Update the live linked-list layer stack to match the display-list position `to`.
+  // Index 0 = root (bottommost), index N-1 = topmost.
+  private _reorderLiveStack(layer: Layer, to: number): void {
     const below = this._layers[to - 1] ?? null
     const above = this._layers[to + 1] ?? null
 
@@ -673,7 +700,7 @@ export class LayerStackWidget {
       // Insert at the very bottom — below above's chain.
       let cursor = above
       while (cursor.layerBelow !== null) cursor = cursor.layerBelow
-      layer.insertAbove(cursor.layerBelow ?? cursor)  // becomes new root-adjacent
+      layer.insertAbove(cursor.layerBelow ?? cursor)
     }
   }
 }
