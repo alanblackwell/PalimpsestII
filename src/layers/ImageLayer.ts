@@ -8,6 +8,7 @@ import {
   type Amount,     type AmountSource,
   type Ctx2D,
 } from '../core/types.js'
+import { Node } from '../core/Node.js'
 import { graph } from '../dataflow/Graph.js'
 
 // ------------------------------------------------------------
@@ -47,7 +48,6 @@ import { graph } from '../dataflow/Graph.js'
 const ACCENT     = '#7ecf7e'   // Image type colour (from BindingLayer table)
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
-const DEFAULT_POS: Point = { x: 400, y: 300 }
 
 // Button geometry
 const BTN   = 22
@@ -67,7 +67,7 @@ export class ImageLayer extends Layer implements ImageSource {
   private _dragOver: boolean    = false
 
   // Resolved values (updated in recompute)
-  private _position: Point  = { ...DEFAULT_POS }
+  private _position: Point  = { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
   private _opacity:  number = 1.0
   private _scale:    number = 1.0
 
@@ -141,7 +141,7 @@ export class ImageLayer extends Layer implements ImageSource {
   protected recompute(): void {
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
-      : { ...DEFAULT_POS }
+      : { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
 
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
