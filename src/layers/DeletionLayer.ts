@@ -1,6 +1,8 @@
 import { Layer }            from '../core/Layer.js'
+import { Node }             from '../core/Node.js'
 import { ValueType }        from '../core/types.js'
 import type { Point, Ctx2D } from '../core/types.js'
+import { typeColor, drawLayerThumbnail } from '../interaction/thumbnail.js'
 
 // ------------------------------------------------------------
 // DeletionLayer — archive for removed layers
@@ -11,13 +13,16 @@ import type { Point, Ctx2D } from '../core/types.js'
 // pushed onto this layer's archive list.
 //
 // Archived layers:
-//   • Continue to evaluate, so downstream bindings still work.
-//   • Are shown as thumbnails when DeletionLayer is selected.
+//   • Continue to evaluate so downstream bindings still work.
+//   • Are shown as live thumbnails when DeletionLayer is selected.
 //   • Can be restored by double-clicking their thumbnail.
+//   • Can be permanently purged (with all bindings cleared) by
+//     clicking the × button on each thumbnail.
 //
 // Interaction:
 //   Single click  — select thumbnail (highlight)
 //   Double-click  — restore layer to stack (just above DeletionLayer)
+//   × button      — permanently purge; calls _onPurge(layer)
 
 const ACCENT  = '#9090a0'
 const COLS    = 4
@@ -29,6 +34,9 @@ const PANEL_Y = 54
 const HEADER  = 28
 const PAD     = 10
 
+const TRASH_SZ = 16     // size of the × button
+const TRASH_M  = 3      // margin from thumbnail top-right corner
+
 type BBox = { x: number; y: number; width: number; height: number }
 
 export class DeletionLayer extends Layer {
@@ -36,6 +44,7 @@ export class DeletionLayer extends Layer {
 
   private _archived:      Layer[] = []
   private _onRestore:     ((layer: Layer) => void) | null = null
+  private _onPurge:       ((layer: Layer) => void) | null = null
   private _cpBounds:      BBox | null = null
   private _selected:      number = -1    // highlighted thumbnail index
   private _lastClickTime = 0
@@ -52,6 +61,12 @@ export class DeletionLayer extends Layer {
 
   setRestoreCallback(fn: (layer: Layer) => void): void {
     this._onRestore = fn
+  }
+
+  // Called after permanent purge — caller is responsible for unbinding
+  // any BindingLayers that still source from the purged layer.
+  setPurgeCallback(fn: (layer: Layer) => void): void {
+    this._onPurge = fn
   }
 
   /** Remove a layer from the stack and move it into this archive. */
@@ -97,10 +112,20 @@ export class DeletionLayer extends Layer {
     const b = this._cpBounds
     if (point.x < b.x || point.x > b.x + b.width ||
         point.y < b.y || point.y > b.y + b.height) return null
-    return this._thumbAt(point) >= 0 ? this : null
+    return (this._thumbAt(point) >= 0 || this._trashAt(point) >= 0) ? this : null
   }
 
   handlePointerDown(point: Point): boolean {
+    // Trash button takes priority over thumbnail click.
+    const ti = this._trashAt(point)
+    if (ti >= 0) {
+      const layer = this._archived.splice(ti, 1)[0]!
+      if (this._selected >= ti) this._selected = Math.max(-1, this._selected - 1)
+      this.markDirty()
+      this._onPurge?.(layer)
+      return true
+    }
+
     const idx = this._thumbAt(point)
     if (idx < 0) return false
 
@@ -128,15 +153,42 @@ export class DeletionLayer extends Layer {
   // Private helpers
   // ----------------------------------------------------------
 
+  private _cellBounds(i: number): BBox {
+    const gy  = PANEL_Y + HEADER + PAD
+    const col = i % COLS
+    const row = Math.floor(i / COLS)
+    return {
+      x:      PANEL_X + col * (TW + GAP),
+      y:      gy      + row * (TH + GAP),
+      width:  TW,
+      height: TH,
+    }
+  }
+
+  private _trashBounds(i: number): BBox {
+    const c = this._cellBounds(i)
+    return {
+      x:      c.x + TW - TRASH_M - TRASH_SZ,
+      y:      c.y + TRASH_M,
+      width:  TRASH_SZ,
+      height: TRASH_SZ,
+    }
+  }
+
   private _thumbAt(point: Point): number {
-    const gy = PANEL_Y + HEADER + PAD
     for (let i = 0; i < this._archived.length; i++) {
-      const col = i % COLS
-      const row = Math.floor(i / COLS)
-      const bx  = PANEL_X + col * (TW + GAP)
-      const by  = gy       + row * (TH + GAP)
-      if (point.x >= bx && point.x <= bx + TW &&
-          point.y >= by && point.y <= by + TH) return i
+      const c = this._cellBounds(i)
+      if (point.x >= c.x && point.x <= c.x + c.width &&
+          point.y >= c.y && point.y <= c.y + c.height) return i
+    }
+    return -1
+  }
+
+  private _trashAt(point: Point): number {
+    for (let i = 0; i < this._archived.length; i++) {
+      const t = this._trashBounds(i)
+      if (point.x >= t.x && point.x <= t.x + t.width &&
+          point.y >= t.y && point.y <= t.y + t.height) return i
     }
     return -1
   }
@@ -174,52 +226,55 @@ export class DeletionLayer extends Layer {
     const hint = n === 0 ? 'No deleted layers' : 'Double-click to restore'
     ctx.fillText(hint, panX + 14, PANEL_Y + HEADER / 2)
 
-    if (n === 0) {
-      ctx.restore()
-      return
-    }
+    if (n === 0) { ctx.restore(); return }
 
-    const gy = PANEL_Y + HEADER + PAD
+    const cw = Node.canvasWidth
+    const ch = Node.canvasHeight
 
     for (let i = 0; i < n; i++) {
       const layer  = this._archived[i]!
-      const col    = i % COLS
-      const row    = Math.floor(i / COLS)
-      const bx     = PANEL_X + col * (TW + GAP)
-      const by     = gy       + row * (TH + GAP)
-      const tc     = this._typeColor(layer)
+      const c      = this._cellBounds(i)
+      const tc     = typeColor(layer)
       const isSel  = i === this._selected
 
-      // Card background
+      // Card border / background
       ctx.fillStyle = isSel ? tc + '44' : tc + '1a'
       ctx.beginPath()
-      ctx.roundRect(bx, by, TW, TH, 6)
+      ctx.roundRect(c.x, c.y, TW, TH, 6)
       ctx.fill()
 
-      // Border
       ctx.strokeStyle = isSel ? tc : tc + '55'
       ctx.lineWidth   = isSel ? 1.5 : 1
       ctx.beginPath()
-      ctx.roundRect(bx + 0.5, by + 0.5, TW - 1, TH - 1, 6)
+      ctx.roundRect(c.x + 0.5, c.y + 0.5, TW - 1, TH - 1, 6)
       ctx.stroke()
 
-      // Left accent stripe
+      // Thumbnail clipped to card
+      ctx.save()
+      ctx.beginPath()
+      ctx.roundRect(c.x, c.y, TW, TH, 6)
+      ctx.clip()
+      ctx.translate(c.x, c.y)
+      drawLayerThumbnail(ctx, layer, TW, TH, cw, ch)
+      ctx.restore()
+
+      // Left accent stripe on top of thumbnail
       ctx.fillStyle = tc + 'cc'
       ctx.beginPath()
-      ctx.roundRect(bx, by, 3, TH, [6, 0, 0, 6])
+      ctx.roundRect(c.x, c.y, 3, TH, [6, 0, 0, 6])
       ctx.fill()
 
-      // Layer name
+      // × (trash) button — top-right corner
+      const tb = this._trashBounds(i)
+      ctx.fillStyle = 'rgba(180,50,50,0.75)'
+      ctx.beginPath()
+      ctx.roundRect(tb.x, tb.y, tb.width, tb.height, 3)
+      ctx.fill()
       ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-      ctx.font         = 'bold 12px monospace'
+      ctx.font         = 'bold 11px monospace'
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(layer.debugName, bx + TW / 2, by + TH / 2 - 9)
-
-      // Type label
-      ctx.fillStyle = tc
-      ctx.font      = '10px monospace'
-      ctx.fillText(this._typeName(layer), bx + TW / 2, by + TH / 2 + 9)
+      ctx.fillText('×', tb.x + tb.width / 2, tb.y + tb.height / 2)
     }
 
     ctx.restore()
@@ -247,35 +302,5 @@ export class DeletionLayer extends Layer {
     ctx.textBaseline = 'middle'
     ctx.fillText(`Deleted  (${n})`, x + 12, y + height / 2)
     ctx.restore()
-  }
-
-  private _typeColor(layer: Layer): string {
-    const t = layer.types
-    if (t.has(ValueType.Image))      return '#7ecf7e'
-    if (t.has(ValueType.Mask))       return '#cfcf7e'
-    if (t.has(ValueType.Colour))     return '#e8944a'
-    if (t.has(ValueType.Amount))     return '#4a8fe8'
-    if (t.has(ValueType.Direction))  return '#7ecfcf'
-    if (t.has(ValueType.Point))      return '#cf7ecf'
-    if (t.has(ValueType.Rate))       return '#e87e7e'
-    if (t.has(ValueType.Count))      return '#a0a0a0'
-    if (t.has(ValueType.Event))      return '#e0e060'
-    if (t.has(ValueType.Collection)) return '#a0a4b8'
-    return '#888888'
-  }
-
-  private _typeName(layer: Layer): string {
-    const t = layer.types
-    if (t.has(ValueType.Image))      return 'Image'
-    if (t.has(ValueType.Mask))       return 'Mask'
-    if (t.has(ValueType.Colour))     return 'Colour'
-    if (t.has(ValueType.Amount))     return 'Amount'
-    if (t.has(ValueType.Direction))  return 'Direction'
-    if (t.has(ValueType.Point))      return 'Point / Shape'
-    if (t.has(ValueType.Rate))       return 'Rate'
-    if (t.has(ValueType.Count))      return 'Count'
-    if (t.has(ValueType.Event))      return 'Event'
-    if (t.has(ValueType.Collection)) return 'Collection'
-    return 'Layer'
   }
 }

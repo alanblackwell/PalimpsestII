@@ -110,12 +110,13 @@ The canvas-space panel below the strip (slot rows) starts at `this.panelBottom`
 | `src/app/main.ts` | Entry point — canvas setup, initial stack, event wiring |
 | `src/core/types.ts` | ValueType enum, value types, source interfaces, BoundingBox |
 | `src/core/Node.ts` | Base class — dirty, dependents, evaluate, statics |
-| `src/core/Layer.ts` | Stack links, rendering, hit testing, slot rendering |
+| `src/core/Layer.ts` | Stack links, rendering, hit testing, slot rendering, `autoBindRules` |
 | `src/core/ParameterSlot.ts` | Typed inputs — Bound/Unbound/SuspendedBound |
 | `src/dataflow/Evaluator.ts` | rAF loop, render pipeline, resize |
 | `src/dataflow/Graph.ts` | Cycle detection, bind validation |
-| `src/interaction/InteractionSystem.ts` | Pointer routing, keyboard, bind-drag |
+| `src/interaction/InteractionSystem.ts` | Pointer routing, keyboard, bind-drag, pixel-pick selection |
 | `src/interaction/LayerStackWidget.ts` | Thumbnail strip, layer selection, reorder |
+| `src/interaction/thumbnail.ts` | Shared thumbnail rendering utility (used by widget and DeletionLayer) |
 | `src/layers/MaskLayer.ts` | Composite mask: shape slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
@@ -131,6 +132,43 @@ strokes ∪ all bound shape masks, composited with `source-over`.
 `ValueType.Point` and `ValueType.Mask`. The mask is a full-canvas white-on-transparent
 rasterisation of the filled shape, regenerated in `recompute()` using
 `Node.canvasWidth/Height`.
+
+## Pixel-pick layer selection (added June 2026)
+
+Clicking an empty area of the canvas (no hit on the current layer's controls)
+triggers a pixel-pick scan: `InteractionSystem._pickLayerAtPixel()` walks the
+stack top-to-bottom, renders each non-infrastructure layer to a single shared
+`OffscreenCanvas`, reads the alpha of the clicked pixel, and selects the first
+layer with alpha > 10. This fires from `_handleDown` whenever the normal
+hit-test returns nothing.
+
+## Default binding rules (`autoBindRules`) (added June 2026)
+
+`Layer.autoBindRules()` returns an array of `{ slot, accepts, removeAfterBind? }`
+descriptors. `applyDefaultBindings(layer)` in `main.ts` walks down the stack
+from the newly-added layer and binds the first non-infrastructure layer that
+satisfies each `accepts` predicate.
+
+Layers currently declaring rules:
+- **MaskLayer** — binds first shape slot to nearest `Mask`-producing layer below
+- **ClipLayer** — binds image slot to nearest `Image`; mask slot to nearest `Mask`;
+  both with `removeAfterBind: true` (sources are archived after binding)
+- **AnimPathLayer** — special-cased in `main.ts` (creates Clock/Rate if absent)
+
+To add rules to a new layer, override `autoBindRules()` in the layer class.
+
+## DeletionLayer (updated June 2026)
+
+Archived layers are shown as **live thumbnails** (same rendering as
+`LayerStackWidget`) so they stay visually distinct and update as their sources
+change. Each thumbnail has a small red `×` button at top-right for permanent
+purge. On purge, `main.ts` snapshots `layer.dependents`, filters for
+`BindingLayer` instances, and calls `bl.remove()` on each — which unbinds the
+consumer slot, removes the BindingLayer from the stack, and unregisters it from
+the graph. Double-click still restores.
+
+Thumbnail rendering is in `src/interaction/thumbnail.ts` (`drawLayerThumbnail`,
+`typeColor`) — import from there when adding a new widget that needs thumbnails.
 
 ## Known issues / pre-existing tech debt
 

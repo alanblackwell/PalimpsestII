@@ -48,6 +48,22 @@ const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 
+// Apply any auto-bind rules declared by a newly-added layer.
+// Each rule names a slot and a predicate; we walk down the stack and bind
+// the first non-infrastructure layer that satisfies the predicate.
+function applyDefaultBindings(newLayer: Layer): void {
+  for (const { slot, accepts, removeAfterBind } of newLayer.autoBindRules()) {
+    if (slot.isActive) continue
+    for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
+      if (!l.isInfrastructure && accepts(l)) {
+        BindingLayer.create(l, slot)
+        if (removeAfterBind) deletionLayer.archive(l)
+        break
+      }
+    }
+  }
+}
+
 // Helper: refresh evaluator + widget + interaction after stack mutations.
 const refreshStack = (selectLayer?: Layer) => {
   let top: Layer = menuLayer
@@ -69,6 +85,8 @@ const refreshStack = (selectLayer?: Layer) => {
 
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+  applyDefaultBindings(newLayer)
+
   if (newLayer instanceof AnimPathLayer) {
     // Auto-bind shape slot to the first samplePerimeter-capable layer below.
     if (!newLayer.shapeSlot.isActive) {
@@ -140,6 +158,15 @@ interaction.setDeleteAction(() => {
 
 interaction.setBoundCallback((source, slot) => {
   BindingLayer.create(source, slot)
+  refreshStack()
+})
+
+// Permanently remove a layer from the archive and clear any bindings that
+// still source from it.  We snapshot dependents before iterating because
+// each BindingLayer.remove() call modifies the set in-place.
+deletionLayer.setPurgeCallback((layer) => {
+  const bls = [...layer.dependents].filter(d => d instanceof BindingLayer)
+  for (const bl of bls) (bl as BindingLayer).remove()
   refreshStack()
 })
 

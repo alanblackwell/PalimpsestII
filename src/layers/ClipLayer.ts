@@ -88,6 +88,13 @@ export class ClipLayer extends Layer implements ImageSource {
     }
   }
 
+  override autoBindRules() {
+    return [
+      { slot: this._imageSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), removeAfterBind: true },
+      { slot: this._maskSlot,  accepts: (l: Layer) => l.types.has(ValueType.Mask),  removeAfterBind: true },
+    ]
+  }
+
   // ----------------------------------------------------------
   // Rendering
   // ----------------------------------------------------------

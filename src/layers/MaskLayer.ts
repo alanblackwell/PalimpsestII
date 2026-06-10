@@ -101,6 +101,12 @@ export class MaskLayer extends Layer implements MaskSource {
     }
   }
 
+  override autoBindRules() {
+    return [
+      { slot: this._shapeSlots[0]!, accepts: (l: Layer) => l.types.has(ValueType.Mask) },
+    ]
+  }
+
   // ----------------------------------------------------------
   // Panel layout
   // ----------------------------------------------------------

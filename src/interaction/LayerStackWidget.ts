@@ -1,7 +1,7 @@
 import { Layer }     from '../core/Layer.js'
 import { Node }      from '../core/Node.js'
-import { ValueType } from '../core/types.js'
-import type { Ctx2D, Point, Colour } from '../core/types.js'
+import type { Ctx2D, Point } from '../core/types.js'
+import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 
 // ------------------------------------------------------------
 // LayerStackWidget — overlapping thumbnail card stack
@@ -55,7 +55,6 @@ const SEL_BORDER  = `rgba(60,160,160,0.85)`
 const TOP_MARGIN  = 28   // room for the current-layer label strip above the first card
 const MIN_SPACING = 22      // minimum gap between successive card tops
 const GAP_CURRENT = 40      // gap above the current card (must exceed shadow bleed ~15px)
-const LABEL_RATIO = 0.13    // label height as fraction of card height
 
 // ─────────────────────────────────────────────────────────────
 
@@ -282,6 +281,11 @@ export class LayerStackWidget {
       this._drawCard(ctx, layer, y, CARD_W, ch)
     }
 
+    // Drop-target indicator line.
+    if (this._dragging && this._dragLayer !== null) {
+      this._drawDropIndicator(ctx, sp, ch)
+    }
+
     // Dragged card floats above everything.
     if (this._dragLayer !== null) {
       this._drawCard(ctx, this._dragLayer, this._dragY, CARD_W, ch, true)
@@ -298,7 +302,7 @@ export class LayerStackWidget {
     ctx.fillStyle = 'rgba(0,0,0,0.72)'
     ctx.fillRect(0, 0, WIDGET_W, lh)
     if (this._selected !== null) {
-      const tc = this._typeColor(this._selected)
+      const tc = typeColor(this._selected)
       ctx.fillStyle = tc
       ctx.fillRect(0, 0, 3, lh)
       ctx.fillStyle    = 'rgba(255,255,255,0.90)'
@@ -358,234 +362,9 @@ export class LayerStackWidget {
   // ── Thumbnail content ─────────────────────────────────────────────
 
   private _drawThumbnail(ctx: Ctx2D, layer: Layer, w: number, h: number): void {
-    const cw = this._canvas.width
-    const ch = this._canvas.height
-
-    // Background.
-    ctx.fillStyle = '#16161e'
-    ctx.fillRect(0, 0, w, h)
-
-    const t = layer.types
-
-    // ── Image source ──────────────────────────────────────────
-    if (t.has(ValueType.Image)) {
-      const img = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getImage']?.()
-      if (img != null) {
-        try { ctx.drawImage(img as CanvasImageSource, 0, 0, w, h) } catch { /* skip */ }
-        this._drawLabel(ctx, layer, w, h)
-        return
-      }
-    }
-
-    // ── Mask source ───────────────────────────────────────────
-    if (t.has(ValueType.Mask)) {
-      const mask = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getMask']?.()
-      if (mask != null) {
-        try { ctx.drawImage(mask as CanvasImageSource, 0, 0, w, h) } catch { /* skip */ }
-        this._drawLabel(ctx, layer, w, h)
-        return
-      }
-    }
-
-    // ── Colour source ─────────────────────────────────────────
-    if (t.has(ValueType.Colour)) {
-      const col = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getColour']?.() as Colour | undefined
-      if (col) {
-        ctx.fillStyle = `rgba(${(col.r*255)|0},${(col.g*255)|0},${(col.b*255)|0},${col.a})`
-        ctx.fillRect(0, 0, w, h)
-        this._drawLabel(ctx, layer, w, h)
-        return
-      }
-    }
-
-    // ── Clock source (Amount whose value is unbounded elapsed time) ──
-    // Detected by duck-typing: layer has an `elapsed` number property.
-    const elapsed = (layer as any)['elapsed'] as number | undefined
-    if (t.has(ValueType.Amount) && typeof elapsed === 'number') {
-      const tc   = this._typeColor(layer)
-      const barH = Math.round(h * 0.25)
-      ctx.fillStyle = tc + '1a'
-      ctx.fillRect(0, 0, w, h)
-
-      // Bar shows proportion of one hour elapsed, rendered very faint.
-      const proportion = Math.min(1, elapsed / 3600)
-      ctx.save()
-      ctx.globalAlpha *= 0.12
-      ctx.fillStyle = tc
-      ctx.fillRect(0, h - barH, Math.round(proportion * w), barH)
-      ctx.restore()
-
-      // Counter in h:mm:ss.cc format.
-      const totalCs = Math.floor(elapsed * 100)
-      const cs  = totalCs % 100
-      const ss  = Math.floor(totalCs / 100) % 60
-      const mm  = Math.floor(totalCs / 6000) % 60
-      const hh  = Math.floor(totalCs / 360000)
-      const pad = (n: number) => String(n).padStart(2, '0')
-      const timeStr = hh > 0
-        ? `${hh}:${pad(mm)}:${pad(ss)}.${pad(cs)}`
-        : `${mm}:${pad(ss)}.${pad(cs)}`
-      ctx.fillStyle    = 'rgba(255,255,255,0.70)'
-      ctx.font         = `bold ${Math.round(h * 0.16)}px monospace`
-      ctx.textAlign    = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(timeStr, w / 2, (h - barH) / 2)
-
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Amount source ─────────────────────────────────────────
-    if (t.has(ValueType.Amount)) {
-      const amt  = (// eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getAmount']?.() as number) ?? 0
-      const tc   = this._typeColor(layer)
-      const barH = Math.round(h * 0.25)
-      ctx.fillStyle = tc + '1a'
-      ctx.fillRect(0, 0, w, h)
-      // Rate layers have a rapidly-changing phase value — render the bar and
-      // counter very faint so they don't dominate the thumbnail.
-      ctx.save()
-      if (t.has(ValueType.Rate)) ctx.globalAlpha *= 0.12
-      ctx.fillStyle = tc
-      ctx.fillRect(0, h - barH, Math.round(amt * w), barH)
-      ctx.fillStyle = 'rgba(255,255,255,0.70)'
-      ctx.font      = `bold ${Math.round(h * 0.22)}px monospace`
-      ctx.textAlign    = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(amt.toFixed(2), w / 2, (h - barH) / 2)
-      ctx.restore()
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Direction source ──────────────────────────────────────
-    if (t.has(ValueType.Direction)) {
-      const dir = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getDirection']?.() as
-        { angle: number; magnitude: number } | undefined
-      if (dir) {
-        const tc  = this._typeColor(layer)
-        const cx  = w / 2, cy = h / 2
-        const len = Math.min(w, h) * 0.38 * dir.magnitude
-        ctx.fillStyle = tc + '1a'; ctx.fillRect(0, 0, w, h)
-        // Arrow shaft
-        ctx.strokeStyle = tc; ctx.lineWidth = 2
-        ctx.beginPath()
-        ctx.moveTo(cx, cy)
-        const ex = cx + Math.cos(dir.angle) * len
-        const ey = cy + Math.sin(dir.angle) * len
-        ctx.lineTo(ex, ey)
-        ctx.stroke()
-        // Arrowhead
-        const aw = 6, ah = 0.5
-        ctx.fillStyle = tc
-        ctx.beginPath()
-        ctx.arc(ex, ey, aw * ah, 0, Math.PI * 2)
-        ctx.fill()
-        // Magnitude arc
-        ctx.strokeStyle = tc + '66'; ctx.lineWidth = 1
-        ctx.beginPath()
-        ctx.arc(cx, cy, len, 0, Math.PI * 2)
-        ctx.stroke()
-      }
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Point source ──────────────────────────────────────────
-    if (t.has(ValueType.Point)) {
-      const pt = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getPoint']?.() as
-        { x: number; y: number } | undefined
-      if (pt) {
-        const tc = this._typeColor(layer)
-        const nx = Math.max(2, Math.min(w - 2, (pt.x / cw) * w))
-        const ny = Math.max(2, Math.min(h - 2, (pt.y / ch) * h))
-        ctx.strokeStyle = tc + '44'; ctx.lineWidth = 1
-        ctx.beginPath(); ctx.moveTo(0, ny); ctx.lineTo(w, ny); ctx.stroke()
-        ctx.beginPath(); ctx.moveTo(nx, 0); ctx.lineTo(nx, h); ctx.stroke()
-        ctx.fillStyle = tc
-        ctx.beginPath(); ctx.arc(nx, ny, 4, 0, Math.PI * 2); ctx.fill()
-      }
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Event source ──────────────────────────────────────────
-    if (t.has(ValueType.Event)) {
-      const et = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getEventTime']?.() as number | null
-      const elapsed = et !== null && et !== undefined ? performance.now() - et : 9999
-      const pulse   = Math.max(0, 1 - elapsed / 900)
-      const tc      = this._typeColor(layer)
-      ctx.fillStyle = tc + Math.round(pulse * 200).toString(16).padStart(2, '0')
-      ctx.fillRect(0, 0, w, h)
-      if (pulse > 0.05) {
-        ctx.fillStyle = `rgba(255,255,200,${pulse * 0.8})`
-        ctx.beginPath(); ctx.arc(w / 2, h / 2, Math.round(h * 0.25 * pulse), 0, Math.PI * 2); ctx.fill()
-      }
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Count source ──────────────────────────────────────────
-    if (t.has(ValueType.Count)) {
-      const count = (// eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (layer as any)['getCount']?.() as number) ?? 0
-      ctx.fillStyle = '#a0a0a01a'; ctx.fillRect(0, 0, w, h)
-      ctx.fillStyle = 'rgba(210,210,210,0.90)'
-      ctx.font      = `bold ${Math.round(h * 0.42)}px monospace`
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-      ctx.fillText(String(count), w / 2, h / 2 - Math.round(h * 0.05))
-      this._drawLabel(ctx, layer, w, h)
-      return
-    }
-
-    // ── Empty types (RootLayer) or unhandled → scaled renderSelf ──
-    ctx.save()
-    ctx.scale(w / cw, h / ch)
-    try { layer.renderSelf(ctx) } catch { /* ignore */ }
-    ctx.restore()
-
-    this._drawLabel(ctx, layer, w, h)
+    drawLayerThumbnail(ctx, layer, w, h, this._canvas.width, this._canvas.height)
   }
 
-  // ── Label strip at the bottom of each card ──────────────────────
-
-  private _drawLabel(ctx: Ctx2D, layer: Layer, w: number, h: number): void {
-    const lh = Math.max(16, Math.round(h * LABEL_RATIO))
-    ctx.fillStyle = 'rgba(0,0,0,0.68)'
-    ctx.fillRect(0, h - lh, w, lh)
-    const tc = this._typeColor(layer)
-    ctx.fillStyle = tc
-    ctx.fillRect(0, h - lh, 3, lh)
-    ctx.fillStyle    = 'rgba(255,255,255,0.92)'
-    ctx.font         = `${Math.max(9, Math.round(lh * 0.62))}px monospace`
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(layer.debugName, 7, h - lh / 2)
-  }
-
-  // ── Type accent colour (matches BindingLayer.TYPE_COLOUR) ────────
-
-  private _typeColor(layer: Layer): string {
-    const t = layer.types
-    if (t.has(ValueType.Amount))    return '#4a8fe8'
-    if (t.has(ValueType.Colour))    return '#e8944a'
-    if (t.has(ValueType.Image))     return '#7ecf7e'
-    if (t.has(ValueType.Mask))      return '#cfcf7e'
-    if (t.has(ValueType.Point))     return '#cf7ecf'
-    if (t.has(ValueType.Direction)) return '#7ecfcf'
-    if (t.has(ValueType.Rate))      return '#e87e7e'
-    if (t.has(ValueType.Count))     return '#a0a0a0'
-    if (t.has(ValueType.Event))     return '#e0e060'
-    if (t.has(ValueType.Collection))return '#a0a4b8'
-    return '#888888'
-  }
 
   // ------------------------------------------------------------------
   // Interaction
@@ -637,6 +416,7 @@ export class LayerStackWidget {
     if (this._dragging) {
       this._dragY = pt.y - this._dragOffsetY
       this._updateDropIndex(pt.y)
+      Node.scheduleFrame?.()
     }
   }
 
@@ -647,6 +427,7 @@ export class LayerStackWidget {
 
     if (this._dragging && this._dragLayer !== null && this._dropIndex >= 0) {
       this._commitDrop()
+      Node.scheduleFrame?.()
     } else if (!this._dragging && this._dragLayer !== null) {
       // Click (no drag) — select the layer now.
       this._selected = this._dragLayer
@@ -654,6 +435,53 @@ export class LayerStackWidget {
     }
     this._dragging  = false
     this._dragLayer = null
+  }
+
+  // Draw a thin cyan line at the current drop target position.
+  private _drawDropIndicator(ctx: Ctx2D, sp: number, ch: number): void {
+    const di   = this._layers.indexOf(this._dragLayer!)
+    const drop = this._dropIndex
+
+    // Find the card that will end up just above the gap (lower y on screen).
+    // After the drag card is logically removed, slot `drop` in the remaining
+    // list maps to actual index `drop + (drop >= di ? 1 : 0)`.
+    const aboveActual = drop + (drop >= di ? 1 : 0)
+    const belowActual = (drop - 1) + (drop - 1 >= di ? 1 : 0)
+
+    let lineY: number
+    const aboveOk = aboveActual < this._layers.length
+    const belowOk = belowActual >= 0
+
+    if (aboveOk && belowOk) {
+      // Centre between bottom-of-below and top-of-above (screen coords).
+      lineY = (this._cardY(belowActual, sp) + ch + this._cardY(aboveActual, sp)) / 2
+    } else if (aboveOk) {
+      lineY = this._cardY(aboveActual, sp) - sp * 0.55
+    } else if (belowOk) {
+      lineY = this._cardY(belowActual, sp) + ch + sp * 0.55
+    } else {
+      return
+    }
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(100,220,220,0.70)'
+    ctx.shadowBlur  = 6
+    ctx.strokeStyle = 'rgba(80,200,200,0.92)'
+    ctx.lineWidth   = 2
+    ctx.beginPath()
+    ctx.moveTo(CARD_X + 6, lineY)
+    ctx.lineTo(CARD_X + CARD_W - 6, lineY)
+    ctx.stroke()
+    // Small chevron ▶ at left edge to indicate insertion point.
+    const aw = 6
+    ctx.fillStyle = 'rgba(80,200,200,0.92)'
+    ctx.beginPath()
+    ctx.moveTo(CARD_X,      lineY - aw / 2)
+    ctx.lineTo(CARD_X + aw, lineY)
+    ctx.lineTo(CARD_X,      lineY + aw / 2)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
   }
 
   // ------------------------------------------------------------------

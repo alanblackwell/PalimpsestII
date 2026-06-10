@@ -149,6 +149,26 @@ export class InteractionSystem {
     return { x: e.offsetX, y: e.offsetY }
   }
 
+  private _pickLayerAtPixel(point: Point): Layer | null {
+    if (this._stackTop === null) return null
+    const w = this._canvas.width, h = this._canvas.height
+    const px = Math.floor(point.x), py = Math.floor(point.y)
+    if (px < 0 || px >= w || py < 0 || py >= h) return null
+    const offscreen = new OffscreenCanvas(w, h)
+    const ctx = offscreen.getContext('2d')!
+    let layer: Layer | null = this._stackTop
+    while (layer !== null) {
+      if (!layer.isInfrastructure) {
+        ctx.clearRect(0, 0, w, h)
+        try { layer.renderSelf(ctx) } catch { /* skip */ }
+        const alpha = ctx.getImageData(px, py, 1, 1).data[3] ?? 0
+        if (alpha > 10) return layer
+      }
+      layer = layer.layerBelow
+    }
+    return null
+  }
+
   private _hitTest(point: Point): Node | null {
     const selected = this._widget?.selected ?? null
     // When a layer is selected, only test that layer's own nodes.
@@ -195,7 +215,17 @@ export class InteractionSystem {
 
     const node  = this._hitTest(point)
 
-    if (node === null || !isDraggable(node)) return
+    if (node === null || !isDraggable(node)) {
+      // No interactive hit — pixel-pick to select a layer by rendered content.
+      if (this._widget !== null) {
+        const picked = this._pickLayerAtPixel(point)
+        if (picked !== null) {
+          this._widget.selected = picked
+          Node.scheduleFrame?.()
+        }
+      }
+      return
+    }
 
     // Only accept interaction on nodes belonging to the current layer.
     if (!this._isOnCurrentLayer(node)) return
