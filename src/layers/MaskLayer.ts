@@ -17,24 +17,24 @@ import { graph } from '../dataflow/Graph.js'
 // Produces a greyscale mask (white = included, black = excluded)
 // by combining two sources:
 //
-//   1. Shape slots  — up to 4 ShapeLayer (or any MaskSource) inputs,
-//                     each rasterised as a white filled region.
-//   2. Painted layer — freehand strokes drawn directly on the canvas
-//                      with a paint or erase tool.
+//   1. Shape slots  — up to 4 MaskSource inputs (e.g. RectLayer,
+//                     EllipseLayer) dropped onto the slot rows.
+//   2. Painted layer — freehand strokes drawn directly on the canvas.
 //
 // The final mask is the union of all active shapes plus the painted layer.
 //
-// Tools (toggle by clicking the button in the panel):
-//   ✎  Paint — draw white (include) areas with a circular brush.
-//   ◻  Erase — remove painted areas (restore to black / excluded).
-//              Note: erase only removes paint, not shape-slot regions.
-//
-// Brush size is adjusted with the [−] and [+] buttons.
-// [✕] clears all freehand paint.
-// [↺] clears paint and unbinds all shape slots.
+// Controls (rendered in a panel above the slot rows, x=300):
+//   [✎ paint]  — activate paint tool (white / include)
+//   [◻ erase]  — activate erase tool (restore painted areas to excluded)
+//   [−] sz [+] — decrease / increase brush size (4–100 px)
+//   [✕]        — clear all freehand paint
+//   [↺]        — clear paint and unbind all shape slots
 //
 // Canvas preview: a semi-transparent overlay of the current mask is
-// drawn over the canvas when this layer is selected.
+// shown when this layer is selected.
+//
+// Press H to hide / show the LayerStackWidget if it covers part of
+// the canvas you want to paint.
 
 const ACCENT       = '#cfcf7e'
 const BRUSH_MIN    =  4
@@ -43,12 +43,10 @@ const BRUSH_STEP   =  4
 const BRUSH_DEFAULT = 20
 const N_SHAPES     =  4
 
-// Panel geometry
-const BTN_W  = 20
-const BTN_H  = 22
-const BTN_M  =  6
-const BTN_S  = 20
-const TOOL_W = 22
+// Tools-panel geometry (drawn at x=300, above the slot rows)
+const PANEL_X   = 300
+const TOOLS_H   = 44
+const TOOLS_GAP =  6    // gap between tools panel and first slot row
 
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
@@ -95,21 +93,32 @@ export class MaskLayer extends Layer implements MaskSource {
     const h = this._offscreen.height
     const ctx = this._offscreen.getContext('2d')!
 
-    // Start with fully opaque black (everything excluded).
     ctx.clearRect(0, 0, w, h)
     ctx.fillStyle = 'black'
     ctx.fillRect(0, 0, w, h)
 
-    // Composite painted layer (white strokes on transparent background).
     ctx.drawImage(this._painted, 0, 0)
 
-    // Composite each bound shape mask (white shape on transparent background).
     for (const slot of this._shapeSlots) {
       if (slot.isActive) {
         const mask = (slot.source as MaskSource).getMask()
         if (mask !== null) ctx.drawImage(mask, 0, 0)
       }
     }
+  }
+
+  // ----------------------------------------------------------
+  // Panel layout helpers
+  // ----------------------------------------------------------
+
+  // Y coordinate of the tools panel (same column as slot rows).
+  private get _toolsY(): number {
+    return 50 + this.bounds.height + 8
+  }
+
+  // Push slot rows down below the tools panel.
+  override get panelBottom(): number {
+    return this._toolsY + TOOLS_H + TOOLS_GAP
   }
 
   // ----------------------------------------------------------
@@ -120,65 +129,53 @@ export class MaskLayer extends Layer implements MaskSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._drawMaskOverlay(ctx)
-    this._drawPanelStrip(ctx)
+    this._drawStripPill(ctx)
+    this._drawToolsPanel(ctx)
     if (this._activeTool !== null && this._cursorPoint !== null) {
       this._drawBrushCursor(ctx)
     }
   }
 
-  // Semi-transparent mask overlay so the user can see coverage.
+  // Semi-transparent mask preview.
   private _drawMaskOverlay(ctx: Ctx2D): void {
     if (this._offscreen.width <= 1) return
     ctx.save()
     ctx.globalAlpha = 0.28
-    ctx.globalCompositeOperation = 'source-over'
     ctx.drawImage(this._offscreen, 0, 0)
     ctx.restore()
   }
 
-  private _drawPanelStrip(ctx: Ctx2D): void {
+  // Simplified strip pill — accent + name + slot dots.
+  private _drawStripPill(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
 
     ctx.save()
 
-    // Background pill
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
     ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
     ctx.fill()
 
-    // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // Tool buttons
-    this._drawToolBtn(ctx, this._paintBtnBounds(), '✎', this._activeTool === 'paint', midY)
-    this._drawToolBtn(ctx, this._eraseBtnBounds(), '◻', this._activeTool === 'erase', midY)
-
-    // Brush size controls
-    const sb = this._sizeBounds()
-    this._drawBtn(ctx, sb.minus, '−', 'rgba(255,255,255,0.55)')
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-    ctx.textAlign    = 'center'
+    // Layer label
+    ctx.fillStyle    = 'rgba(255,255,255,0.70)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText(String(this._brushSize), sb.label.x + sb.label.width / 2, midY)
-    this._drawBtn(ctx, sb.plus, '+', 'rgba(255,255,255,0.55)')
-
-    // Clear paint button
-    this._drawBtn(ctx, this._clearBtnBounds(), '✕', 'rgba(255,180,180,0.65)')
+    ctx.fillText('Mask', x + 12, midY)
 
     // Slot indicator dots
-    const resetB = this._resetBtnBounds()
-    let dx = resetB.x - 8
+    const resetX = x + width - 10
+    let dx = resetX
     ctx.font = '9px monospace'
     for (let i = this._shapeSlots.length - 1; i >= 0; i--) {
-      const slot   = this._shapeSlots[i]!
-      const active = slot.isActive
+      const active = this._shapeSlots[i]!.isActive
       ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
@@ -189,8 +186,52 @@ export class MaskLayer extends Layer implements MaskSource {
       dx -= ctx.measureText(`s${i + 1}`).width + 6
     }
 
-    // Reset button
-    this._drawBtn(ctx, resetB, '↺', 'rgba(255,255,255,0.45)')
+    ctx.restore()
+  }
+
+  // Tool controls panel above the slot rows.
+  private _drawToolsPanel(ctx: Ctx2D): void {
+    const ty = this._toolsY
+    const tw = 260
+
+    ctx.save()
+
+    // Background
+    ctx.fillStyle = 'rgba(0,0,0,0.40)'
+    ctx.beginPath()
+    ctx.roundRect(PANEL_X, ty, tw, TOOLS_H, 6)
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(PANEL_X, ty, 4, TOOLS_H, [4, 0, 0, 4])
+    ctx.fill()
+
+    const midY = ty + TOOLS_H / 2
+
+    // [✎ paint] and [◻ erase] tool buttons
+    this._drawToolBtn(ctx, this._paintBtnBounds(), '✎  paint', this._activeTool === 'paint', midY)
+    this._drawToolBtn(ctx, this._eraseBtnBounds(), '◻  erase', this._activeTool === 'erase', midY)
+
+    // Brush size controls
+    const sb = this._sizeBounds()
+    ctx.fillStyle    = 'rgba(255,255,255,0.35)'
+    ctx.font         = '9px monospace'
+    ctx.textAlign    = 'right'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('sz', sb.minus.x - 4, midY)
+    this._drawBtn(ctx, sb.minus, '−', 'rgba(255,255,255,0.60)')
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(this._brushSize), sb.label.x + sb.label.width / 2, midY)
+    this._drawBtn(ctx, sb.plus, '+', 'rgba(255,255,255,0.60)')
+
+    // [✕] clear and [↺] reset
+    this._drawBtn(ctx, this._clearBtnBounds(), '✕', 'rgba(255,180,180,0.70)')
+    this._drawBtn(ctx, this._resetBtnBounds(), '↺', 'rgba(255,255,255,0.50)')
 
     ctx.restore()
   }
@@ -214,11 +255,10 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    // When a tool is active, capture the full canvas for painting.
     if (this._activeTool !== null) return this
-    // Otherwise only respond to clicks on panel buttons.
-    const b = this.bounds
-    if (!boundingBoxContains(b, point)) return null
+    // Strip pill
+    if (boundingBoxContains(this.bounds, point)) return this
+    // Tools panel buttons
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
     const sb = this._sizeBounds()
@@ -234,7 +274,6 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Panel buttons — check first regardless of tool state.
     if (boundingBoxContains(this._paintBtnBounds(), point)) {
       this._activeTool = this._activeTool === 'paint' ? null : 'paint'
       this.markDirty(); return true
@@ -259,10 +298,9 @@ export class MaskLayer extends Layer implements MaskSource {
       this._reset(); return true
     }
 
-    // Canvas painting — only when a tool is active.
     if (this._activeTool !== null) {
-      this._isDrawing  = true
-      this._lastPoint  = null
+      this._isDrawing   = true
+      this._lastPoint   = null
       this._cursorPoint = point
       this._applyBrush(point)
       return true
@@ -273,9 +311,7 @@ export class MaskLayer extends Layer implements MaskSource {
 
   handlePointerMove(point: Point): void {
     this._cursorPoint = point
-    if (this._isDrawing) {
-      this._applyBrush(point)
-    }
+    if (this._isDrawing) this._applyBrush(point)
     this.markDirty()
   }
 
@@ -349,52 +385,51 @@ export class MaskLayer extends Layer implements MaskSource {
   private _ensureCanvases(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
-
     if (this._painted.width !== w || this._painted.height !== h) {
       const next = new OffscreenCanvas(w, h)
       next.getContext('2d')!.drawImage(this._painted, 0, 0)
       this._painted = next
     }
-
     if (this._offscreen.width !== w || this._offscreen.height !== h) {
       this._offscreen = new OffscreenCanvas(w, h)
     }
   }
 
   // ----------------------------------------------------------
-  // Button / zone geometry
+  // Button bounds (all relative to PANEL_X=300, _toolsY)
   // ----------------------------------------------------------
 
   private _paintBtnBounds() {
-    const { x, y, height } = this.bounds
-    return { x: x + 8, y: y + (height - BTN_H) / 2, width: TOOL_W, height: BTN_H }
+    const ty = this._toolsY
+    return { x: PANEL_X + 8, y: ty + 8, width: 54, height: 28 }
   }
 
   private _eraseBtnBounds() {
-    const pb = this._paintBtnBounds()
-    return { x: pb.x + TOOL_W + 4, y: pb.y, width: TOOL_W, height: BTN_H }
+    const ty = this._toolsY
+    return { x: PANEL_X + 66, y: ty + 8, width: 54, height: 28 }
   }
 
   private _sizeBounds() {
-    const eb   = this._eraseBtnBounds()
-    const by   = eb.y
-    const bh   = eb.height
-    const minusX = eb.x + TOOL_W + 8
+    const ty  = this._toolsY
+    const by  = ty + 10
+    const bh  = 24
+    // "sz" label is drawn separately; minus starts after a gap following erase btn
+    const mx  = PANEL_X + 140
     return {
-      minus: { x: minusX,      y: by, width: 16, height: bh },
-      label: { x: minusX + 18, y: by, width: 26, height: bh },
-      plus:  { x: minusX + 46, y: by, width: 16, height: bh },
+      minus: { x: mx,      y: by, width: 18, height: bh },
+      label: { x: mx + 20, y: by, width: 26, height: bh },
+      plus:  { x: mx + 48, y: by, width: 18, height: bh },
     }
   }
 
   private _clearBtnBounds() {
-    const sb = this._sizeBounds()
-    return { x: sb.plus.x + 18, y: sb.plus.y, width: BTN_W, height: BTN_H }
+    const ty = this._toolsY
+    return { x: PANEL_X + 216, y: ty + 10, width: 22, height: 24 }
   }
 
   private _resetBtnBounds() {
-    const { x, y, width, height } = this.bounds
-    return { x: x + width - BTN_M - BTN_S, y: y + (height - BTN_S) / 2, width: BTN_S, height: BTN_S }
+    const ty = this._toolsY
+    return { x: PANEL_X + 242, y: ty + 10, width: 20, height: 24 }
   }
 
   // ----------------------------------------------------------
@@ -408,18 +443,18 @@ export class MaskLayer extends Layer implements MaskSource {
     active: boolean,
     midY: number,
   ): void {
-    ctx.fillStyle = active ? 'rgba(207,207,126,0.25)' : 'rgba(255,255,255,0.07)'
+    ctx.fillStyle = active ? 'rgba(207,207,126,0.22)' : 'rgba(255,255,255,0.07)'
     ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 3)
+    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
     if (active) {
       ctx.strokeStyle = ACCENT
       ctx.lineWidth   = 1
       ctx.beginPath()
-      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 3)
+      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
       ctx.stroke()
     }
-    ctx.font         = '13px monospace'
+    ctx.font         = '11px monospace'
     ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.55)'
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'

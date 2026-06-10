@@ -67,6 +67,7 @@ export class LayerStackWidget {
   private _selected: Layer | null = null
 
   // ── Drag state ───────────────────────────────────────────────
+  private _visible     = true
   private _dragging    = false
   private _dragLayer:    Layer | null = null
   private _dragOffsetY = 0      // pointer y relative to card top when drag started
@@ -102,10 +103,18 @@ export class LayerStackWidget {
 
   // Handle a key press. Returns true if the key was consumed.
   handleKey(key: string): boolean {
-    if (key === 'ArrowUp')   { this.navigateUp();   return true }
-    if (key === 'ArrowDown') { this.navigateDown(); return true }
+    if (key === 'ArrowUp')   { this.navigateUp();    return true }
+    if (key === 'ArrowDown') { this.navigateDown();  return true }
+    if (key === 'h' || key === 'H') { this.toggleVisible(); return true }
     return false
   }
+
+  toggleVisible(): void {
+    this._visible = !this._visible
+    Node.scheduleFrame?.()
+  }
+
+  get isVisible(): boolean { return this._visible }
 
   // Move current layer one step up in the stack (towards topmost).
   navigateUp(): void {
@@ -231,6 +240,7 @@ export class LayerStackWidget {
   // ------------------------------------------------------------------
 
   render(ctx: Ctx2D): void {
+    if (!this._visible) return
     const n  = this._layers.length
     if (n === 0) return
     const sp = this._spacing()
@@ -556,7 +566,7 @@ export class LayerStackWidget {
   // ------------------------------------------------------------------
 
   inBounds(pt: Point): boolean {
-    return pt.x >= 0 && pt.x < WIDGET_W
+    return this._visible && pt.x >= 0 && pt.x < WIDGET_W
   }
 
   handlePointerDown(pt: Point): boolean {
