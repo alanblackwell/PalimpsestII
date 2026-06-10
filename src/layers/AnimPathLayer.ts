@@ -60,6 +60,23 @@ export class AnimPathLayer extends Layer implements PointSource {
   // PointSource
   getPoint(): Point { return { ...this._currentPoint } }
 
+  // Current phase [0, 1) — exposed so EventLayer can detect cycle wraps.
+  get phase(): number { return this._phase }
+
+  // Sample the underlying shape at phase t — delegates to the bound shape's
+  // samplePerimeter if available.  Used by EventLayer to calibrate the
+  // closest-approach threshold without waiting for a full live traversal.
+  samplePerimeter(t: number): Point {
+    if (this.shapeSlot.isActive) {
+      const src = this.shapeSlot.source as Record<string, unknown>
+      if (typeof src['samplePerimeter'] === 'function') {
+        return (src['samplePerimeter'] as (t: number) => Point)(t)
+      }
+      return (this.shapeSlot.source as PointSource).getPoint()
+    }
+    return { ...this._currentPoint }
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
