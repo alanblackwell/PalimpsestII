@@ -1,90 +1,80 @@
-import { Layer } from '../core/Layer.js'
+import { Layer }         from '../core/Layer.js'
+import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
   boundingBoxContains,
   type MaskValue, type MaskSource,
-  type Point,    type PointSource,
-  type Amount,   type AmountSource,
+  type Point,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 
 // ------------------------------------------------------------
-// MaskLayer — procedural mask generator
+// MaskLayer — compositing mask editor
 // ------------------------------------------------------------
 //
-// Produces a greyscale OffscreenCanvas (white = included,
-// black = excluded) in one of three shapes:
+// Produces a greyscale mask (white = included, black = excluded)
+// by combining two sources:
 //
-//   rect    — axis-aligned rectangle with optional feathered edge
-//   ellipse — filled ellipse with optional feathered edge
-//   radial  — radial gradient, white at centre fading to black
+//   1. Shape slots  — up to 4 ShapeLayer (or any MaskSource) inputs,
+//                     each rasterised as a white filled region.
+//   2. Painted layer — freehand strokes drawn directly on the canvas
+//                      with a paint or erase tool.
 //
-// Shape is cycled with [◀] / [▶] or by clicking the label.
-// A [↺] button resets all manual overrides to defaults.
+// The final mask is the union of all active shapes plus the painted layer.
 //
-// Input slots:
-//   positionSlot  (Point)  — centre of the mask shape on-canvas.
-//                            Unbound default: canvas centre.
-//   sizeSlot      (Amount) — maps [0, 1] → [MIN_PX, MAX_PX] px radius.
-//                            Unbound default: DEFAULT_SIZE px.
-//   softnessSlot  (Amount) — feather width in px [0, MAX_SOFT].
-//                            Unbound default: 20 px.
+// Tools (toggle by clicking the button in the panel):
+//   ✎  Paint — draw white (include) areas with a circular brush.
+//   ◻  Erase — remove painted areas (restore to black / excluded).
+//              Note: erase only removes paint, not shape-slot regions.
 //
-// Canvas resize:
-//   Call resize(w, h) when the backing canvas changes dimensions.
-//   The OffscreenCanvas is recreated and the mask is redrawn.
+// Brush size is adjusted with the [−] and [+] buttons.
+// [✕] clears all freehand paint.
+// [↺] clears paint and unbinds all shape slots.
 //
-// Visual layout of the stack panel (height ≈ 36 px):
-//
-//   ┌──────────────────────────────────────────────────────────┐
-//   │ ▌  [◀] ellipse [▶]    pos ●  sz ●  soft ○       [↺]   │
-//   └──────────────────────────────────────────────────────────┘
-//
-// On-canvas preview: the mask boundary is drawn as a dashed stroke
-// in the Mask accent colour, so the shape is visible without
-// occluding image content.
+// Canvas preview: a semi-transparent overlay of the current mask is
+// drawn over the canvas when this layer is selected.
 
-const ACCENT      = '#cfcf7e'   // Mask type colour
-const MIN_PX      = 20
-const MAX_PX      = 600
-const DEFAULT_SIZE = 200
-const MAX_SOFT    = 120
-const DEFAULT_SOFT = 20
+const ACCENT       = '#cfcf7e'
+const BRUSH_MIN    =  4
+const BRUSH_MAX    = 100
+const BRUSH_STEP   =  4
+const BRUSH_DEFAULT = 20
+const N_SHAPES     =  4
 
-// Button / zone geometry
-const BTN_W   = 18
-const BTN_H   = 22
-const SHAPE_W = 68
-const BTN_M   = 6
-const BTN_S   = 20
-
-type ShapeId = 'rect' | 'ellipse' | 'radial'
-const SHAPES: ShapeId[] = ['rect', 'ellipse', 'radial']
+// Panel geometry
+const BTN_W  = 20
+const BTN_H  = 22
+const BTN_M  =  6
+const BTN_S  = 20
+const TOOL_W = 22
 
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
 
-  private readonly _positionSlot: ParameterSlot
-  private readonly _sizeSlot:     ParameterSlot
-  private readonly _softnessSlot: ParameterSlot
+  private readonly _shapeSlots: ParameterSlot[]
 
-  private _shapeIndex: number = 1   // default: ellipse
-  private _offscreen:  OffscreenCanvas
+  private _painted:   OffscreenCanvas
+  private _offscreen: OffscreenCanvas
 
-  // Resolved values
-  private _position: Point  = { x: 400, y: 300 }
-  private _size:     number = DEFAULT_SIZE
-  private _soft:     number = DEFAULT_SOFT
+  private _activeTool: 'paint' | 'erase' | null = null
+  private _brushSize = BRUSH_DEFAULT
+  private _isDrawing = false
+  private _lastPoint: Point | null = null
+  private _cursorPoint: Point | null = null
 
-  constructor(canvasWidth = 1920, canvasHeight = 1080) {
+  constructor() {
     super()
-    this._offscreen    = new OffscreenCanvas(canvasWidth, canvasHeight)
-    this._positionSlot = new ParameterSlot(ValueType.Point,  this)
-    this._sizeSlot     = new ParameterSlot(ValueType.Amount, this)
-    this._softnessSlot = new ParameterSlot(ValueType.Amount, this)
-    this.slots.push(this._positionSlot, this._sizeSlot, this._softnessSlot)
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    this._painted   = new OffscreenCanvas(w, h)
+    this._offscreen = new OffscreenCanvas(w, h)
+
+    this._shapeSlots = Array.from({ length: N_SHAPES }, (_, i) =>
+      new ParameterSlot(ValueType.Mask, this, `shape ${i + 1}`),
+    )
+    this.slots.push(...this._shapeSlots)
     this.debugName = 'MaskLayer'
     graph.register(this)
   }
@@ -96,76 +86,30 @@ export class MaskLayer extends Layer implements MaskSource {
   getMask(): MaskValue { return this._offscreen }
 
   // ----------------------------------------------------------
-  // Slot accessors
-  // ----------------------------------------------------------
-
-  get positionSlot(): ParameterSlot { return this._positionSlot }
-  get sizeSlot():     ParameterSlot { return this._sizeSlot     }
-  get softnessSlot(): ParameterSlot { return this._softnessSlot }
-
-  // ----------------------------------------------------------
-  // Shape cycling
-  // ----------------------------------------------------------
-
-  cycleNext(): void {
-    this._shapeIndex = (this._shapeIndex + 1) % SHAPES.length
-    this.markDirty()
-  }
-
-  cyclePrev(): void {
-    this._shapeIndex = (this._shapeIndex - 1 + SHAPES.length) % SHAPES.length
-    this.markDirty()
-  }
-
-  // ----------------------------------------------------------
-  // Resize — call when the backing canvas dimensions change
-  // ----------------------------------------------------------
-
-  resize(w: number, h: number): void {
-    this._offscreen = new OffscreenCanvas(w, h)
-    this.markDirty()
-  }
-
-  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    this._position = this._positionSlot.isActive
-      ? (this._positionSlot.source as PointSource).getPoint()
-      : { x: this._offscreen.width / 2, y: this._offscreen.height / 2 }
+    this._ensureCanvases()
+    const w = this._offscreen.width
+    const h = this._offscreen.height
+    const ctx = this._offscreen.getContext('2d')!
 
-    this._size = this._sizeSlot.isActive
-      ? MIN_PX + (this._sizeSlot.source as AmountSource).getAmount() as Amount * (MAX_PX - MIN_PX)
-      : DEFAULT_SIZE
+    // Start with fully opaque black (everything excluded).
+    ctx.clearRect(0, 0, w, h)
+    ctx.fillStyle = 'black'
+    ctx.fillRect(0, 0, w, h)
 
-    this._soft = this._softnessSlot.isActive
-      ? (this._softnessSlot.source as AmountSource).getAmount() as Amount * MAX_SOFT
-      : DEFAULT_SOFT
+    // Composite painted layer (white strokes on transparent background).
+    ctx.drawImage(this._painted, 0, 0)
 
-    this._drawMask()
-  }
-
-  // ----------------------------------------------------------
-  // Interaction
-  // ----------------------------------------------------------
-
-  handlePointerDown(point: Point): boolean {
-    if (boundingBoxContains(this._prevBtnBounds(), point)) { this.cyclePrev(); return true }
-    if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(this._shapeLabelBounds(), point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(this._resetBtnBounds(), point)) {
-      // Reset to defaults — clear slots' manual state by just dirtying
-      this._size = DEFAULT_SIZE
-      this._soft = DEFAULT_SOFT
-      this.markDirty()
-      return true
+    // Composite each bound shape mask (white shape on transparent background).
+    for (const slot of this._shapeSlots) {
+      if (slot.isActive) {
+        const mask = (slot.source as MaskSource).getMask()
+        if (mask !== null) ctx.drawImage(mask, 0, 0)
+      }
     }
-    return false
-  }
-
-  protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
   }
 
   // ----------------------------------------------------------
@@ -175,16 +119,26 @@ export class MaskLayer extends Layer implements MaskSource {
   renderSelf(_ctx: Ctx2D): void {}
 
   renderPanel(ctx: Ctx2D): void {
-    this._renderPanelImpl(ctx)
-    this._renderPreview(ctx)
+    this._drawMaskOverlay(ctx)
+    this._drawPanelStrip(ctx)
+    if (this._activeTool !== null && this._cursorPoint !== null) {
+      this._drawBrushCursor(ctx)
+    }
   }
 
-  // ── Stack panel ─────────────────────────────────────────────
+  // Semi-transparent mask overlay so the user can see coverage.
+  private _drawMaskOverlay(ctx: Ctx2D): void {
+    if (this._offscreen.width <= 1) return
+    ctx.save()
+    ctx.globalAlpha = 0.28
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.drawImage(this._offscreen, 0, 0)
+    ctx.restore()
+  }
 
-  private _renderPanelImpl(ctx: Ctx2D): void {
+  private _drawPanelStrip(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
-
     const midY = y + height / 2
 
     ctx.save()
@@ -201,159 +155,272 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // [◀] prev
-    this._drawNavBtn(ctx, this._prevBtnBounds(), '◀', midY)
+    // Tool buttons
+    this._drawToolBtn(ctx, this._paintBtnBounds(), '✎', this._activeTool === 'paint', midY)
+    this._drawToolBtn(ctx, this._eraseBtnBounds(), '◻', this._activeTool === 'erase', midY)
 
-    // Shape label (click to cycle)
-    const sb = this._shapeLabelBounds()
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.beginPath()
-    ctx.roundRect(sb.x, sb.y, sb.width, sb.height, 3)
-    ctx.fill()
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+    // Brush size controls
+    const sb = this._sizeBounds()
+    this._drawBtn(ctx, sb.minus, '−', 'rgba(255,255,255,0.55)')
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(SHAPES[this._shapeIndex], sb.x + sb.width / 2, midY)
+    ctx.fillText(String(this._brushSize), sb.label.x + sb.label.width / 2, midY)
+    this._drawBtn(ctx, sb.plus, '+', 'rgba(255,255,255,0.55)')
 
-    // [▶] next
-    this._drawNavBtn(ctx, this._nextBtnBounds(), '▶', midY)
+    // Clear paint button
+    this._drawBtn(ctx, this._clearBtnBounds(), '✕', 'rgba(255,180,180,0.65)')
 
-    // Slot indicators
+    // Slot indicator dots
     const resetB = this._resetBtnBounds()
-    const slots  = [
-      { slot: this._positionSlot, label: 'pos'  },
-      { slot: this._sizeSlot,     label: 'sz'   },
-      { slot: this._softnessSlot, label: 'soft' },
-    ]
-    let dx = resetB.x - 6
+    let dx = resetB.x - 8
     ctx.font = '9px monospace'
-    for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label } = slots[i]
+    for (let i = this._shapeSlots.length - 1; i >= 0; i--) {
+      const slot   = this._shapeSlots[i]!
       const active = slot.isActive
       ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
       ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 6
+      dx -= 10
+      ctx.fillStyle = 'rgba(255,255,255,0.30)'
+      ctx.fillText(`s${i + 1}`, dx, midY)
+      dx -= ctx.measureText(`s${i + 1}`).width + 6
     }
 
-    // [↺] reset button
+    // Reset button
     this._drawBtn(ctx, resetB, '↺', 'rgba(255,255,255,0.45)')
 
     ctx.restore()
   }
 
-  // ── On-canvas preview — dashed boundary stroke ───────────────
-
-  private _renderPreview(ctx: Ctx2D): void {
-    const { x: cx, y: cy } = this._position
-    const s    = this._shapeIndex
-    const size = this._size
-
+  private _drawBrushCursor(ctx: Ctx2D): void {
+    const { x, y } = this._cursorPoint!
     ctx.save()
-    ctx.strokeStyle = ACCENT
+    ctx.strokeStyle = this._activeTool === 'paint'
+      ? 'rgba(255,255,255,0.80)'
+      : 'rgba(255,140,140,0.80)'
     ctx.lineWidth   = 1.5
-    ctx.setLineDash([5, 4])
-    ctx.globalAlpha = 0.70
-
+    ctx.setLineDash([3, 3])
     ctx.beginPath()
-    if (SHAPES[s] === 'rect') {
-      ctx.rect(cx - size, cy - size, size * 2, size * 2)
-    } else {
-      // ellipse and radial both preview as an ellipse outline
-      ctx.ellipse(cx, cy, size, size * 0.65, 0, 0, Math.PI * 2)
-    }
+    ctx.arc(x, y, this._brushSize / 2, 0, Math.PI * 2)
     ctx.stroke()
-
-    // Centre cross-hair
-    ctx.setLineDash([2, 3])
-    ctx.lineWidth = 1
-    ctx.globalAlpha = 0.40
-    ctx.beginPath()
-    ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy)
-    ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10)
-    ctx.stroke()
-
     ctx.restore()
   }
 
   // ----------------------------------------------------------
-  // Mask generation (draws into the OffscreenCanvas)
+  // Hit testing
   // ----------------------------------------------------------
 
-  private _drawMask(): void {
-    const oc  = this._offscreen
-    const ctx = oc.getContext('2d')!
-    const w   = oc.width
-    const h   = oc.height
-    const { x: cx, y: cy } = this._position
-    const size = this._size
-    const soft = this._soft
-    const shape = SHAPES[this._shapeIndex]
+  protected override hitTestSelf(point: Point): this | null {
+    // When a tool is active, capture the full canvas for painting.
+    if (this._activeTool !== null) return this
+    // Otherwise only respond to clicks on panel buttons.
+    const b = this.bounds
+    if (!boundingBoxContains(b, point)) return null
+    if (boundingBoxContains(this._paintBtnBounds(), point)) return this
+    if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
+    const sb = this._sizeBounds()
+    if (boundingBoxContains(sb.minus, point)) return this
+    if (boundingBoxContains(sb.plus,  point)) return this
+    if (boundingBoxContains(this._clearBtnBounds(), point)) return this
+    if (boundingBoxContains(this._resetBtnBounds(), point)) return this
+    return null
+  }
 
-    ctx.clearRect(0, 0, w, h)
+  // ----------------------------------------------------------
+  // Interaction
+  // ----------------------------------------------------------
 
-    if (shape === 'radial') {
-      // Radial gradient: white at centre → black at edge
-      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, size)
-      grad.addColorStop(0,   'white')
-      grad.addColorStop(soft > 0 ? Math.max(0, 1 - soft / size) : 1, 'white')
-      grad.addColorStop(1,   'black')
-      ctx.fillStyle = grad
-      ctx.fillRect(0, 0, w, h)
-    } else if (shape === 'rect') {
-      if (soft <= 0) {
-        ctx.fillStyle = 'white'
-        ctx.fillRect(cx - size, cy - size, size * 2, size * 2)
-      } else {
-        // Feathered rect via radial gradient on each "strip" is complex;
-        // use a simpler 2-pass approach: fill then blur-mask via shadow.
-        ctx.fillStyle = 'white'
-        ctx.shadowColor  = 'white'
-        ctx.shadowBlur   = soft
-        ctx.fillRect(cx - size + soft, cy - size + soft,
-                     (size - soft) * 2, (size - soft) * 2)
-        ctx.shadowBlur = 0
-      }
+  handlePointerDown(point: Point): boolean {
+    // Panel buttons — check first regardless of tool state.
+    if (boundingBoxContains(this._paintBtnBounds(), point)) {
+      this._activeTool = this._activeTool === 'paint' ? null : 'paint'
+      this.markDirty(); return true
+    }
+    if (boundingBoxContains(this._eraseBtnBounds(), point)) {
+      this._activeTool = this._activeTool === 'erase' ? null : 'erase'
+      this.markDirty(); return true
+    }
+    const sb = this._sizeBounds()
+    if (boundingBoxContains(sb.minus, point)) {
+      this._brushSize = Math.max(BRUSH_MIN, this._brushSize - BRUSH_STEP)
+      this.markDirty(); return true
+    }
+    if (boundingBoxContains(sb.plus, point)) {
+      this._brushSize = Math.min(BRUSH_MAX, this._brushSize + BRUSH_STEP)
+      this.markDirty(); return true
+    }
+    if (boundingBoxContains(this._clearBtnBounds(), point)) {
+      this._clearPaint(); return true
+    }
+    if (boundingBoxContains(this._resetBtnBounds(), point)) {
+      this._reset(); return true
+    }
+
+    // Canvas painting — only when a tool is active.
+    if (this._activeTool !== null) {
+      this._isDrawing  = true
+      this._lastPoint  = null
+      this._cursorPoint = point
+      this._applyBrush(point)
+      return true
+    }
+
+    return false
+  }
+
+  handlePointerMove(point: Point): void {
+    this._cursorPoint = point
+    if (this._isDrawing) {
+      this._applyBrush(point)
+    }
+    this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._isDrawing = false
+    this._lastPoint = null
+  }
+
+  // ----------------------------------------------------------
+  // Paint operations
+  // ----------------------------------------------------------
+
+  private _applyBrush(point: Point): void {
+    this._ensureCanvases()
+    const ctx = this._painted.getContext('2d')!
+    const r   = this._brushSize / 2
+
+    if (this._activeTool === 'paint') {
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.fillStyle = 'white'
     } else {
-      // ellipse
-      if (soft <= 0) {
-        ctx.fillStyle = 'white'
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.fillStyle = 'rgba(0,0,0,1)'
+    }
+
+    if (this._lastPoint === null) {
+      ctx.beginPath()
+      ctx.arc(point.x, point.y, r, 0, Math.PI * 2)
+      ctx.fill()
+    } else {
+      const dx    = point.x - this._lastPoint.x
+      const dy    = point.y - this._lastPoint.y
+      const dist  = Math.sqrt(dx * dx + dy * dy)
+      const step  = Math.max(1, r * 0.4)
+      const steps = Math.ceil(dist / step)
+      for (let i = 0; i <= steps; i++) {
+        const t = i / Math.max(1, steps)
         ctx.beginPath()
-        ctx.ellipse(cx, cy, size, size * 0.65, 0, 0, Math.PI * 2)
+        ctx.arc(
+          this._lastPoint.x + dx * t,
+          this._lastPoint.y + dy * t,
+          r, 0, Math.PI * 2,
+        )
         ctx.fill()
-      } else {
-        ctx.fillStyle   = 'white'
-        ctx.shadowColor = 'white'
-        ctx.shadowBlur  = soft
-        ctx.beginPath()
-        ctx.ellipse(cx, cy, Math.max(1, size - soft), Math.max(1, (size - soft) * 0.65), 0, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.shadowBlur = 0
       }
+    }
+
+    ctx.globalCompositeOperation = 'source-over'
+    this._lastPoint = { ...point }
+    this.markDirty()
+  }
+
+  private _clearPaint(): void {
+    const ctx = this._painted.getContext('2d')!
+    ctx.clearRect(0, 0, this._painted.width, this._painted.height)
+    this.markDirty()
+  }
+
+  private _reset(): void {
+    this._clearPaint()
+    for (const slot of this._shapeSlots) {
+      if (slot.isActive) slot.unbind()
+    }
+    this.markDirty()
+  }
+
+  // ----------------------------------------------------------
+  // Canvas management
+  // ----------------------------------------------------------
+
+  private _ensureCanvases(): void {
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+
+    if (this._painted.width !== w || this._painted.height !== h) {
+      const next = new OffscreenCanvas(w, h)
+      next.getContext('2d')!.drawImage(this._painted, 0, 0)
+      this._painted = next
+    }
+
+    if (this._offscreen.width !== w || this._offscreen.height !== h) {
+      this._offscreen = new OffscreenCanvas(w, h)
     }
   }
 
   // ----------------------------------------------------------
-  // Private helpers
+  // Button / zone geometry
   // ----------------------------------------------------------
 
-  private _drawNavBtn(
+  private _paintBtnBounds() {
+    const { x, y, height } = this.bounds
+    return { x: x + 8, y: y + (height - BTN_H) / 2, width: TOOL_W, height: BTN_H }
+  }
+
+  private _eraseBtnBounds() {
+    const pb = this._paintBtnBounds()
+    return { x: pb.x + TOOL_W + 4, y: pb.y, width: TOOL_W, height: BTN_H }
+  }
+
+  private _sizeBounds() {
+    const eb   = this._eraseBtnBounds()
+    const by   = eb.y
+    const bh   = eb.height
+    const minusX = eb.x + TOOL_W + 8
+    return {
+      minus: { x: minusX,      y: by, width: 16, height: bh },
+      label: { x: minusX + 18, y: by, width: 26, height: bh },
+      plus:  { x: minusX + 46, y: by, width: 16, height: bh },
+    }
+  }
+
+  private _clearBtnBounds() {
+    const sb = this._sizeBounds()
+    return { x: sb.plus.x + 18, y: sb.plus.y, width: BTN_W, height: BTN_H }
+  }
+
+  private _resetBtnBounds() {
+    const { x, y, width, height } = this.bounds
+    return { x: x + width - BTN_M - BTN_S, y: y + (height - BTN_S) / 2, width: BTN_S, height: BTN_S }
+  }
+
+  // ----------------------------------------------------------
+  // Drawing helpers
+  // ----------------------------------------------------------
+
+  private _drawToolBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
     label: string,
+    active: boolean,
     midY: number,
   ): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
+    ctx.fillStyle = active ? 'rgba(207,207,126,0.25)' : 'rgba(255,255,255,0.07)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 3)
     ctx.fill()
-    ctx.font         = '9px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.55)'
+    if (active) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 3)
+      ctx.stroke()
+    }
+    ctx.font         = '13px monospace'
+    ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.55)'
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, b.x + b.width / 2, midY)
@@ -365,36 +432,14 @@ export class MaskLayer extends Layer implements MaskSource {
     label: string,
     colour: string,
   ): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.fillStyle = 'rgba(255,255,255,0.07)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '13px monospace'
+    ctx.font         = '12px monospace'
     ctx.fillStyle    = colour
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
-  }
-
-  // Button / zone geometry
-
-  private _prevBtnBounds() {
-    const { x, y, height } = this.bounds
-    return { x: x + 8, y: y + (height - BTN_H) / 2, width: BTN_W, height: BTN_H }
-  }
-
-  private _shapeLabelBounds() {
-    const pb = this._prevBtnBounds()
-    return { x: pb.x + BTN_W + 4, y: pb.y, width: SHAPE_W, height: BTN_H }
-  }
-
-  private _nextBtnBounds() {
-    const sb = this._shapeLabelBounds()
-    return { x: sb.x + SHAPE_W + 4, y: sb.y, width: BTN_W, height: BTN_H }
-  }
-
-  private _resetBtnBounds() {
-    const { x, y, width, height } = this.bounds
-    return { x: x + width - BTN_M - BTN_S, y: y + (height - BTN_S) / 2, width: BTN_S, height: BTN_S }
   }
 }

@@ -46,6 +46,8 @@ export class Evaluator {
 
     // Wire up the static hook so any Node.markDirty() triggers a frame.
     Node.scheduleFrame = () => this.scheduleFrame()
+    Node.canvasWidth  = canvas.width
+    Node.canvasHeight = canvas.height
   }
 
   // ----------------------------------------------------------
@@ -224,6 +226,8 @@ export class Evaluator {
   resize(width: number, height: number): void {
     this.canvas.width  = width
     this.canvas.height = height
+    Node.canvasWidth   = width
+    Node.canvasHeight  = height
     this.scheduleFrame()
   }
 

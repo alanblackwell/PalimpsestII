@@ -45,6 +45,12 @@ export abstract class Node {
     y: number
   } = { active: false, source: null, x: 0, y: 0 }
 
+  // Current canvas dimensions — updated by Evaluator on construction and resize.
+  // Layers that produce full-canvas outputs (e.g. MaskLayer, ShapeLayer mask)
+  // use these to size their OffscreenCanvases.
+  static canvasWidth  = 800
+  static canvasHeight = 600
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

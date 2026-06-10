@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
@@ -6,6 +7,7 @@ import {
   type Point,  type PointSource,
   type Amount, type AmountSource,
   type EventValue, type EventSource,
+  type MaskValue, type MaskSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -47,8 +49,8 @@ const H_ROTATE = 9
 
 type BBox = { x: number; y: number; width: number; height: number }
 
-export abstract class ShapeLayer extends Layer implements PointSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
+export abstract class ShapeLayer extends Layer implements PointSource, MaskSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Mask])
 
   protected _cx:     number
   protected _cy:     number
@@ -58,6 +60,8 @@ export abstract class ShapeLayer extends Layer implements PointSource {
 
   protected _colour:  Colour = { r: 1, g: 1, b: 1, a: 1 }
   protected _opacity: number = 1
+
+  private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
   readonly positionSlot:  ParameterSlot
   readonly colourSlot:    ParameterSlot
@@ -120,6 +124,8 @@ export abstract class ShapeLayer extends Layer implements PointSource {
 
   getPoint(): Point { return { ...this._currentPoint } }
 
+  getMask(): MaskValue { return this._maskCanvas }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
@@ -147,6 +153,19 @@ export abstract class ShapeLayer extends Layer implements PointSource {
       }
     }
     this._currentPoint = this.samplePerimeter(this._phase)
+    this._updateMask()
+  }
+
+  private _updateMask(): void {
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    if (this._maskCanvas.width !== w || this._maskCanvas.height !== h) {
+      this._maskCanvas = new OffscreenCanvas(w, h)
+    }
+    const ctx = this._maskCanvas.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    this.drawShape(ctx, this._cx, this._cy, this._width, this._height, this._angle,
+      { r: 1, g: 1, b: 1, a: 1 }, 1, true)
   }
 
   // ----------------------------------------------------------
