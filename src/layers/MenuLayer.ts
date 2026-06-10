@@ -57,12 +57,13 @@ const PAD      = 10     // inner padding below header
 type BtnDef = {
   label:   string
   colour:  string
+  height?: number   // default panel height override (px); uses MenuLayer height if omitted
   factory: (cx: number, cy: number, w: number, h: number) => Layer
 }
 
 const BUTTONS: BtnDef[] = [
   { label: 'Amount',     colour: '#4a8fe8', factory: ()          => new AmountLayer(0.5) },
-  { label: 'Colour',     colour: '#e8944a', factory: ()          => new ColourLayer({ r: 0.5, g: 0.5, b: 0.5, a: 1 }) },
+  { label: 'Colour',     colour: '#e8944a', height: 170, factory: () => new ColourLayer({ r: 0.5, g: 0.5, b: 0.5, a: 1 }) },
   { label: 'Point',      colour: '#cf7ecf', factory: (cx, cy)    => new PointLayer({ x: cx, y: cy }) },
   { label: 'Clock',      colour: '#e87e7e', factory: ()          => new ClockLayer() },
   { label: 'Rate',       colour: '#e87e7e', factory: ()          => new RateLayer(0.5) },
@@ -144,7 +145,7 @@ export class MenuLayer extends Layer {
     const cy      = this._canvasH / 2
     const newLayer = btn.factory(cx, cy, this._canvasW, this._canvasH)
     newLayer.debugName = btn.label
-    newLayer.bounds    = { ...this.bounds }
+    newLayer.bounds    = { ...this.bounds, height: btn.height ?? this.bounds.height }
 
     const below = this.layerBelow
     if (below !== null) newLayer.insertAbove(below)
