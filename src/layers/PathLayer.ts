@@ -106,6 +106,9 @@ export class PathLayer extends Layer implements PointSource {
   // PointSource
   getPoint(): Point { return { ...this._currentPoint } }
 
+  // Shape-compatible perimeter sampling — delegates to the Catmull-Rom spline.
+  samplePerimeter(t: number): Point { return samplePath(this._points, t) }
+
   // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
