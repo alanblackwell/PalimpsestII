@@ -119,6 +119,9 @@ export class BindingLayer extends Layer
   // Returns null if the binding would create a cycle or a type
   // mismatch prevents it.
   static create(source: Node, slot: ParameterSlot): BindingLayer | null {
+    // Remove any existing binding on this slot before creating a replacement.
+    BindingLayer.findForSlot(slot)?.remove()
+
     if (!graph.bind(source, slot)) return null
 
     const bl       = new BindingLayer(source, slot)
@@ -139,6 +142,16 @@ export class BindingLayer extends Layer
   // ----------------------------------------------------------
 
   get enabled(): boolean { return this._enabled }
+  get slot():    ParameterSlot { return this._slot }
+  get source():  Node          { return this._source }
+
+  // Find the BindingLayer in the graph that owns `slot`, or null.
+  static findForSlot(slot: ParameterSlot): BindingLayer | null {
+    for (const node of graph.nodes) {
+      if (node instanceof BindingLayer && node._slot === slot) return node
+    }
+    return null
+  }
 
   // Toggle between Bound and SuspendedBound on the consumer's slot.
   toggle(): void {

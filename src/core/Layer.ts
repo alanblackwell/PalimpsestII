@@ -185,7 +185,7 @@ export abstract class Layer extends Node {
       const by  = y + 3
       const bh  = SLOT_H - 6
 
-      if (slot.isActive) {
+      if (slot.isActive && !isCompat) {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = tc + '22'
         ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
@@ -199,7 +199,7 @@ export abstract class Layer extends Node {
         ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
-        ctx.fillText('drop to bind', vx + 6, y + SLOT_H / 2)
+        ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, y + SLOT_H / 2)
       } else {
         ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
         ctx.setLineDash([3, 3])

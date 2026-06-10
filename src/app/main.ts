@@ -161,6 +161,8 @@ interaction.setBoundCallback((source, slot) => {
   refreshStack()
 })
 
+interaction.setRefreshCallback(() => refreshStack())
+
 // Permanently remove a layer from the archive and clear any bindings that
 // still source from it.  We snapshot dependents before iterating because
 // each BindingLayer.remove() call modifies the set in-place.

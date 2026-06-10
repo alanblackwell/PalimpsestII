@@ -2,6 +2,7 @@ import type { Layer }           from '../core/Layer.js'
 import { Node }                 from '../core/Node.js'
 import { ParameterSlot }        from '../core/ParameterSlot.js'
 import type { Point }           from '../core/types.js'
+import { BindingLayer }         from '../layers/BindingLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 
 // ------------------------------------------------------------
@@ -83,9 +84,14 @@ export class InteractionSystem {
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
-  private _spaceAction:  (() => void) | null = null
-  private _deleteAction: (() => void) | null = null
-  private _onBound: ((source: Node, slot: ParameterSlot) => void) | null = null
+  private _spaceAction:    (() => void) | null = null
+  private _deleteAction:   (() => void) | null = null
+  private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
+  private _refreshCallback: (() => void) | null = null
+
+  // Inspector popup element (right-click on a slot).
+  private _inspector: HTMLElement | null = null
+  private readonly _onContext: (e: MouseEvent) => void
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
@@ -95,11 +101,13 @@ export class InteractionSystem {
     this._onUp     = e => this._handleUp(e)
     this._onCancel = e => this._handleUp(e)   // treat cancel like up
     this._onKey    = e => this._handleKey(e)
+    this._onContext = e => this._handleContextMenu(e)
 
     canvas.addEventListener('pointerdown',   this._onDown)
     canvas.addEventListener('pointermove',   this._onMove)
     canvas.addEventListener('pointerup',     this._onUp)
     canvas.addEventListener('pointercancel', this._onCancel)
+    canvas.addEventListener('contextmenu',   this._onContext)
     // Key events on document so they fire even before the canvas is clicked.
     document.addEventListener('keydown',     this._onKey)
   }
@@ -132,12 +140,20 @@ export class InteractionSystem {
     this._onBound = fn
   }
 
+  // Register a callback invoked when a binding inspector action mutates the stack
+  // (i.e. a binding is removed).  Should call refreshStack() in main.ts.
+  setRefreshCallback(fn: () => void): void {
+    this._refreshCallback = fn
+  }
+
   // Remove all event listeners.  Call when the canvas is torn down.
   destroy(): void {
+    this._closeInspector()
     this._canvas.removeEventListener('pointerdown',   this._onDown)
     this._canvas.removeEventListener('pointermove',   this._onMove)
     this._canvas.removeEventListener('pointerup',     this._onUp)
     this._canvas.removeEventListener('pointercancel', this._onCancel)
+    this._canvas.removeEventListener('contextmenu',   this._onContext)
     document.removeEventListener('keydown',           this._onKey)
   }
 
@@ -311,6 +327,129 @@ export class InteractionSystem {
   // ----------------------------------------------------------
   // Cursor management
   // ----------------------------------------------------------
+
+  // ----------------------------------------------------------
+  // Right-click binding inspector
+  // ----------------------------------------------------------
+
+  private _handleContextMenu(e: MouseEvent): void {
+    e.preventDefault()
+    const point = { x: e.offsetX, y: e.offsetY }
+    const selected = this._widget?.selected ?? null
+    if (selected === null) return
+    const slot = selected.hitTestSlot(point)
+    if (slot === null || !slot.isActive) return
+    const bl = BindingLayer.findForSlot(slot)
+    if (bl === null) return
+    this._showInspector(bl, slot, e.clientX, e.clientY)
+  }
+
+  private _showInspector(bl: BindingLayer, slot: ParameterSlot, cx: number, cy: number): void {
+    this._closeInspector()
+
+    const panel = document.createElement('div')
+    panel.style.cssText = [
+      'position:fixed',
+      'z-index:9999',
+      'background:rgba(18,20,30,0.96)',
+      'border:1px solid rgba(255,255,255,0.15)',
+      'border-radius:8px',
+      'padding:10px 12px',
+      'font:12px monospace',
+      'color:rgba(255,255,255,0.88)',
+      'box-shadow:0 4px 24px rgba(0,0,0,0.6)',
+      'min-width:240px',
+      'user-select:none',
+    ].join(';')
+
+    const srcName      = bl.source.debugName
+    const consumerName = slot.owner.debugName
+    const slotLabel    = slot.label
+
+    // Header
+    const header = document.createElement('div')
+    header.style.cssText = 'font-weight:bold;margin-bottom:8px;color:rgba(255,255,255,0.55);font-size:10px;letter-spacing:1px'
+    header.textContent = 'BINDING'
+    panel.appendChild(header)
+
+    // Binding description
+    const info = document.createElement('div')
+    info.style.cssText = 'margin-bottom:10px;line-height:1.5'
+    info.innerHTML =
+      `<span style="color:#7ecf7e">${srcName}</span>` +
+      ` <span style="color:rgba(255,255,255,0.4)">──→</span> ` +
+      `<span style="color:rgba(255,255,255,0.75)">${consumerName}</span>` +
+      `<span style="color:rgba(255,255,255,0.4)"> · ${slotLabel}</span>`
+    panel.appendChild(info)
+
+    // Buttons row
+    const row = document.createElement('div')
+    row.style.cssText = 'display:flex;gap:8px'
+
+    const mkBtn = (label: string, bg: string, fg: string) => {
+      const b = document.createElement('button')
+      b.textContent = label
+      b.style.cssText = [
+        `background:${bg}`,
+        `color:${fg}`,
+        'border:none',
+        'border-radius:5px',
+        'padding:5px 10px',
+        'font:12px monospace',
+        'cursor:pointer',
+        'flex:1',
+      ].join(';')
+      return b
+    }
+
+    const toggleBtn = mkBtn(
+      bl.enabled ? '⊙  Enabled' : '◎  Disabled',
+      bl.enabled ? 'rgba(60,120,200,0.35)' : 'rgba(200,100,30,0.35)',
+      bl.enabled ? '#7ecfff' : '#ffaa55',
+    )
+    toggleBtn.addEventListener('click', () => {
+      bl.toggle()
+      // Update button appearance without closing the panel.
+      toggleBtn.textContent = bl.enabled ? '⊙  Enabled' : '◎  Disabled'
+      toggleBtn.style.background = bl.enabled ? 'rgba(60,120,200,0.35)' : 'rgba(200,100,30,0.35)'
+      toggleBtn.style.color = bl.enabled ? '#7ecfff' : '#ffaa55'
+    })
+
+    const deleteBtn = mkBtn('× Delete', 'rgba(180,40,40,0.40)', '#ff8888')
+    deleteBtn.addEventListener('click', () => {
+      bl.remove()
+      this._closeInspector()
+      this._refreshCallback?.()
+    })
+
+    row.appendChild(toggleBtn)
+    row.appendChild(deleteBtn)
+    panel.appendChild(row)
+
+    // Position near click, clamped to viewport.
+    document.body.appendChild(panel)
+    const vw = window.innerWidth, vh = window.innerHeight
+    const pw = panel.offsetWidth  || 260
+    const ph = panel.offsetHeight || 110
+    panel.style.left = `${Math.min(cx + 4, vw - pw - 8)}px`
+    panel.style.top  = `${Math.min(cy + 4, vh - ph - 8)}px`
+
+    // Close when clicking outside.
+    const onOutside = (ev: MouseEvent) => {
+      if (!panel.contains(ev.target as unknown as globalThis.Node)) {
+        this._closeInspector()
+        document.removeEventListener('mousedown', onOutside, true)
+      }
+    }
+    document.addEventListener('mousedown', onOutside, true)
+
+    this._inspector = panel
+  }
+
+  private _closeInspector(): void {
+    this._inspector?.remove()
+    this._inspector = null
+  }
 
   private _setCursor(cursor: string): void {
     this._canvas.style.cursor = cursor
