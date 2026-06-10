@@ -170,6 +170,27 @@ the graph. Double-click still restores.
 Thumbnail rendering is in `src/interaction/thumbnail.ts` (`drawLayerThumbnail`,
 `typeColor`) — import from there when adding a new widget that needs thumbnails.
 
+## Binding replacement and right-click inspector (added June 2026)
+
+**Drag-to-replace**: `Layer.renderSlots` now shows the green "replace binding"
+drop-target highlight on already-bound slots when a compatible drag is live
+(same appearance as an empty slot). `BindingLayer.create` calls
+`BindingLayer.findForSlot(slot)?.remove()` before creating the new binding,
+cleanly removing the old BindingLayer from the stack.
+
+**Right-click inspector**: `InteractionSystem` listens for `contextmenu` on
+the canvas. If the click lands on a bound slot of the selected layer, it shows
+a floating HTML panel with the binding description (`Source ──→ Consumer · slot`),
+a toggle button (enable/disable, updates in-place), and a delete button.
+Panel closes on outside click. `setRefreshCallback()` lets main.ts provide the
+`refreshStack()` hook so delete updates the stack widget.
+
+`_handleDown` now guards with `if (e.button !== 0) return` so right-clicks
+don't accidentally trigger pixel-pick layer selection.
+
+`BindingLayer` exposes `get slot()`, `get source()`, and
+`static findForSlot(slot)` (scans `graph.nodes`) for use by the inspector.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
