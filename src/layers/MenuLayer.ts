@@ -52,6 +52,36 @@ const PANEL_Y  = 54     // top of panel
 const HEADER_H = 28     // height of the "Add layer" title row
 const PAD      = 10     // inner padding below header
 
+// ── Randomisation helpers ──────────────────────────────────────
+
+const rnd  = () => Math.random()
+const rndR = (lo: number, hi: number) => lo + rnd() * (hi - lo)
+
+// Random hue-based colour at full saturation and high value.
+function rndColour(): { r: number; g: number; b: number; a: number } {
+  const h = rnd() * 360
+  const s = rndR(0.55, 1.0)
+  const v = rndR(0.65, 1.0)
+  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c
+  let r = 0, g = 0, b = 0
+  if      (h < 60)  { r = c; g = x }
+  else if (h < 120) { r = x; g = c }
+  else if (h < 180) {        g = c; b = x }
+  else if (h < 240) {        g = x; b = c }
+  else if (h < 300) { r = x;        b = c }
+  else              { r = c;        b = x }
+  return { r: r + m, g: g + m, b: b + m, a: 1 }
+}
+
+// Random shape geometry: position and size guaranteed to fit within the canvas.
+function rndShape(canvasW: number, canvasH: number): { cx: number; cy: number; sw: number; sh: number } {
+  const sw = rndR(0.10, 0.40) * canvasW
+  const sh = rndR(0.10, 0.35) * canvasH
+  const cx = rndR(sw / 2, canvasW - sw / 2)
+  const cy = rndR(sh / 2, canvasH - sh / 2)
+  return { cx, cy, sw, sh }
+}
+
 // ── Button definitions ─────────────────────────────────────────
 
 type BtnDef = {
@@ -62,29 +92,29 @@ type BtnDef = {
 }
 
 const BUTTONS: BtnDef[] = [
-  { label: 'Amount',     colour: '#4a8fe8', factory: ()          => new AmountLayer(0.5) },
-  { label: 'Colour',     colour: '#e8944a', height: 170, factory: () => new ColourLayer({ r: 0.5, g: 0.5, b: 0.5, a: 1 }) },
-  { label: 'Point',      colour: '#cf7ecf', factory: (cx, cy)    => new PointLayer({ x: cx, y: cy }) },
-  { label: 'Clock',      colour: '#e87e7e', factory: ()          => new ClockLayer() },
-  { label: 'Rate',       colour: '#e87e7e', factory: ()          => new RateLayer(0.5) },
-  { label: 'Event',      colour: '#e0e060', factory: ()          => new EventLayer() },
-  { label: 'Count',      colour: '#a0a0a0', factory: ()          => new CountLayer(0) },
-  { label: 'Select',     colour: '#4a8fe8', factory: ()          => new SelectLayer() },
-  { label: 'Direction',  colour: '#7ecfcf', factory: ()          => new DirectionLayer(0, 0.5) },
-  { label: 'Math',       colour: '#4a8fe8', factory: ()          => new MathLayer(2) },
-  { label: 'Collection', colour: '#a0a4b8', factory: ()          => new CollectionLayer([0.25, 0.5, 0.75, 1.0]) },
-  { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h)  => new SequencerLayer(w, h) },
-  { label: 'Path',       colour: '#e8a04a', factory: (cx, cy)    => new PathLayer(undefined, cx, cy) },
-  { label: 'Rect',       colour: '#e8a04a', factory: (cx, cy)    => new RectLayer(cx, cy, 200, 120) },
-  { label: 'Ellipse',    colour: '#e8a04a', factory: (cx, cy)    => new EllipseLayer(cx, cy, 160, 100) },
-  { label: 'Text',       colour: '#888888', factory: ()          => new TextLayer('Text') },
-  { label: 'Image',      colour: '#7ecf7e', factory: ()          => new ImageLayer() },
-  { label: 'Mask',       colour: '#cfcf7e', factory: (_,__,w,h)  => new MaskLayer(w, h) },
-  { label: 'Composite',  colour: '#7ecf7e', factory: (_,__,w,h)  => new CompositeLayer(w, h) },
-  { label: 'Filter',     colour: '#7ecf7e', factory: (_,__,w,h)  => new FilterLayer(w, h) },
-  { label: 'Noise',      colour: '#4a8fe8', factory: ()          => new NoiseLayer() },
-  { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h)  => new GradientLayer(w, h) },
-  { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h)  => new TransformLayer(w, h) },
+  { label: 'Amount',     colour: '#4a8fe8', factory: ()         => new AmountLayer(rnd()) },
+  { label: 'Colour',     colour: '#e8944a', height: 170, factory: () => new ColourLayer(rndColour()) },
+  { label: 'Point',      colour: '#cf7ecf', factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
+  { label: 'Clock',      colour: '#e87e7e', factory: ()         => new ClockLayer() },
+  { label: 'Rate',       colour: '#e87e7e', factory: ()         => new RateLayer(rndR(0.1, 2.0)) },
+  { label: 'Event',      colour: '#e0e060', factory: ()         => new EventLayer() },
+  { label: 'Count',      colour: '#a0a0a0', factory: ()         => new CountLayer(0) },
+  { label: 'Select',     colour: '#4a8fe8', factory: ()         => new SelectLayer() },
+  { label: 'Direction',  colour: '#7ecfcf', factory: ()         => new DirectionLayer(rnd() * Math.PI * 2, rndR(0.2, 1.0)) },
+  { label: 'Math',       colour: '#4a8fe8', factory: ()         => new MathLayer(2) },
+  { label: 'Collection', colour: '#a0a4b8', factory: ()         => new CollectionLayer([rnd(), rnd(), rnd(), rnd()]) },
+  { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
+  { label: 'Path',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy) } },
+  { label: 'Rect',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh) } },
+  { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh) } },
+  { label: 'Text',       colour: '#888888', factory: ()         => new TextLayer('Text') },
+  { label: 'Image',      colour: '#7ecf7e', factory: ()         => new ImageLayer() },
+  { label: 'Mask',       colour: '#cfcf7e', factory: (_,__,w,h) => new MaskLayer(w, h) },
+  { label: 'Composite',  colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
+  { label: 'Filter',     colour: '#7ecf7e', factory: (_,__,w,h) => new FilterLayer(w, h) },
+  { label: 'Noise',      colour: '#4a8fe8', factory: ()         => new NoiseLayer() },
+  { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h) => new GradientLayer(w, h) },
+  { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────
