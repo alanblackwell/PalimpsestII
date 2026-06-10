@@ -150,8 +150,13 @@ export class InteractionSystem {
   }
 
   private _hitTest(point: Point): Node | null {
-    const top = this._widget?.selected ?? this._stackTop
-    return top?.hitTest(point) ?? null
+    const selected = this._widget?.selected ?? null
+    // When a layer is selected, only test that layer's own nodes.
+    // Using hitTest (full stack recursion) allows lower-layer nodes to
+    // win the "prefer smaller target" comparison and block interaction
+    // with the current layer's controls.
+    if (selected !== null) return selected.hitTestLayer(point)
+    return this._stackTop?.hitTest(point) ?? null
   }
 
   // Returns true if the node belongs to the currently-selected layer

@@ -127,6 +127,13 @@ export abstract class Layer extends Node {
     return ownResult ?? belowResult
   }
 
+  // Hit-test this layer's own nodes only (no recursion into layers below).
+  // Used by InteractionSystem when a layer is selected, so lower-layer
+  // nodes cannot preempt interaction with the current layer.
+  hitTestLayer(point: { x: number; y: number }): Node | null {
+    return this.hitTestSelf(point)
+  }
+
   // Hit-test within this layer only. Subclasses may override.
   protected hitTestSelf(_point: { x: number; y: number }): Node | null {
     return null
