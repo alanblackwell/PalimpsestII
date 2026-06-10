@@ -3,6 +3,7 @@ import { Evaluator }         from '../dataflow/Evaluator.js'
 import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
+import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
@@ -55,7 +56,18 @@ const refreshStack = (selectLayer?: Layer) => {
 }
 
 // MenuLayer sits at the very top.
-const menuLayer = new MenuLayer(canvas.width, canvas.height, (_newLayer) => {
+const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+  // When an AnimPath is created, auto-bind the first shape layer below.
+  if (newLayer instanceof AnimPathLayer && !newLayer.shapeSlot.isActive) {
+    let l: Layer | null = newLayer.layerBelow
+    while (l !== null) {
+      if (!l.isInfrastructure && 'samplePerimeter' in l) {
+        BindingLayer.create(l, newLayer.shapeSlot)
+        break
+      }
+      l = l.layerBelow
+    }
+  }
   refreshStack(menuLayer)
 })
 menuLayer.debugName = 'Menu'

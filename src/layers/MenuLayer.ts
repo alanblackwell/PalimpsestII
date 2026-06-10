@@ -25,6 +25,7 @@ import { NoiseLayer }      from './NoiseLayer.js'
 import { GradientLayer }   from './GradientLayer.js'
 import { TransformLayer }  from './TransformLayer.js'
 import { SequencerLayer }  from './SequencerLayer.js'
+import { AnimPathLayer }   from './AnimPathLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -106,6 +107,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Collection', colour: '#a0a4b8', factory: ()         => new CollectionLayer([rnd(), rnd(), rnd(), rnd()]) },
   { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
   { label: 'Path',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy) } },
+  { label: 'AnimPath',   colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
   { label: 'Rect',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
   { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
   { label: 'Text',       colour: '#888888', factory: ()         => new TextLayer('Text') },
