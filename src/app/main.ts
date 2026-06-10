@@ -325,10 +325,11 @@ deletionLayer.setRestoreCallback((layer) => {
 interaction.setDeleteAction(() => {
   const layer = widget.selected
   if (layer === null || layer === deletionLayer || layer === root || layer === menuLayer) return
-  const below = layer.layerBelow
+  // Walk down past any BindingLayers to find the next visible layer.
+  let below: Layer | null = layer.layerBelow
+  while (below !== null && below.isInfrastructure) below = below.layerBelow
+  const nextSel = below ?? deletionLayer
   deletionLayer.archive(layer)
-  // Select the layer that was beneath the deleted one (skip infrastructure).
-  const nextSel = (below !== null && !below.isInfrastructure) ? below : deletionLayer
   refreshStack(nextSel)
 })
 
