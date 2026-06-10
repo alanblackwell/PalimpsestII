@@ -39,16 +39,61 @@ const BTN   = 20
 const BTN_M = 6
 
 // Controls-row geometry (below the main pill)
-const CTRL_X  = 300   // left edge; matches slot PANEL_X
-const CTRL_W  = 210
-const CTRL_H  = 28
+const CTRL_X   = 300   // left edge; matches slot PANEL_X
+const CTRL_W   = 216
+const CTRL_H   = 28
 const CTRL_GAP = 4    // gap between pill bottom and controls row
 
-// Font families and short labels for the cycle button
-const FONT_FAMILIES = ['sans-serif', 'serif', 'monospace', 'cursive'] as const
-const FONT_LABELS   = ['sans',       'serif', 'mono',      'curv'   ] as const
+// Curated typeface list.  System fonts work offline; Google fonts need internet.
+type FontEntry = { name: string; category: string; google: boolean }
 
-type FontFamily = typeof FONT_FAMILIES[number]
+const FONTS: FontEntry[] = [
+  // System fonts — available offline on most platforms
+  { name: 'system-ui',       category: 'System',   google: false },
+  { name: 'Arial',           category: 'System',   google: false },
+  { name: 'Helvetica Neue',  category: 'System',   google: false },
+  { name: 'Verdana',         category: 'System',   google: false },
+  { name: 'Trebuchet MS',    category: 'System',   google: false },
+  { name: 'Gill Sans',       category: 'System',   google: false },
+  { name: 'Futura',          category: 'System',   google: false },
+  { name: 'Avenir',          category: 'System',   google: false },
+  { name: 'Optima',          category: 'System',   google: false },
+  { name: 'Georgia',         category: 'System',   google: false },
+  { name: 'Palatino',        category: 'System',   google: false },
+  { name: 'Baskerville',     category: 'System',   google: false },
+  { name: 'Didot',           category: 'System',   google: false },
+  { name: 'Times New Roman', category: 'System',   google: false },
+  { name: 'Garamond',        category: 'System',   google: false },
+  { name: 'Copperplate',     category: 'System',   google: false },
+  { name: 'Courier New',     category: 'System',   google: false },
+  { name: 'Menlo',           category: 'System',   google: false },
+  { name: 'Monaco',          category: 'System',   google: false },
+  { name: 'Consolas',        category: 'System',   google: false },
+  // Google Fonts — loaded on demand from fonts.googleapis.com
+  { name: 'Inter',           category: 'Google',   google: true  },
+  { name: 'Roboto',          category: 'Google',   google: true  },
+  { name: 'Open Sans',       category: 'Google',   google: true  },
+  { name: 'Lato',            category: 'Google',   google: true  },
+  { name: 'Montserrat',      category: 'Google',   google: true  },
+  { name: 'Raleway',         category: 'Google',   google: true  },
+  { name: 'Poppins',         category: 'Google',   google: true  },
+  { name: 'Nunito',          category: 'Google',   google: true  },
+  { name: 'Playfair Display',category: 'Google',   google: true  },
+  { name: 'Merriweather',    category: 'Google',   google: true  },
+  { name: 'Lora',            category: 'Google',   google: true  },
+  { name: 'EB Garamond',     category: 'Google',   google: true  },
+  { name: 'Cormorant Garamond', category: 'Google',google: true  },
+  { name: 'Oswald',          category: 'Google',   google: true  },
+  { name: 'Bebas Neue',      category: 'Google',   google: true  },
+  { name: 'Anton',           category: 'Google',   google: true  },
+  { name: 'JetBrains Mono',  category: 'Google',   google: true  },
+  { name: 'Fira Code',       category: 'Google',   google: true  },
+  { name: 'Source Code Pro', category: 'Google',   google: true  },
+  { name: 'Dancing Script',  category: 'Google',   google: true  },
+  { name: 'Caveat',          category: 'Google',   google: true  },
+  { name: 'Pacifico',        category: 'Google',   google: true  },
+  { name: 'Lobster',         category: 'Google',   google: true  },
+]
 
 // A scanline entry: first opaque x, span width (in px).
 type Scanline = { x: number; w: number } | null
@@ -65,7 +110,7 @@ export class TextLayer extends Layer {
   private _text: string = 'Hello'
 
   // Typography (manual, persisted across recomputes)
-  private _fontFamily: FontFamily = 'sans-serif'
+  private _fontFamily: string = 'sans-serif'
   private _bold:       boolean    = false
   private _italic:     boolean    = false
   private _manualSize: number     = DEFAULT_SIZE
@@ -109,10 +154,100 @@ export class TextLayer extends Layer {
   // Typography helpers
   // ----------------------------------------------------------
 
-  cycleFontFamily(): void {
-    const i = FONT_FAMILIES.indexOf(this._fontFamily)
-    this._fontFamily = FONT_FAMILIES[(i + 1) % FONT_FAMILIES.length]!
-    this.markDirty()
+  openFontPicker(): void {
+    loadGoogleFonts()
+
+    const overlay = document.createElement('div')
+    overlay.style.cssText =
+      'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;' +
+      'display:flex;align-items:center;justify-content:center;'
+
+    const picker = document.createElement('div')
+    picker.style.cssText =
+      'background:#1e1e2e;border-radius:10px;width:500px;max-height:70vh;' +
+      'display:flex;flex-direction:column;overflow:hidden;' +
+      'box-shadow:0 8px 32px rgba(0,0,0,0.7);'
+
+    // Header
+    const header = document.createElement('div')
+    header.style.cssText =
+      'display:flex;justify-content:space-between;align-items:center;' +
+      'padding:12px 16px;background:#16161e;border-bottom:1px solid #2a2a3a;flex-shrink:0;'
+    const headerTitle = document.createElement('span')
+    headerTitle.style.cssText = 'color:#aaa;font:11px monospace;letter-spacing:0.06em;'
+    headerTitle.textContent   = 'CHOOSE TYPEFACE'
+    const closeBtn = makeDialogBtn('×', '#3a3a4a')
+    closeBtn.style.padding = '1px 8px'
+    header.append(headerTitle, closeBtn)
+
+    // Note
+    const note = document.createElement('div')
+    note.style.cssText =
+      'padding:6px 16px;background:#181820;color:#555;font:10px monospace;' +
+      'border-bottom:1px solid #22223a;flex-shrink:0;'
+    note.textContent = 'Google Fonts section loads from fonts.googleapis.com (requires internet)'
+
+    // Scrollable list
+    const list = document.createElement('div')
+    list.style.cssText = 'overflow-y:auto;padding:6px 0;'
+
+    let lastCat = ''
+    for (const font of FONTS) {
+      if (font.category !== lastCat) {
+        lastCat = font.category
+        const sep = document.createElement('div')
+        sep.style.cssText =
+          'padding:10px 16px 4px;color:#555;font:10px monospace;letter-spacing:0.08em;'
+        sep.textContent = font.category === 'Google'
+          ? '── Google Fonts ──────────────────'
+          : '── System Fonts ──────────────────'
+        list.appendChild(sep)
+      }
+
+      const isSelected = font.name === this._fontFamily
+      const item = document.createElement('div')
+      item.style.cssText =
+        `padding:9px 16px 7px;cursor:pointer;` +
+        `border-left:3px solid ${isSelected ? ACCENT : 'transparent'};` +
+        `background:${isSelected ? 'rgba(200,200,232,0.10)' : 'transparent'};`
+      item.onmouseover = () => {
+        item.style.background = isSelected ? 'rgba(200,200,232,0.18)' : 'rgba(255,255,255,0.05)'
+      }
+      item.onmouseout = () => {
+        item.style.background = isSelected ? 'rgba(200,200,232,0.10)' : 'transparent'
+      }
+
+      const nameEl = document.createElement('div')
+      nameEl.style.cssText =
+        `font-family:"${font.name}",sans-serif;font-size:20px;color:#e0e0e0;line-height:1.2;`
+      nameEl.textContent = font.name
+
+      const sampleEl = document.createElement('div')
+      sampleEl.style.cssText =
+        `font-family:"${font.name}",sans-serif;font-size:12px;color:#666;margin-top:2px;`
+      sampleEl.textContent = 'The quick brown fox jumps over the lazy dog  0123456789'
+
+      item.append(nameEl, sampleEl)
+      item.onclick = () => {
+        this._fontFamily = font.name
+        this.markDirty()
+        document.body.removeChild(overlay)
+      }
+      list.appendChild(item)
+    }
+
+    closeBtn.onclick = () => document.body.removeChild(overlay)
+    overlay.onclick  = (e) => { if (e.target === overlay) document.body.removeChild(overlay) }
+
+    picker.append(header, note, list)
+    overlay.append(picker)
+    document.body.appendChild(overlay)
+
+    // Scroll to currently-selected font
+    requestAnimationFrame(() => {
+      const selected = list.querySelector<HTMLElement>(`[style*="${ACCENT}"]`)
+      selected?.scrollIntoView({ block: 'center' })
+    })
   }
 
   toggleBold(): void   { this._bold   = !this._bold;   this.markDirty() }
@@ -290,7 +425,7 @@ export class TextLayer extends Layer {
     if (!boundingBoxContains(ctrl, point)) return false
 
     if (boundingBoxContains(this._fontBtnBounds(), point)) {
-      this.cycleFontFamily()
+      this.openFontPicker()
       return true
     }
     if (boundingBoxContains(this._boldBtnBounds(), point)) {
@@ -413,18 +548,29 @@ export class TextLayer extends Layer {
     ctx.roundRect(x, y, 4, h, [4, 0, 0, 4])
     ctx.fill()
 
-    // Font family cycle button
+    // Font picker button — shows current font name truncated to fit
     const fb = this._fontBtnBounds()
-    const fi = FONT_FAMILIES.indexOf(this._fontFamily)
     ctx.fillStyle = 'rgba(255,255,255,0.10)'
     ctx.beginPath()
     ctx.roundRect(fb.x, fb.y, fb.width, fb.height, 3)
     ctx.fill()
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-    ctx.textAlign    = 'center'
+    // Small dropdown chevron
+    ctx.font      = '8px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.40)'
+    ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
-    ctx.fillText(FONT_LABELS[fi] ?? 'sans', fb.x + fb.width / 2, midY)
+    ctx.fillText('▾', fb.x + fb.width - 4, midY)
+    // Font name in its own typeface (nice preview)
+    ctx.save()
+    ctx.font         = `11px "${this._fontFamily}",sans-serif`
+    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(
+      this._truncate(ctx, this._fontFamily, fb.width - 16),
+      fb.x + 5, midY,
+    )
+    ctx.restore()
 
     // Bold / Italic toggles
     const bb = this._boldBtnBounds()
@@ -433,7 +579,7 @@ export class TextLayer extends Layer {
     this._drawToggleBtn(ctx, ib, 'I', this._italic, midY, 'italic 11px monospace')
 
     // Thin divider
-    const divX = ib.x + ib.width + 8
+    const divX = ib.x + ib.width + 4
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'
     ctx.lineWidth   = 1
     ctx.beginPath()
@@ -579,11 +725,13 @@ export class TextLayer extends Layer {
     return { x: CTRL_X + offsetX, y: y + 4, width: w, height: bh }
   }
 
-  private _fontBtnBounds()   { return this._ctrlBtn(8,   42) }
-  private _boldBtnBounds()   { return this._ctrlBtn(54,  20) }
-  private _italicBtnBounds() { return this._ctrlBtn(78,  20) }
-  private _sizeMinusBounds() { return this._ctrlBtn(108, 20) }
-  private _sizePlusBounds()  { return this._ctrlBtn(162, 20) }
+  //  6          84        108       130  (divider)  134       162      192
+  //  [font name ▾ ]  [B]   [I]       |  [−]  size  [+]
+  private _fontBtnBounds()   { return this._ctrlBtn(6,   84) }
+  private _boldBtnBounds()   { return this._ctrlBtn(94,  20) }
+  private _italicBtnBounds() { return this._ctrlBtn(118, 20) }
+  private _sizeMinusBounds() { return this._ctrlBtn(146, 20) }
+  private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
 
   // ----------------------------------------------------------
   // Drawing helpers
@@ -652,7 +800,7 @@ export class TextLayer extends Layer {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level helper (avoids cluttering the class)
+// Module-level helpers
 // ---------------------------------------------------------------------------
 
 function makeDialogBtn(label: string, bg: string): HTMLButtonElement {
@@ -662,4 +810,20 @@ function makeDialogBtn(label: string, bg: string): HTMLButtonElement {
     `padding:6px 14px;border-radius:5px;border:none;cursor:pointer;` +
     `background:${bg};color:#e0e0e0;font:11px monospace;`
   return btn
+}
+
+// Load all Google Fonts from the FONTS list in a single stylesheet request.
+// Called once (idempotent); fires-and-forgets the network fetch.
+let _googleFontsInjected = false
+function loadGoogleFonts(): void {
+  if (_googleFontsInjected) return
+  _googleFontsInjected = true
+  const families = FONTS
+    .filter(f => f.google)
+    .map(f => `family=${encodeURIComponent(f.name)}`)
+    .join('&')
+  const link = document.createElement('link')
+  link.rel  = 'stylesheet'
+  link.href = `https://fonts.googleapis.com/css2?${families}&display=swap`
+  document.head.appendChild(link)
 }
