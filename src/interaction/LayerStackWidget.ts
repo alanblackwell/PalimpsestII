@@ -365,6 +365,43 @@ export class LayerStackWidget {
       }
     }
 
+    // ── Clock source (Amount whose value is unbounded elapsed time) ──
+    // Detected by duck-typing: layer has an `elapsed` number property.
+    const elapsed = (layer as any)['elapsed'] as number | undefined
+    if (t.has(ValueType.Amount) && typeof elapsed === 'number') {
+      const tc   = this._typeColor(layer)
+      const barH = Math.round(h * 0.25)
+      ctx.fillStyle = tc + '1a'
+      ctx.fillRect(0, 0, w, h)
+
+      // Bar shows proportion of one hour elapsed, rendered very faint.
+      const proportion = Math.min(1, elapsed / 3600)
+      ctx.save()
+      ctx.globalAlpha *= 0.12
+      ctx.fillStyle = tc
+      ctx.fillRect(0, h - barH, Math.round(proportion * w), barH)
+      ctx.restore()
+
+      // Counter in h:mm:ss.cc format.
+      const totalCs = Math.floor(elapsed * 100)
+      const cs  = totalCs % 100
+      const ss  = Math.floor(totalCs / 100) % 60
+      const mm  = Math.floor(totalCs / 6000) % 60
+      const hh  = Math.floor(totalCs / 360000)
+      const pad = (n: number) => String(n).padStart(2, '0')
+      const timeStr = hh > 0
+        ? `${hh}:${pad(mm)}:${pad(ss)}.${pad(cs)}`
+        : `${mm}:${pad(ss)}.${pad(cs)}`
+      ctx.fillStyle    = 'rgba(255,255,255,0.70)'
+      ctx.font         = `bold ${Math.round(h * 0.16)}px monospace`
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(timeStr, w / 2, (h - barH) / 2)
+
+      this._drawLabel(ctx, layer, w, h)
+      return
+    }
+
     // ── Amount source ─────────────────────────────────────────
     if (t.has(ValueType.Amount)) {
       const amt  = (// eslint-disable-next-line @typescript-eslint/no-explicit-any
