@@ -64,6 +64,7 @@ export class ImageLayer extends Layer implements ImageSource {
   private _filename: string     = ''
   private _natW:     number     = 0
   private _natH:     number     = 0
+  private _dragOver: boolean    = false
 
   // Resolved values (updated in recompute)
   private _position: Point  = { ...DEFAULT_POS }
@@ -98,33 +99,39 @@ export class ImageLayer extends Layer implements ImageSource {
   // Image loading
   // ----------------------------------------------------------
 
+  async loadFile(file: File): Promise<void> {
+    try {
+      const bitmap = await createImageBitmap(file)
+      this._bitmap?.close()
+      this._bitmap   = bitmap
+      this._filename = file.name
+      this._natW     = bitmap.width
+      this._natH     = bitmap.height
+      this.markDirty()
+    } catch {
+      // Unsupported format or decode error — leave previous bitmap intact.
+    }
+  }
+
   openFilePicker(): void {
     const input = document.createElement('input')
     input.type   = 'file'
     input.accept = 'image/*'
     input.style.display = 'none'
     document.body.appendChild(input)
-
-    input.onchange = async () => {
+    input.onchange = () => {
       const file = input.files?.[0]
       document.body.removeChild(input)
-      if (!file) return
-
-      try {
-        const bitmap = await createImageBitmap(file)
-        // Free the previous bitmap if we owned one.
-        this._bitmap?.close()
-        this._bitmap   = bitmap
-        this._filename = file.name
-        this._natW     = bitmap.width
-        this._natH     = bitmap.height
-        this.markDirty()
-      } catch {
-        // Unsupported format or decode error — leave previous bitmap intact.
-      }
+      if (file) this.loadFile(file)
     }
-
     input.click()
+  }
+
+  setDragOver(v: boolean): void {
+    if (this._dragOver !== v) {
+      this._dragOver = v
+      this.markDirty()
+    }
   }
 
   // ----------------------------------------------------------
@@ -272,6 +279,27 @@ export class ImageLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
+
+    // Drop zone overlay — rendered on top of image/placeholder.
+    if (this._dragOver) {
+      const cw = ctx.canvas.width
+      const ch = ctx.canvas.height
+      const pad = 24
+      ctx.save()
+      ctx.fillStyle = 'rgba(126,207,126,0.10)'
+      ctx.fillRect(0, 0, cw, ch)
+      ctx.strokeStyle = 'rgba(126,207,126,0.80)'
+      ctx.lineWidth   = 2
+      ctx.setLineDash([10, 6])
+      ctx.strokeRect(pad, pad, cw - pad * 2, ch - pad * 2)
+      ctx.setLineDash([])
+      ctx.font         = 'bold 20px monospace'
+      ctx.fillStyle    = 'rgba(126,207,126,0.90)'
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('Drop image here', cw / 2, ch / 2)
+      ctx.restore()
+    }
   }
 
   // ----------------------------------------------------------

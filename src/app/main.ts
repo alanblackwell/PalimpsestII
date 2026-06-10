@@ -5,6 +5,7 @@ import { Layer }             from '../core/Layer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
+import { ImageLayer }        from '../layers/ImageLayer.js'
 import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
@@ -145,6 +146,42 @@ interaction.setBoundCallback((source, slot) => {
 evaluator.setStack(menuLayer)
 widget.setStack(menuLayer)
 interaction.setStack(menuLayer)
+
+// ------------------------------------------------------------------
+// Drag-and-drop image loading
+// ------------------------------------------------------------------
+
+// Find the best ImageLayer to receive a drop: prefer the selected layer,
+// then fall back to the first ImageLayer found in the stack.
+function findImageLayer(): ImageLayer | null {
+  if (widget.selected instanceof ImageLayer) return widget.selected
+  for (let l: Layer | null = menuLayer; l !== null; l = l.layerBelow) {
+    if (l instanceof ImageLayer) return l
+  }
+  return null
+}
+
+canvas.addEventListener('dragover', (e) => {
+  if (!e.dataTransfer?.types.includes('Files')) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'copy'
+  findImageLayer()?.setDragOver(true)
+})
+
+canvas.addEventListener('dragleave', (e) => {
+  // Only clear when the cursor truly leaves the canvas element.
+  if (e.relatedTarget === null || !canvas.contains(e.relatedTarget as Node)) {
+    findImageLayer()?.setDragOver(false)
+  }
+})
+
+canvas.addEventListener('drop', (e) => {
+  e.preventDefault()
+  const target = findImageLayer()
+  target?.setDragOver(false)
+  const file = e.dataTransfer?.files[0]
+  if (file && target) target.loadFile(file)
+})
 
 // ------------------------------------------------------------------
 // Resize
