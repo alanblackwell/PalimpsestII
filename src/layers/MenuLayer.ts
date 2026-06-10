@@ -57,11 +57,12 @@ const PAD      = 10     // inner padding below header
 const rnd  = () => Math.random()
 const rndR = (lo: number, hi: number) => lo + rnd() * (hi - lo)
 
-// Random hue-based colour at full saturation and high value.
+// Random colour across the full hue range, avoiding near-black and near-white.
+// Saturation 0.25–1.0 (allows pastels but not grey); value 0.30–0.82.
 function rndColour(): { r: number; g: number; b: number; a: number } {
   const h = rnd() * 360
-  const s = rndR(0.55, 1.0)
-  const v = rndR(0.65, 1.0)
+  const s = rndR(0.25, 1.0)
+  const v = rndR(0.30, 0.82)
   const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c
   let r = 0, g = 0, b = 0
   if      (h < 60)  { r = c; g = x }
@@ -105,8 +106,8 @@ const BUTTONS: BtnDef[] = [
   { label: 'Collection', colour: '#a0a4b8', factory: ()         => new CollectionLayer([rnd(), rnd(), rnd(), rnd()]) },
   { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
   { label: 'Path',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy) } },
-  { label: 'Rect',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh) } },
-  { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh) } },
+  { label: 'Rect',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
+  { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
   { label: 'Text',       colour: '#888888', factory: ()         => new TextLayer('Text') },
   { label: 'Image',      colour: '#7ecf7e', factory: ()         => new ImageLayer() },
   { label: 'Mask',       colour: '#cfcf7e', factory: (_,__,w,h) => new MaskLayer(w, h) },

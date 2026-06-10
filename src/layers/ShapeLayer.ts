@@ -76,12 +76,13 @@ export abstract class ShapeLayer extends Layer implements PointSource {
   private _dragStartAngle      = 0
   private _rotLocalAngle       = 0   // atan2 of rot handle in local space
 
-  constructor(cx: number, cy: number, width: number, height: number) {
+  constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
     this._cx     = cx
     this._cy     = cy
     this._width  = width
     this._height = height
+    if (colour !== undefined) this._colour = colour
 
     this.positionSlot = new ParameterSlot(ValueType.Point,  this, 'position')
     this.colourSlot   = new ParameterSlot(ValueType.Colour, this, 'colour')
