@@ -67,15 +67,38 @@ const refreshStack = (selectLayer?: Layer) => {
 
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
-  // When an AnimPath is created, auto-bind the first shape layer below.
-  if (newLayer instanceof AnimPathLayer && !newLayer.shapeSlot.isActive) {
-    let l: Layer | null = newLayer.layerBelow
-    while (l !== null) {
-      if (!l.isInfrastructure && 'samplePerimeter' in l) {
-        BindingLayer.create(l, newLayer.shapeSlot)
-        break
+  if (newLayer instanceof AnimPathLayer) {
+    // Auto-bind shape slot to the first samplePerimeter-capable layer below.
+    if (!newLayer.shapeSlot.isActive) {
+      let l: Layer | null = newLayer.layerBelow
+      while (l !== null) {
+        if (!l.isInfrastructure && 'samplePerimeter' in l) {
+          BindingLayer.create(l, newLayer.shapeSlot)
+          break
+        }
+        l = l.layerBelow
       }
-      l = l.layerBelow
+    }
+
+    // Auto-bind phase slot to a ClockLayer, creating one if none exists.
+    if (!newLayer.phaseSlot.isActive) {
+      let clock: ClockLayer | null = null
+      for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
+        if (l instanceof ClockLayer) { clock = l; break }
+      }
+      if (clock === null) {
+        for (let l: Layer | null = newLayer.layerAbove; l !== null; l = l.layerAbove) {
+          if (l instanceof ClockLayer) { clock = l; break }
+        }
+      }
+      if (clock === null) {
+        clock = new ClockLayer()
+        clock.debugName = 'Clock'
+        clock.bounds = { ...newLayer.bounds }
+        const below = newLayer.layerBelow
+        if (below !== null) clock.insertAbove(below)
+      }
+      BindingLayer.create(clock, newLayer.phaseSlot)
     }
   }
   refreshStack(menuLayer)
