@@ -7,7 +7,8 @@ import {
   type Point,  type PointSource,
   type Amount, type AmountSource,
   type EventValue, type EventSource,
-  type MaskValue, type MaskSource,
+  type MaskValue,  type MaskSource,
+  type ImageValue, type ImageSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -49,8 +50,8 @@ const H_ROTATE = 9
 
 type BBox = { x: number; y: number; width: number; height: number }
 
-export abstract class ShapeLayer extends Layer implements PointSource, MaskSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Mask])
+export abstract class ShapeLayer extends Layer implements PointSource, MaskSource, ImageSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Mask, ValueType.Image])
 
   protected _cx:     number
   protected _cy:     number
@@ -61,7 +62,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _colour:  Colour = { r: 1, g: 1, b: 1, a: 1 }
   protected _opacity: number = 1
 
-  private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
+  private _maskCanvas:  OffscreenCanvas = new OffscreenCanvas(1, 1)
+  private _imageCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
   readonly positionSlot:  ParameterSlot
   readonly colourSlot:    ParameterSlot
@@ -124,7 +126,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   getPoint(): Point { return { ...this._currentPoint } }
 
-  getMask(): MaskValue { return this._maskCanvas }
+  getMask():  MaskValue  { return this._maskCanvas  }
+  getImage(): ImageValue { return this._imageCanvas }
 
   // ----------------------------------------------------------
   // Node
@@ -153,19 +156,30 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       }
     }
     this._currentPoint = this.samplePerimeter(this._phase)
-    this._updateMask()
+    this._updateOffscreens()
   }
 
-  private _updateMask(): void {
+  private _updateOffscreens(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
+
     if (this._maskCanvas.width !== w || this._maskCanvas.height !== h) {
       this._maskCanvas = new OffscreenCanvas(w, h)
     }
-    const ctx = this._maskCanvas.getContext('2d')!
-    ctx.clearRect(0, 0, w, h)
-    this.drawShape(ctx, this._cx, this._cy, this._width, this._height, this._angle,
+    const mctx = this._maskCanvas.getContext('2d')!
+    mctx.clearRect(0, 0, w, h)
+    // White filled shape on transparent — alpha encodes inclusion.
+    this.drawShape(mctx, this._cx, this._cy, this._width, this._height, this._angle,
       { r: 1, g: 1, b: 1, a: 1 }, 1, true)
+
+    if (this._imageCanvas.width !== w || this._imageCanvas.height !== h) {
+      this._imageCanvas = new OffscreenCanvas(w, h)
+    }
+    const ictx = this._imageCanvas.getContext('2d')!
+    ictx.clearRect(0, 0, w, h)
+    // Shape rendered at its actual colour and fill mode.
+    this.drawShape(ictx, this._cx, this._cy, this._width, this._height, this._angle,
+      this._colour, this._opacity, this._filled)
   }
 
   // ----------------------------------------------------------

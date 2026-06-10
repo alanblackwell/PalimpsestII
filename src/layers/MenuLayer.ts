@@ -27,6 +27,7 @@ import { GradientLayer }   from './GradientLayer.js'
 import { TransformLayer }  from './TransformLayer.js'
 import { SequencerLayer }  from './SequencerLayer.js'
 import { AnimPathLayer }   from './AnimPathLayer.js'
+import { ClipLayer }       from './ClipLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -120,6 +121,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Noise',      colour: '#4a8fe8', factory: ()         => new NoiseLayer() },
   { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h) => new GradientLayer(w, h) },
   { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
+  { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────

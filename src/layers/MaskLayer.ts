@@ -90,8 +90,6 @@ export class MaskLayer extends Layer implements MaskSource {
     const ctx = this._offscreen.getContext('2d')!
 
     ctx.clearRect(0, 0, w, h)
-    ctx.fillStyle = 'black'
-    ctx.fillRect(0, 0, w, h)
 
     ctx.drawImage(this._painted, 0, 0)
 
@@ -133,7 +131,12 @@ export class MaskLayer extends Layer implements MaskSource {
   private _drawMaskOverlay(ctx: Ctx2D): void {
     if (this._offscreen.width <= 1) return
     ctx.save()
-    ctx.globalAlpha = 0.28
+    // Tint excluded areas (transparent in the mask) with a dark wash.
+    ctx.globalAlpha = 0.35
+    ctx.fillStyle = '#000033'
+    ctx.fillRect(0, 0, this._offscreen.width, this._offscreen.height)
+    // Punch through the wash where the mask is opaque (included areas).
+    ctx.globalCompositeOperation = 'destination-out'
     ctx.drawImage(this._offscreen, 0, 0)
     ctx.restore()
   }
