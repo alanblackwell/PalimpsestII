@@ -83,10 +83,10 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     this._width  = width
     this._height = height
 
-    this.positionSlot = new ParameterSlot(ValueType.Point,  this)
-    this.colourSlot   = new ParameterSlot(ValueType.Colour, this)
-    this.opacitySlot  = new ParameterSlot(ValueType.Amount, this)
-    this.phaseSlot    = new ParameterSlot(ValueType.Amount, this)
+    this.positionSlot = new ParameterSlot(ValueType.Point,  this, 'position')
+    this.colourSlot   = new ParameterSlot(ValueType.Colour, this, 'colour')
+    this.opacitySlot  = new ParameterSlot(ValueType.Amount, this, 'opacity')
+    this.phaseSlot    = new ParameterSlot(ValueType.Amount, this, 'phase')
     this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot)
     this._currentPoint = { x: cx, y: cy }
     graph.register(this)

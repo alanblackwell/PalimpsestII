@@ -1,5 +1,20 @@
 import { Node } from './Node.js'
-import type { Ctx2D } from './types.js'
+import { ParameterSlot } from './ParameterSlot.js'
+import { ValueType }          from './types.js'
+import type { Ctx2D, Point }  from './types.js'
+
+const SLOT_TC: Partial<Record<ValueType, string>> = {
+  [ValueType.Amount]:    '#4a8fe8',
+  [ValueType.Colour]:    '#e8944a',
+  [ValueType.Image]:     '#7ecf7e',
+  [ValueType.Mask]:      '#cfcf7e',
+  [ValueType.Point]:     '#cf7ecf',
+  [ValueType.Direction]: '#7ecfcf',
+  [ValueType.Rate]:      '#e87e7e',
+  [ValueType.Count]:     '#a0a0a0',
+  [ValueType.Event]:     '#e0e060',
+  [ValueType.Collection]:'#a0a4b8',
+}
 
 // ------------------------------------------------------------
 // Layer — a full participant in the dataflow graph and the stack
@@ -23,6 +38,9 @@ export abstract class Layer extends Node {
   // Infrastructure layers (e.g. BindingLayer) are hidden in the
   // LayerStackWidget and excluded from user-facing layer lists.
   readonly isInfrastructure: boolean = false
+
+  // Slot-region bounding boxes — populated by renderSlots, used by hitTestSlot.
+  private _slotBounds = new Map<ParameterSlot, { x: number; y: number; width: number; height: number }>()
 
   // ----------------------------------------------------------
   // Stack operations
@@ -111,6 +129,91 @@ export abstract class Layer extends Node {
 
   // Hit-test within this layer only. Subclasses may override.
   protected hitTestSelf(_point: { x: number; y: number }): Node | null {
+    return null
+  }
+
+  // Y-coordinate of the bottom of this layer's canvas panel.
+  // Layers with non-standard panel heights should override.
+  get panelBottom(): number {
+    return 50 + this.bounds.height + 8
+  }
+
+  // Render parameter-slot drop targets below the layer's canvas panel.
+  // Called by the Evaluator after renderPanel so it is always present.
+  renderSlots(ctx: Ctx2D): void {
+    if (this.slots.length === 0) return
+
+    const SLOT_H  = 26
+    const SLOT_GAP = 4
+    const LABEL_W  = 78
+    const PANEL_X  = 300
+    const PANEL_W  = 260
+    const drag     = Node.bindDrag
+
+    this._slotBounds.clear()
+    let y = this.panelBottom
+
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.textBaseline = 'middle'
+
+    for (const slot of this.slots) {
+      const isCompat = drag.active
+                    && drag.source !== null
+                    && slot.type !== null
+                    && drag.source.types.has(slot.type)
+
+      const b = { x: PANEL_X, y, width: PANEL_W, height: SLOT_H }
+      this._slotBounds.set(slot, b)
+
+      // Label
+      ctx.fillStyle = 'rgba(255,255,255,0.40)'
+      ctx.textAlign = 'left'
+      ctx.fillText(slot.label, PANEL_X + 6, y + SLOT_H / 2)
+
+      // Value box
+      const tc  = (slot.type !== null ? SLOT_TC[slot.type] : undefined) ?? '#888888'
+      const vx  = PANEL_X + LABEL_W
+      const vw  = PANEL_W - LABEL_W - 2
+      const by  = y + 3
+      const bh  = SLOT_H - 6
+
+      if (slot.isActive) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = tc + '22'
+        ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = tc + '99'; ctx.lineWidth = 1; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.textAlign = 'left'
+        ctx.fillText(srcName, vx + 6, y + SLOT_H / 2)
+      } else if (isCompat) {
+        ctx.fillStyle = 'rgba(50,200,70,0.18)'
+        ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+        ctx.fillText('drop to bind', vx + 6, y + SLOT_H / 2)
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.textAlign = 'left'
+        ctx.fillText('unbound', vx + 6, y + SLOT_H / 2)
+      }
+
+      y += SLOT_H + SLOT_GAP
+    }
+
+    ctx.restore()
+  }
+
+  // Return the ParameterSlot whose drop-target region contains `point`, or null.
+  hitTestSlot(point: Point): ParameterSlot | null {
+    for (const [slot, b] of this._slotBounds) {
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return slot
+    }
     return null
   }
 }

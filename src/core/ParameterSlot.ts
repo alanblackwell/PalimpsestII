@@ -10,6 +10,8 @@ export class ParameterSlot {
   // Used by SelectLayer's value inputs.
   readonly type: ValueType | null
 
+  readonly label: string
+
   private _state: SlotState = SlotState.Unbound
   private _source: Node | null = null
 
@@ -17,9 +19,27 @@ export class ParameterSlot {
   // Public so Graph can read it for cycle detection.
   readonly owner: Node
 
-  constructor(type: ValueType | null, owner: Node) {
+  constructor(type: ValueType | null, owner: Node, label?: string) {
     this.type = type
     this.owner = owner
+    this.label = label ?? ParameterSlot._defaultLabel(type)
+  }
+
+  private static _defaultLabel(type: ValueType | null): string {
+    if (type === null) return 'value'
+    const m: Partial<Record<ValueType, string>> = {
+      [ValueType.Amount]:    'amount',
+      [ValueType.Colour]:    'colour',
+      [ValueType.Image]:     'image',
+      [ValueType.Mask]:      'mask',
+      [ValueType.Point]:     'position',
+      [ValueType.Direction]: 'direction',
+      [ValueType.Rate]:      'rate',
+      [ValueType.Count]:     'count',
+      [ValueType.Event]:     'event',
+      [ValueType.Collection]:'collection',
+    }
+    return m[type] ?? 'value'
   }
 
   get state(): SlotState { return this._state }

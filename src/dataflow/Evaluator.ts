@@ -1,6 +1,7 @@
-import { Node } from '../core/Node.js'
-import { Layer } from '../core/Layer.js'
-import { Clock } from './Clock.js'
+import { Node }      from '../core/Node.js'
+import { Layer }     from '../core/Layer.js'
+import { ValueType } from '../core/types.js'
+import { Clock }     from './Clock.js'
 import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 
 // ------------------------------------------------------------
@@ -165,7 +166,54 @@ export class Evaluator {
     }
 
     renderTop.renderPanel(this.ctx)
+    // Slot drop-target regions (always shown in edit mode).
+    renderTop.renderSlots(this.ctx)
     this._layerStackWidget?.render(this.ctx)
+
+    // Bind-drag cursor overlay — small card following the pointer.
+    if (Node.bindDrag.active && Node.bindDrag.source !== null) {
+      this._drawBindDragOverlay(this.ctx)
+    }
+  }
+
+  private _drawBindDragOverlay(ctx: CanvasRenderingContext2D): void {
+    const src = Node.bindDrag.source!
+    const x   = Node.bindDrag.x + 12
+    const y   = Node.bindDrag.y - 14
+    const W   = 130, H = 28
+
+    // Type colour
+    const tc = (() => {
+      const t = src.types
+      if (t.has(ValueType.Amount))    return '#4a8fe8'
+      if (t.has(ValueType.Colour))    return '#e8944a'
+      if (t.has(ValueType.Image))     return '#7ecf7e'
+      if (t.has(ValueType.Mask))      return '#cfcf7e'
+      if (t.has(ValueType.Point))     return '#cf7ecf'
+      if (t.has(ValueType.Direction)) return '#7ecfcf'
+      if (t.has(ValueType.Rate))      return '#e87e7e'
+      if (t.has(ValueType.Count))     return '#a0a0a0'
+      if (t.has(ValueType.Event))     return '#e0e060'
+      return '#888888'
+    })()
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 8
+
+    ctx.fillStyle = 'rgba(10,10,20,0.88)'
+    ctx.beginPath(); ctx.roundRect(x, y, W, H, 6); ctx.fill()
+
+    ctx.shadowBlur = 0
+    ctx.fillStyle = tc
+    ctx.beginPath(); ctx.roundRect(x, y, 3, H, [6, 0, 0, 6]); ctx.fill()
+
+    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText((src as { debugName?: string }).debugName ?? '?', x + 10, y + H / 2)
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------

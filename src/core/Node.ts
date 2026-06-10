@@ -36,6 +36,15 @@ export abstract class Node {
   // ----------------------------------------------------------
   static scheduleFrame: (() => void) | null = null
 
+  // Shared bind-drag state — set by LayerStackWidget, read by Layer.renderSlots
+  // and Evaluator to draw the cursor overlay.
+  static bindDrag: {
+    active: boolean
+    source: Node | null
+    x: number
+    y: number
+  } = { active: false, source: null, x: 0, y: 0 }
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

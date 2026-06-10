@@ -1,5 +1,6 @@
 import type { Layer }           from '../core/Layer.js'
-import type { Node }            from '../core/Node.js'
+import { Node }                 from '../core/Node.js'
+import { ParameterSlot }        from '../core/ParameterSlot.js'
 import type { Point }           from '../core/types.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 
@@ -84,6 +85,7 @@ export class InteractionSystem {
   private readonly _onKey:    (e: KeyboardEvent) => void
   private _spaceAction:  (() => void) | null = null
   private _deleteAction: (() => void) | null = null
+  private _onBound: ((source: Node, slot: ParameterSlot) => void) | null = null
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
@@ -123,6 +125,11 @@ export class InteractionSystem {
   // Register a callback invoked when the user presses Delete.
   setDeleteAction(fn: () => void): void {
     this._deleteAction = fn
+  }
+
+  // Register a callback invoked when a bind-drag drop creates a binding.
+  setBoundCallback(fn: (source: Node, slot: ParameterSlot) => void): void {
+    this._onBound = fn
   }
 
   // Remove all event listeners.  Call when the canvas is torn down.
@@ -200,6 +207,11 @@ export class InteractionSystem {
     const point = this._point(e)
     if (this._widgetCapture) {
       this._widget?.handlePointerMove(point)
+      // Keep drag overlay position current
+      if (Node.bindDrag.active) {
+        Node.bindDrag.x = point.x
+        Node.bindDrag.y = point.y
+      }
       return
     }
     if (this._active !== null) {
@@ -215,7 +227,19 @@ export class InteractionSystem {
   private _handleUp(e: PointerEvent): void {
     const point = this._point(e)
     if (this._widgetCapture) {
-      this._widget?.handlePointerUp(point)
+      if (Node.bindDrag.active) {
+        // Bind-drop: attempt to bind the dragged source to a slot at the drop point.
+        const src      = Node.bindDrag.source
+        const selected = this._widget?.selected ?? null
+        Node.bindDrag.active = false
+        Node.bindDrag.source = null
+        if (src !== null && selected !== null) {
+          const slot = selected.hitTestSlot(point)
+          if (slot !== null) this._onBound?.(src, slot)
+        }
+      } else {
+        this._widget?.handlePointerUp(point)
+      }
       this._widgetCapture = false
       this._updateHoverCursor(e)
       return

@@ -536,6 +536,24 @@ export class LayerStackWidget {
     if (this._dragLayer === null) return
     const i  = this._layers.indexOf(this._dragLayer)
     const sp = this._spacing()
+
+    if (pt.x > WIDGET_W) {
+      // Pointer left the strip — bind-drag mode
+      Node.bindDrag.active = true
+      Node.bindDrag.source = this._dragLayer
+      Node.bindDrag.x      = pt.x
+      Node.bindDrag.y      = pt.y
+      this._dragging = false   // suppress reorder ghost
+      Node.scheduleFrame?.()
+      return
+    }
+
+    // Back inside strip — cancel any bind-drag
+    if (Node.bindDrag.active) {
+      Node.bindDrag.active = false
+      Node.bindDrag.source = null
+    }
+
     if (!this._dragging && Math.abs(pt.y - (this._cardY(i, sp) + this._dragOffsetY)) > 6) {
       this._dragging = true
     }
@@ -546,6 +564,10 @@ export class LayerStackWidget {
   }
 
   handlePointerUp(_pt: Point): void {
+    // Always clear bind-drag state — the actual binding is handled by InteractionSystem.
+    Node.bindDrag.active = false
+    Node.bindDrag.source = null
+
     if (this._dragging && this._dragLayer !== null && this._dropIndex >= 0) {
       this._commitDrop()
     }

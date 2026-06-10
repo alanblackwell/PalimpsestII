@@ -95,9 +95,9 @@ export class PathLayer extends Layer implements PointSource {
     this._points       = points ?? defaultPoints(cx, cy)
     this._currentPoint = samplePath(this._points, 0)
 
-    this.phaseSlot   = new ParameterSlot(ValueType.Amount,  this)
-    this.colourSlot  = new ParameterSlot(ValueType.Colour,  this)
-    this.opacitySlot = new ParameterSlot(ValueType.Amount,  this)
+    this.phaseSlot   = new ParameterSlot(ValueType.Amount,  this, 'phase')
+    this.colourSlot  = new ParameterSlot(ValueType.Colour,  this, 'colour')
+    this.opacitySlot = new ParameterSlot(ValueType.Amount,  this, 'opacity')
     this.slots.push(this.phaseSlot, this.colourSlot, this.opacitySlot)
 
     graph.register(this)

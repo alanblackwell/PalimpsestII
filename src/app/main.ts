@@ -329,6 +329,11 @@ interaction.setDeleteAction(() => {
   refreshStack()
 })
 
+interaction.setBoundCallback((source, slot) => {
+  BindingLayer.create(source, slot)
+  refreshStack()
+})
+
 // menuLayer is now the top; no bindings sit above it.
 evaluator.setStack(menuLayer)
 widget.setStack(menuLayer)
