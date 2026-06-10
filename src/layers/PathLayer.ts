@@ -1,30 +1,22 @@
-import { Layer } from '../core/Layer.js'
-import { ParameterSlot } from '../core/ParameterSlot.js'
+import { ShapeLayer } from './ShapeLayer.js'
 import {
   ValueType,
-  type Colour, type ColourSource,
-  type Amount, type AmountSource,
-  type Point,  type PointSource,
+  type Colour,
+  type Point,
   type Ctx2D,
 } from '../core/types.js'
-import { graph } from '../dataflow/Graph.js'
 
 // ------------------------------------------------------------
-// PathLayer — a closed Catmull-Rom spline shape layer that
-//             also produces a Point output at a given phase [0,1]
+// PathLayer — a closed Catmull-Rom spline shape layer
 // ------------------------------------------------------------
 //
-// Inputs:
-//   phaseSlot   (Amount) — position along path [0, 1]
-//   colourSlot  (Colour) — fill colour
-//   opacitySlot (Amount) — fill opacity
+// Extends ShapeLayer so it shares the same slot set, rendering
+// pipeline, and type identity as Rect and Ellipse.
 //
-// Output:
-//   Point — interpolated canvas coordinate at the given phase
-//
-// Rendering:
-//   renderSelf  — filled+stroked spline (always visible)
-//   renderPanel — label pill + control-point handles + phase indicator
+// drawShape    — renders the spline fill (called by ShapeLayer.renderSelf)
+// samplePerimeter — samples a point on the spline at t ∈ [0, 1)
+// renderPanel  — overrides to show spline control-point handles
+//                instead of the bbox handles used by Rect/Ellipse
 
 // ------------------------------------------------------------------
 // Catmull-Rom spline
@@ -67,7 +59,7 @@ function defaultPoints(cx: number, cy: number): Point[] {
 // Constants
 // ------------------------------------------------------------------
 
-const ACCENT  = '#e8a04a'   // same amber as ShapeLayer
+const ACCENT  = '#e8a04a'
 const CP_R    = 6
 const HIT_R   = 14
 const SAMPLES = 200
@@ -76,96 +68,36 @@ const SAMPLES = 200
 // PathLayer
 // ------------------------------------------------------------------
 
-export class PathLayer extends Layer implements PointSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
+export class PathLayer extends ShapeLayer {
+  // types inherited from ShapeLayer: Set([ValueType.Point])
 
-  readonly phaseSlot:   ParameterSlot
-  readonly colourSlot:  ParameterSlot
-  readonly opacitySlot: ParameterSlot
+  private _points:    Point[]
+  private _dragIndex: number = -1
 
-  private _points:       Point[]
-  private _phase:        number = 0
-  private _currentPoint: Point  = { x: 0, y: 0 }
-  private _colour:       Colour = { r: 0.91, g: 0.63, b: 0.29, a: 1 }
-  private _opacity:      number = 0.25
-  private _dragIndex:    number = -1
-
-  constructor(points?: Point[], cx = 500, cy = 300) {
-    super()
-    this._points       = points ?? defaultPoints(cx, cy)
-    this._currentPoint = samplePath(this._points, 0)
-
-    this.phaseSlot   = new ParameterSlot(ValueType.Amount,  this, 'phase')
-    this.colourSlot  = new ParameterSlot(ValueType.Colour,  this, 'colour')
-    this.opacitySlot = new ParameterSlot(ValueType.Amount,  this, 'opacity')
-    this.slots.push(this.phaseSlot, this.colourSlot, this.opacitySlot)
-
-    graph.register(this)
-  }
-
-  // PointSource
-  getPoint(): Point { return { ...this._currentPoint } }
-
-  // Shape-compatible perimeter sampling — delegates to the Catmull-Rom spline.
-  samplePerimeter(t: number): Point { return samplePath(this._points, t) }
-
-  // ----------------------------------------------------------
-  // Interaction
-  // ----------------------------------------------------------
-
-  get isInteractive(): boolean { return this._points.length > 0 }
-
-  handlePointerDown(point: Point): boolean {
-    const idx = this._nearest(point)
-    if (idx < 0) return false
-    this._dragIndex = idx
-    this.markDirty()
-    return true
-  }
-
-  handlePointerMove(point: Point): void {
-    if (this._dragIndex < 0) return
-    this._points[this._dragIndex] = { ...point }
-    this.markDirty()
-  }
-
-  handlePointerUp(): void {
-    this._dragIndex = -1
-    this.markDirty()
-  }
-
-  protected override hitTestSelf(point: Point): this | null {
-    return this._nearest(point) >= 0 ? this : null
+  constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
+    // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
+    super(cx, cy, 1, 1, colour)
+    this._points = points ?? defaultPoints(cx, cy)
   }
 
   // ----------------------------------------------------------
-  // Node
+  // ShapeLayer contract
   // ----------------------------------------------------------
 
-  protected recompute(): void {
-    if (this.phaseSlot.isActive) {
-      this._phase = (this.phaseSlot.source as AmountSource).getAmount() as Amount
-    }
-    if (this.colourSlot.isActive) {
-      this._colour = (this.colourSlot.source as ColourSource).getColour()
-    }
-    if (this.opacitySlot.isActive) {
-      this._opacity = (this.opacitySlot.source as AmountSource).getAmount() as Amount
-    }
-    this._currentPoint = samplePath(this._points, this._phase)
-  }
-
-  // ----------------------------------------------------------
-  // Rendering
-  // ----------------------------------------------------------
-
-  renderSelf(ctx: Ctx2D): void {
+  /** Draw the filled spline. Called by ShapeLayer.renderSelf. */
+  protected drawShape(
+    ctx: Ctx2D,
+    _cx: number, _cy: number,
+    _w: number, _h: number,
+    _angle: number,
+    colour: Colour,
+    opacity: number,
+  ): void {
     if (this._points.length < 2) return
-    const c = this._colour
+    const c = colour
     ctx.save()
-    ctx.globalAlpha = this._opacity
+    ctx.globalAlpha = opacity
 
-    // Filled spline
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
       const pt = samplePath(this._points, i / SAMPLES)
@@ -176,20 +108,50 @@ export class PathLayer extends Layer implements PointSource {
     ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
     ctx.fill()
 
-    // Outline at full opacity
-    ctx.globalAlpha = Math.min(1, this._opacity * 2.5)
-    ctx.strokeStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},0.85)`
-    ctx.lineWidth   = 1.5
-    ctx.stroke()
-
     ctx.restore()
   }
 
-  renderPanel(ctx: Ctx2D): void {
+  /** Sample a point on the spline perimeter. */
+  samplePerimeter(t: number): Point {
+    return samplePath(this._points, t)
+  }
+
+  // ----------------------------------------------------------
+  // Rendering — override to show spline handles, not bbox handles
+  // ----------------------------------------------------------
+
+  override renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
     this._drawControlHandles(ctx)
     if (this.phaseSlot.isActive) this._drawPhaseIndicator(ctx)
+  }
+
+  // ----------------------------------------------------------
+  // Hit testing — control points instead of bbox handles
+  // ----------------------------------------------------------
+
+  protected override hitTestSelf(point: Point): this | null {
+    return this._nearest(point) >= 0 ? this : null
+  }
+
+  override handlePointerDown(point: Point): boolean {
+    const idx = this._nearest(point)
+    if (idx < 0) return false
+    this._dragIndex = idx
+    this.markDirty()
+    return true
+  }
+
+  override handlePointerMove(point: Point): void {
+    if (this._dragIndex < 0) return
+    this._points[this._dragIndex] = { ...point }
+    this.markDirty()
+  }
+
+  override handlePointerUp(): void {
+    this._dragIndex = -1
+    this.markDirty()
   }
 
   // ----------------------------------------------------------
@@ -239,8 +201,8 @@ export class PathLayer extends Layer implements PointSource {
     ctx.textAlign    = 'left'
     ctx.fillText(`${this._points.length} pts`, x + 28, midY)
 
-    const px = Math.round(this._currentPoint.x)
-    const py = Math.round(this._currentPoint.y)
+    const px = Math.round(this.getPoint().x)
+    const py = Math.round(this.getPoint().y)
     ctx.fillStyle = 'rgba(255,255,255,0.50)'
     ctx.textAlign = 'right'
     ctx.fillText(`(${px}, ${py})`, x + width - 8, midY)
@@ -252,7 +214,7 @@ export class PathLayer extends Layer implements PointSource {
     if (this._points.length < 2) return
     ctx.save()
 
-    // Spline outline (brighter when selected)
+    // Spline outline (edit-mode overlay, brighter than fill)
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
       const pt = samplePath(this._points, i / SAMPLES)
@@ -278,21 +240,6 @@ export class PathLayer extends Layer implements PointSource {
       ctx.stroke()
     }
 
-    ctx.restore()
-  }
-
-  private _drawPhaseIndicator(ctx: Ctx2D): void {
-    const cp = this._currentPoint
-    ctx.save()
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)'
-    ctx.lineWidth   = 1.5
-    ctx.beginPath()
-    ctx.arc(cp.x, cp.y, 8, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.fillStyle = '#ffffff'
-    ctx.beginPath()
-    ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2)
-    ctx.fill()
     ctx.restore()
   }
 }

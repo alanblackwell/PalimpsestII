@@ -351,7 +351,7 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     ctx.restore()
   }
 
-  private _drawPhaseIndicator(ctx: Ctx2D): void {
+  protected _drawPhaseIndicator(ctx: Ctx2D): void {
     const cp = this._currentPoint
     ctx.save()
     ctx.strokeStyle = 'rgba(255,255,255,0.75)'
