@@ -64,11 +64,12 @@ export class ImageLayer extends Layer implements ImageSource {
   private readonly _opacitySlot:  ParameterSlot
   private readonly _scaleSlot:    ParameterSlot
 
-  private _bitmap:   ImageValue = null
-  private _filename: string     = ''
-  private _natW:     number     = 0
-  private _natH:     number     = 0
-  private _dragOver: boolean    = false
+  private _bitmap:     ImageValue      = null
+  private _offscreen:  OffscreenCanvas = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
+  private _filename:   string          = ''
+  private _natW:       number          = 0
+  private _natH:       number          = 0
+  private _dragOver:   boolean         = false
 
   // Direct-manipulation state (persist across recompute when slot is unbound)
   private _rotation:       number       = 0
@@ -95,7 +96,7 @@ export class ImageLayer extends Layer implements ImageSource {
   // ImageSource
   // ----------------------------------------------------------
 
-  getImage(): ImageValue { return this._bitmap }
+  getImage(): ImageValue { return this._bitmap !== null ? this._offscreen : null }
 
   // ----------------------------------------------------------
   // Slot accessors
@@ -163,6 +164,27 @@ export class ImageLayer extends Layer implements ImageSource {
     } else {
       this._scale = this._manualScale ?? 1.0
     }
+
+    this._updateOffscreen()
+  }
+
+  private _updateOffscreen(): void {
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    if (this._offscreen.width !== w || this._offscreen.height !== h) {
+      this._offscreen = new OffscreenCanvas(w, h)
+    }
+    const ctx = this._offscreen.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    if (this._bitmap === null) return
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
+    ctx.translate(this._position.x, this._position.y)
+    ctx.rotate(this._rotation)
+    const bw = this._natW * this._scale
+    const bh = this._natH * this._scale
+    ctx.drawImage(this._bitmap, -bw / 2, -bh / 2, bw, bh)
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
