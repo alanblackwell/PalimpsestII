@@ -5,6 +5,7 @@ import {
   type Colour, type ColourSource,
   type Point,  type PointSource,
   type Amount, type AmountSource,
+  type EventValue, type EventSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -58,13 +59,18 @@ export abstract class ShapeLayer extends Layer implements PointSource {
   protected _colour:  Colour = { r: 1, g: 1, b: 1, a: 1 }
   protected _opacity: number = 1
 
-  readonly positionSlot: ParameterSlot
-  readonly colourSlot:   ParameterSlot
-  readonly opacitySlot:  ParameterSlot
-  readonly phaseSlot:    ParameterSlot
+  readonly positionSlot:  ParameterSlot
+  readonly colourSlot:    ParameterSlot
+  readonly opacitySlot:   ParameterSlot
+  readonly phaseSlot:     ParameterSlot
+  readonly fillModeSlot:  ParameterSlot
 
-  private _phase:        number = 0
-  private _currentPoint: Point  = { x: 0, y: 0 }
+  protected _filled = true
+
+  private _phase:          number = 0
+  private _currentPoint:   Point  = { x: 0, y: 0 }
+  private _lastEventTime:  EventValue = null
+  protected _toggleBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // Drag state
   private _dragHandle          = -1
@@ -84,11 +90,12 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     this._height = height
     if (colour !== undefined) this._colour = colour
 
-    this.positionSlot = new ParameterSlot(ValueType.Point,  this, 'position')
-    this.colourSlot   = new ParameterSlot(ValueType.Colour, this, 'colour')
-    this.opacitySlot  = new ParameterSlot(ValueType.Amount, this, 'opacity')
-    this.phaseSlot    = new ParameterSlot(ValueType.Amount, this, 'phase')
-    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot)
+    this.positionSlot  = new ParameterSlot(ValueType.Point,  this, 'position')
+    this.colourSlot    = new ParameterSlot(ValueType.Colour, this, 'colour')
+    this.opacitySlot   = new ParameterSlot(ValueType.Amount, this, 'opacity')
+    this.phaseSlot     = new ParameterSlot(ValueType.Amount, this, 'phase')
+    this.fillModeSlot  = new ParameterSlot(ValueType.Event,  this, 'fill mode')
+    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot, this.fillModeSlot)
     this._currentPoint = { x: cx, y: cy }
     graph.register(this)
   }
@@ -105,6 +112,7 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     angle: number,
     colour: Colour,
     opacity: number,
+    filled: boolean,
   ): void
 
   /** Return canvas coordinate at t ∈ [0, 1) on the shape's perimeter. */
@@ -131,6 +139,13 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     if (this.phaseSlot.isActive) {
       this._phase = (this.phaseSlot.source as AmountSource).getAmount()
     }
+    if (this.fillModeSlot.isActive) {
+      const t = (this.fillModeSlot.source as EventSource).getEventTime()
+      if (t !== null && t !== this._lastEventTime) {
+        this._lastEventTime = t
+        this._filled = !this._filled
+      }
+    }
     this._currentPoint = this.samplePerimeter(this._phase)
   }
 
@@ -140,7 +155,7 @@ export abstract class ShapeLayer extends Layer implements PointSource {
 
   renderSelf(ctx: Ctx2D): void {
     this.drawShape(ctx, this._cx, this._cy,
-      this._width, this._height, this._angle, this._colour, this._opacity)
+      this._width, this._height, this._angle, this._colour, this._opacity, this._filled)
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -153,6 +168,41 @@ export abstract class ShapeLayer extends Layer implements PointSource {
     }
   }
 
+  // Override renderSlots to add a radio checkbox to the fillModeSlot row.
+  override renderSlots(ctx: Ctx2D): void {
+    super.renderSlots(ctx)   // draws all rows and populates _slotBounds
+
+    const SLOT_H  = 26
+    const SLOT_GAP = 4
+    const PANEL_X  = 300
+    const LABEL_W  = 78
+    const idx = this.slots.indexOf(this.fillModeSlot)
+    if (idx < 0) return
+
+    const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
+    const midY = y + SLOT_H / 2
+    // Checkbox sits at the right edge of the label column.
+    const cbx  = PANEL_X + LABEL_W - 14
+    const cbr  = 5
+
+    // Store toggle bounds (full label column height for easy clicking).
+    this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
+    ctx.stroke()
+    if (this._filled) {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.beginPath()
+      ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
   // ----------------------------------------------------------
   // Hit testing
   // ----------------------------------------------------------
@@ -160,6 +210,13 @@ export abstract class ShapeLayer extends Layer implements PointSource {
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
+    // Toggle checkbox
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return this
+    }
+    // Shape handles
     const r2 = HIT_R * HIT_R
     for (const h of this._handlePositions()) {
       const dx = point.x - h.x
@@ -174,6 +231,17 @@ export abstract class ShapeLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    // Toggle fill/outline via checkbox click
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) {
+        this._filled = !this._filled
+        this.markDirty()
+        return true
+      }
+    }
+
     const handles = this._handlePositions()
     let best = -1, bestD2 = HIT_R * HIT_R
     for (let i = 0; i < handles.length; i++) {

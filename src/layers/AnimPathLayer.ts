@@ -4,6 +4,7 @@ import {
   ValueType,
   type Amount, type AmountSource,
   type Point,  type PointSource,
+  type EventValue, type EventSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -13,11 +14,10 @@ import { graph } from '../dataflow/Graph.js'
 // ------------------------------------------------------------
 //
 // Inputs:
-//   shapeSlot  (Point) — a shape or path layer whose perimeter is sampled.
-//                        If the source implements samplePerimeter(t) the
-//                        layer samples the perimeter directly at the current
-//                        phase; otherwise falls back to getPoint().
-//   phaseSlot  (Amount) — position along the perimeter [0, 1]
+//   shapeSlot    (Point)  — shape/path whose perimeter is sampled
+//   phaseSlot    (Amount) — position along the perimeter [0, 1]
+//   runModeSlot  (Event)  — each pulse toggles run/stop; click the
+//                           radio checkbox to toggle directly
 //
 // Output:
 //   Point — the canvas coordinate at the current phase on the shape
@@ -26,22 +26,33 @@ const ACCENT  = '#cf7ecf'   // purple, distinct from shape amber
 const RING_R  = 10
 const DOT_R   = 3
 
+// Slot-row constants (must match Layer.ts renderSlots)
+const SLOT_H   = 26
+const SLOT_GAP = 4
+const PANEL_X  = 300
+const LABEL_W  = 78
+
 export class AnimPathLayer extends Layer implements PointSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
-  readonly shapeSlot: ParameterSlot
-  readonly phaseSlot: ParameterSlot
+  readonly shapeSlot:   ParameterSlot
+  readonly phaseSlot:   ParameterSlot
+  readonly runModeSlot: ParameterSlot
 
-  private _phase:        number = 0
-  private _currentPoint: Point
+  private _phase:         number = 0
+  private _currentPoint:  Point
+  private _running        = true
+  private _lastEventTime: EventValue = null
+  private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
 
   constructor(cx: number, cy: number) {
     super()
     this._currentPoint = { x: cx, y: cy }
 
-    this.shapeSlot = new ParameterSlot(ValueType.Point,  this, 'shape')
-    this.phaseSlot = new ParameterSlot(ValueType.Amount, this, 'phase')
-    this.slots.push(this.shapeSlot, this.phaseSlot)
+    this.shapeSlot   = new ParameterSlot(ValueType.Point,  this, 'shape')
+    this.phaseSlot   = new ParameterSlot(ValueType.Amount, this, 'phase')
+    this.runModeSlot = new ParameterSlot(ValueType.Event,  this, 'run mode')
+    this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot)
 
     graph.register(this)
   }
@@ -54,16 +65,25 @@ export class AnimPathLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    if (this.phaseSlot.isActive) {
+    // Toggle run/stop on each new event pulse.
+    if (this.runModeSlot.isActive) {
+      const t = (this.runModeSlot.source as EventSource).getEventTime()
+      if (t !== null && t !== this._lastEventTime) {
+        this._lastEventTime = t
+        this._running = !this._running
+      }
+    }
+
+    // Only advance the phase when running.
+    if (this._running && this.phaseSlot.isActive) {
       this._phase = (this.phaseSlot.source as AmountSource).getAmount() as Amount
     }
+
     if (this.shapeSlot.isActive) {
       const src = this.shapeSlot.source as Record<string, unknown>
       if (typeof src['samplePerimeter'] === 'function') {
-        // Shape layer — sample the perimeter at the current phase.
         this._currentPoint = (src['samplePerimeter'] as (t: number) => Point)(this._phase)
       } else {
-        // Generic point source — just use its current output.
         this._currentPoint = (this.shapeSlot.source as PointSource).getPoint()
       }
     }
@@ -76,6 +96,7 @@ export class AnimPathLayer extends Layer implements PointSource {
   renderSelf(ctx: Ctx2D): void {
     const { x, y } = this._currentPoint
     ctx.save()
+    ctx.globalAlpha = this._running ? 1 : 0.45
     ctx.strokeStyle = ACCENT
     ctx.lineWidth   = 2
     ctx.beginPath()
@@ -92,6 +113,63 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
   }
+
+  // Draw radio checkbox overlay on the runModeSlot row.
+  override renderSlots(ctx: Ctx2D): void {
+    super.renderSlots(ctx)
+
+    const idx = this.slots.indexOf(this.runModeSlot)
+    if (idx < 0) return
+
+    const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
+    const midY = y + SLOT_H / 2
+    const cbx  = PANEL_X + LABEL_W - 14
+    const cbr  = 5
+
+    this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
+    ctx.stroke()
+    if (this._running) {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.beginPath()
+      ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+  }
+
+  // ----------------------------------------------------------
+  // Interaction
+  // ----------------------------------------------------------
+
+  get isInteractive(): boolean { return this._toggleBounds !== null }
+
+  protected override hitTestSelf(point: Point): this | null {
+    if (this._toggleBounds === null) return null
+    const b = this._toggleBounds
+    if (point.x >= b.x && point.x <= b.x + b.width &&
+        point.y >= b.y && point.y <= b.y + b.height) return this
+    return null
+  }
+
+  handlePointerDown(point: Point): boolean {
+    if (this._toggleBounds === null) return false
+    const b = this._toggleBounds
+    if (point.x >= b.x && point.x <= b.x + b.width &&
+        point.y >= b.y && point.y <= b.y + b.height) {
+      this._running = !this._running
+      this.markDirty()
+      return true
+    }
+    return false
+  }
+
+  handlePointerUp(): void {}
 
   // ----------------------------------------------------------
   // Private
@@ -116,7 +194,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
     ctx.font         = '11px monospace'
     ctx.textBaseline = 'middle'
-    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
+    ctx.fillStyle    = this._running ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.40)'
     ctx.textAlign    = 'left'
     ctx.fillText('AnimPath', x + 12, midY)
 

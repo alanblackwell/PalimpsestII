@@ -4,6 +4,7 @@ import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
+import { ClockLayer }        from '../layers/ClockLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
@@ -49,6 +50,15 @@ interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 const refreshStack = (selectLayer?: Layer) => {
   let top: Layer = menuLayer
   while (top.layerAbove !== null) top = top.layerAbove
+
+  // Wire the first ClockLayer found in the stack to the evaluator so the
+  // render loop runs continuously while a clock is present.
+  let clock: ClockLayer | null = null
+  for (let l: Layer | null = top; l !== null; l = l.layerBelow) {
+    if (l instanceof ClockLayer) { clock = l; break }
+  }
+  evaluator.setClock(clock)
+
   evaluator.setStack(top)
   widget.setStack(top)
   interaction.setStack(top)

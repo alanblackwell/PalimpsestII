@@ -9,13 +9,21 @@ export class RectLayer extends ShapeLayer {
     angle: number,
     colour: Colour,
     opacity: number,
+    filled: boolean,
   ): void {
+    const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
     ctx.globalAlpha = opacity
-    ctx.fillStyle = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.translate(cx, cy)
     ctx.rotate(angle)
-    ctx.fillRect(-w / 2, -h / 2, w, h)
+    if (filled) {
+      ctx.fillStyle = css
+      ctx.fillRect(-w / 2, -h / 2, w, h)
+    } else {
+      ctx.strokeStyle = css
+      ctx.lineWidth   = 2
+      ctx.strokeRect(-w / 2, -h / 2, w, h)
+    }
     ctx.restore()
   }
 

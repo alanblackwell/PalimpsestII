@@ -9,13 +9,21 @@ export class EllipseLayer extends ShapeLayer {
     angle: number,
     colour: Colour,
     opacity: number,
+    filled: boolean,
   ): void {
+    const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
     ctx.globalAlpha = opacity
-    ctx.fillStyle = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.beginPath()
     ctx.ellipse(cx, cy, w / 2, h / 2, angle, 0, Math.PI * 2)
-    ctx.fill()
+    if (filled) {
+      ctx.fillStyle = css
+      ctx.fill()
+    } else {
+      ctx.strokeStyle = css
+      ctx.lineWidth   = 2
+      ctx.stroke()
+    }
     ctx.restore()
   }
 

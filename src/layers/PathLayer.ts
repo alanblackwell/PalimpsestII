@@ -71,8 +71,12 @@ const SAMPLES = 200
 export class PathLayer extends ShapeLayer {
   // types inherited from ShapeLayer: Set([ValueType.Point])
 
-  private _points:    Point[]
-  private _dragIndex: number = -1
+  private _points:          Point[]
+  private _dragIndex:       number = -1
+  private _specialDrag:     'center' | 'size' | null = null
+  private _dragStartPtr:    Point = { x: 0, y: 0 }
+  private _dragStartPts:    Point[] = []
+  private _dragStartCenter: Point = { x: 0, y: 0 }
 
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
@@ -84,7 +88,7 @@ export class PathLayer extends ShapeLayer {
   // ShapeLayer contract
   // ----------------------------------------------------------
 
-  /** Draw the filled spline. Called by ShapeLayer.renderSelf. */
+  /** Draw the spline. Called by ShapeLayer.renderSelf. */
   protected drawShape(
     ctx: Ctx2D,
     _cx: number, _cy: number,
@@ -92,9 +96,10 @@ export class PathLayer extends ShapeLayer {
     _angle: number,
     colour: Colour,
     opacity: number,
+    filled: boolean,
   ): void {
     if (this._points.length < 2) return
-    const c = colour
+    const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
     ctx.globalAlpha = opacity
 
@@ -105,8 +110,14 @@ export class PathLayer extends ShapeLayer {
       else         ctx.lineTo(pt.x, pt.y)
     }
     ctx.closePath()
-    ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
-    ctx.fill()
+    if (filled) {
+      ctx.fillStyle = css
+      ctx.fill()
+    } else {
+      ctx.strokeStyle = css
+      ctx.lineWidth   = 2
+      ctx.stroke()
+    }
 
     ctx.restore()
   }
@@ -132,10 +143,47 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return this
+    }
+    const r2 = HIT_R * HIT_R
+    const c  = this._centroid()
+    if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) return this
+    const sh = this._sizeHandlePos()
+    if ((point.x - sh.x) ** 2 + (point.y - sh.y) ** 2 <= r2) return this
     return this._nearest(point) >= 0 ? this : null
   }
 
   override handlePointerDown(point: Point): boolean {
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) {
+        this._filled = !this._filled
+        this.markDirty()
+        return true
+      }
+    }
+    const r2 = HIT_R * HIT_R
+    const c  = this._centroid()
+    if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) {
+      this._specialDrag     = 'center'
+      this._dragStartPtr    = { ...point }
+      this._dragStartPts    = this._points.map(p => ({ ...p }))
+      this.markDirty()
+      return true
+    }
+    const sh = this._sizeHandlePos()
+    if ((point.x - sh.x) ** 2 + (point.y - sh.y) ** 2 <= r2) {
+      this._specialDrag     = 'size'
+      this._dragStartPtr    = { ...point }
+      this._dragStartPts    = this._points.map(p => ({ ...p }))
+      this._dragStartCenter = c
+      this.markDirty()
+      return true
+    }
     const idx = this._nearest(point)
     if (idx < 0) return false
     this._dragIndex = idx
@@ -144,19 +192,53 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerMove(point: Point): void {
-    if (this._dragIndex < 0) return
-    this._points[this._dragIndex] = { ...point }
-    this.markDirty()
+    if (this._specialDrag === 'center') {
+      const dx = point.x - this._dragStartPtr.x
+      const dy = point.y - this._dragStartPtr.y
+      this._points = this._dragStartPts.map(p => ({ x: p.x + dx, y: p.y + dy }))
+      this.markDirty()
+      return
+    }
+    if (this._specialDrag === 'size') {
+      const c0   = this._dragStartCenter
+      const d0   = Math.hypot(this._dragStartPtr.x - c0.x, this._dragStartPtr.y - c0.y)
+      const d1   = Math.hypot(point.x - c0.x, point.y - c0.y)
+      const scale = d0 > 0 ? d1 / d0 : 1
+      this._points = this._dragStartPts.map(p => ({
+        x: c0.x + (p.x - c0.x) * scale,
+        y: c0.y + (p.y - c0.y) * scale,
+      }))
+      this.markDirty()
+      return
+    }
+    if (this._dragIndex >= 0) {
+      this._points[this._dragIndex] = { ...point }
+      this.markDirty()
+    }
   }
 
   override handlePointerUp(): void {
-    this._dragIndex = -1
+    this._specialDrag = null
+    this._dragIndex   = -1
     this.markDirty()
   }
 
   // ----------------------------------------------------------
   // Private helpers
   // ----------------------------------------------------------
+
+  private _centroid(): Point {
+    if (this._points.length === 0) return { x: 0, y: 0 }
+    const x = this._points.reduce((s, p) => s + p.x, 0) / this._points.length
+    const y = this._points.reduce((s, p) => s + p.y, 0) / this._points.length
+    return { x, y }
+  }
+
+  private _sizeHandlePos(): Point {
+    const c    = this._centroid()
+    const maxR = this._points.reduce((r, p) => Math.max(r, Math.hypot(p.x - c.x, p.y - c.y)), 0)
+    return { x: c.x + maxR + 24, y: c.y }
+  }
 
   private _nearest(p: Point): number {
     const r2 = HIT_R * HIT_R
@@ -212,9 +294,12 @@ export class PathLayer extends ShapeLayer {
 
   private _drawControlHandles(ctx: Ctx2D): void {
     if (this._points.length < 2) return
+    const c  = this._centroid()
+    const sh = this._sizeHandlePos()
+
     ctx.save()
 
-    // Spline outline (edit-mode overlay, brighter than fill)
+    // Spline outline (edit-mode overlay)
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
       const pt = samplePath(this._points, i / SAMPLES)
@@ -226,6 +311,16 @@ export class PathLayer extends ShapeLayer {
     ctx.lineWidth   = 1.5
     ctx.setLineDash([])
     ctx.stroke()
+
+    // Dashed line from centre to size handle
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(c.x, c.y)
+    ctx.lineTo(sh.x, sh.y)
+    ctx.stroke()
+    ctx.setLineDash([])
 
     // Control point handles
     for (let i = 0; i < this._points.length; i++) {
@@ -239,6 +334,25 @@ export class PathLayer extends ShapeLayer {
       ctx.fill()
       ctx.stroke()
     }
+
+    // Centre handle (amber filled circle)
+    const litC = this._specialDrag === 'center'
+    ctx.fillStyle   = litC ? '#ffffff' : ACCENT
+    ctx.strokeStyle = litC ? ACCENT : 'rgba(0,0,0,0.50)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.arc(c.x, c.y, CP_R + 2, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
+
+    // Size handle (white square)
+    const litS = this._specialDrag === 'size'
+    const hs   = CP_R
+    ctx.fillStyle   = litS ? ACCENT : 'rgba(255,255,255,0.85)'
+    ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+    ctx.lineWidth   = 1
+    ctx.fillRect(sh.x - hs, sh.y - hs, hs * 2, hs * 2)
+    ctx.strokeRect(sh.x - hs, sh.y - hs, hs * 2, hs * 2)
 
     ctx.restore()
   }
