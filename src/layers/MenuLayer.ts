@@ -17,6 +17,7 @@ import { DirectionLayer }  from './DirectionLayer.js'
 import { MathLayer }       from './MathLayer.js'
 import { TextLayer }       from './TextLayer.js'
 import { ImageLayer }      from './ImageLayer.js'
+import { EdgePathLayer }   from './EdgePathLayer.js'
 import { MaskLayer }       from './MaskLayer.js'
 import { CompositeLayer }  from './CompositeLayer.js'
 import { FilterLayer }     from './FilterLayer.js'
@@ -112,6 +113,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
   { label: 'Text',       colour: '#888888', factory: ()         => new TextLayer('Text') },
   { label: 'Image',      colour: '#7ecf7e', factory: ()         => new ImageLayer() },
+  { label: 'EdgePath',   colour: '#cf9f7e', factory: ()         => new EdgePathLayer() },
   { label: 'Mask',       colour: '#cfcf7e', factory: (_,__,w,h) => new MaskLayer(w, h) },
   { label: 'Composite',  colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
   { label: 'Filter',     colour: '#7ecf7e', factory: (_,__,w,h) => new FilterLayer(w, h) },
