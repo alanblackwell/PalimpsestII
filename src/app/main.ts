@@ -55,8 +55,8 @@ const refreshStack = (selectLayer?: Layer) => {
 }
 
 // MenuLayer sits at the very top.
-const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
-  refreshStack(newLayer)
+const menuLayer = new MenuLayer(canvas.width, canvas.height, (_newLayer) => {
+  refreshStack(menuLayer)
 })
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
