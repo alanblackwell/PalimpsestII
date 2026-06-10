@@ -5,6 +5,7 @@ import { Layer }             from '../core/Layer.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
+import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
@@ -80,25 +81,37 @@ const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
       }
     }
 
-    // Auto-bind phase slot to a ClockLayer, creating one if none exists.
+    // Auto-bind phase slot to a Rate or Clock layer, creating both if needed.
     if (!newLayer.phaseSlot.isActive) {
-      let clock: ClockLayer | null = null
+      // Search the whole stack for the first Rate or Clock layer.
+      let phaseSource: RateLayer | ClockLayer | null = null
       for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
-        if (l instanceof ClockLayer) { clock = l; break }
+        if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
       }
-      if (clock === null) {
+      if (phaseSource === null) {
         for (let l: Layer | null = newLayer.layerAbove; l !== null; l = l.layerAbove) {
-          if (l instanceof ClockLayer) { clock = l; break }
+          if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
         }
       }
-      if (clock === null) {
-        clock = new ClockLayer()
+
+      // If neither exists, create Clock → Rate and use Rate as the phase source.
+      if (phaseSource === null) {
+        const below = newLayer.layerBelow
+        const clock = new ClockLayer()
         clock.debugName = 'Clock'
         clock.bounds = { ...newLayer.bounds }
-        const below = newLayer.layerBelow
         if (below !== null) clock.insertAbove(below)
+
+        const rate = new RateLayer(1.0)
+        rate.debugName = 'Rate'
+        rate.bounds = { ...newLayer.bounds }
+        rate.insertAbove(clock)
+
+        BindingLayer.create(clock, rate.timeSlot)
+        phaseSource = rate
       }
-      BindingLayer.create(clock, newLayer.phaseSlot)
+
+      BindingLayer.create(phaseSource, newLayer.phaseSlot)
     }
   }
   refreshStack(menuLayer)
