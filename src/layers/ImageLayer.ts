@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
@@ -8,7 +9,6 @@ import {
   type Amount,     type AmountSource,
   type Ctx2D,
 } from '../core/types.js'
-import { Node } from '../core/Node.js'
 import { graph } from '../dataflow/Graph.js'
 
 // ------------------------------------------------------------
@@ -20,38 +20,42 @@ import { graph } from '../dataflow/Graph.js'
 //
 // Input slots:
 //   positionSlot  (Point)  — canvas anchor (centre of image).
-//                            Unbound default: { x: 400, y: 300 }.
+//                            Unbound default: canvas centre.
 //   opacitySlot   (Amount) — globalAlpha [0, 1].
 //                            Unbound default: 1.0.
 //   scaleSlot     (Amount) — maps [0, 1] → [MIN_SCALE, MAX_SCALE].
 //                            Unbound default: 1.0 (natural size).
 //
-// Image loading:
-//   Click [📁] to open a native file picker and load any browser-
-//   supported image format via createImageBitmap().  The previous
-//   bitmap is closed to free GPU memory.
-//
-// Rendering:
-//   Two components like PointLayer / TextLayer:
-//     1. Stack panel at this.bounds — filename, dimensions, slot
-//        indicators, [📁] load button.
-//     2. Canvas image drawn centred on the position point, at the
-//        resolved scale and opacity.  A thin border is drawn when
-//        no image is loaded yet.
-//
-// Visual layout of the stack panel (height ≈ 36 px):
-//
-//   ┌──────────────────────────────────────────────────────────┐
-//   │ ▌  sunset.jpg  800×600       pos ●  α ●  sc ●   [📁]  │
-//   └──────────────────────────────────────────────────────────┘
+// Transform handles (visible on canvas when slot is unbound):
+//   ⊕  Move handle    — circle+crosshair at image centre; drag to reposition.
+//   □  Scale handle   — square at lower-right; drag distance from centre to scale.
+//   ○  Rotate handle  — circle above centre on a dashed arm; drag angle to rotate.
+//   Handles glow brightly (shadowBlur) for visibility over any content.
 
-const ACCENT     = '#7ecf7e'   // Image type colour (from BindingLayer table)
+const ACCENT     = '#7ecf7e'
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
-// Button geometry
+// Panel button geometry
 const BTN   = 22
 const BTN_M = 6
+
+// Handle geometry
+const HANDLE_R   = 7    // circle handle radius (px)
+const HANDLE_SZ  = 6    // square handle half-size (px)
+const ROT_ARM    = 85   // rotate handle arm length from centre (px)
+const SCALE_OX   = 70   // scale handle offset in image-local x (px)
+const SCALE_OY   = 70   // scale handle offset in image-local y (px)
+const HANDLE_HIT = 14   // pointer hit-test radius (px)
+
+type DragState =
+  | { type: 'move';   startMouse: Point; startPos: Point }
+  | { type: 'scale';  startDist: number; startScale: number; center: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+
+function ptDist(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
 
 export class ImageLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
@@ -65,6 +69,12 @@ export class ImageLayer extends Layer implements ImageSource {
   private _natW:     number     = 0
   private _natH:     number     = 0
   private _dragOver: boolean    = false
+
+  // Direct-manipulation state (persist across recompute when slot is unbound)
+  private _rotation:       number       = 0
+  private _manualPosition: Point | null = null
+  private _manualScale:    number | null = null
+  private _drag:           DragState | null = null
 
   // Resolved values (updated in recompute)
   private _position: Point  = { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
@@ -141,7 +151,7 @@ export class ImageLayer extends Layer implements ImageSource {
   protected recompute(): void {
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
-      : { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+      : this._manualPosition ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
 
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
@@ -151,7 +161,7 @@ export class ImageLayer extends Layer implements ImageSource {
       const t = (this._scaleSlot.source as AmountSource).getAmount() as Amount
       this._scale = MIN_SCALE + t * (MAX_SCALE - MIN_SCALE)
     } else {
-      this._scale = 1.0
+      this._scale = this._manualScale ?? 1.0
     }
   }
 
@@ -160,15 +170,87 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    // Load button (panel strip) — highest priority
     if (boundingBoxContains(this._loadBtnBounds(), point)) {
       this.openFilePicker()
       return true
     }
+
+    const hp = this._handlePos()
+
+    // Rotate handle — always draggable (no slot controls rotation)
+    if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+      this._drag = {
+        type: 'rotate',
+        center:     { ...this._position },
+        startAngle: Math.atan2(point.y - this._position.y, point.x - this._position.x),
+        startRot:   this._rotation,
+      }
+      return true
+    }
+
+    // Scale handle — only when scaleSlot is unbound
+    if (!this._scaleSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) {
+      this._drag = {
+        type:       'scale',
+        center:     { ...this._position },
+        startDist:  Math.max(1, ptDist(point, this._position)),
+        startScale: this._scale,
+      }
+      return true
+    }
+
+    // Move handle — only when positionSlot is unbound
+    if (!this._positionSlot.isActive && ptDist(point, hp.move) <= HANDLE_HIT) {
+      this._drag = {
+        type:       'move',
+        startMouse: { ...point },
+        startPos:   { ...this._position },
+      }
+      return true
+    }
+
     return false
   }
 
+  handlePointerMove(point: Point): void {
+    if (this._drag === null) return
+
+    if (this._drag.type === 'move') {
+      this._manualPosition = {
+        x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
+        y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      }
+    } else if (this._drag.type === 'scale') {
+      const d = Math.max(1, ptDist(point, this._drag.center))
+      const s = this._drag.startScale * (d / this._drag.startDist)
+      this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
+    } else {
+      // rotate
+      const angle = Math.atan2(
+        point.y - this._drag.center.y,
+        point.x - this._drag.center.x,
+      )
+      this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+    }
+    this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._drag = null
+  }
+
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    // Panel strip
+    if (boundingBoxContains(this.bounds, point)) return this
+    // Capture all events while dragging
+    if (this._drag !== null) return this
+    // Transform handles (canvas space)
+    const hp = this._handlePos()
+    if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
+    if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
+    if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    return null
   }
 
   // ----------------------------------------------------------
@@ -206,9 +288,8 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.fill()
 
     // Filename / placeholder
-    const loadB   = this._loadBtnBounds()
-    const textL   = x + 12
-    const textR   = loadB.x - 60   // leave room for slot indicators
+    const loadB = this._loadBtnBounds()
+    const textL = x + 12
     ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
@@ -233,7 +314,7 @@ export class ImageLayer extends Layer implements ImageSource {
     let dx = loadB.x - 6
     ctx.font = '9px monospace'
     for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label } = slots[i]
+      const { slot, label } = slots[i]!
       const active = slot.isActive
       ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
@@ -258,24 +339,26 @@ export class ImageLayer extends Layer implements ImageSource {
 
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
+    ctx.translate(px, py)
+    ctx.rotate(this._rotation)
 
     if (this._bitmap !== null) {
       const w = this._natW * this._scale
       const h = this._natH * this._scale
-      ctx.drawImage(this._bitmap, px - w / 2, py - h / 2, w, h)
+      ctx.drawImage(this._bitmap, -w / 2, -h / 2, w, h)
     } else {
       // Placeholder: dashed rectangle centred on the position.
       const pw = 120, ph = 80
       ctx.strokeStyle = 'rgba(126,207,126,0.40)'
       ctx.lineWidth   = 1.5
       ctx.setLineDash([4, 4])
-      ctx.strokeRect(px - pw / 2, py - ph / 2, pw, ph)
+      ctx.strokeRect(-pw / 2, -ph / 2, pw, ph)
       ctx.setLineDash([])
       ctx.font         = '11px monospace'
       ctx.fillStyle    = 'rgba(126,207,126,0.50)'
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText('no image', px, py)
+      ctx.fillText('no image', 0, 0)
     }
 
     ctx.restore()
@@ -300,6 +383,103 @@ export class ImageLayer extends Layer implements ImageSource {
       ctx.fillText('Drop image here', cw / 2, ch / 2)
       ctx.restore()
     }
+
+    // Transform handles — drawn at full opacity above image content.
+    this._renderHandles(ctx)
+  }
+
+  // ── Transform handles ────────────────────────────────────────
+
+  private _handlePos() {
+    const { x: px, y: py } = this._position
+    const cos = Math.cos(this._rotation)
+    const sin = Math.sin(this._rotation)
+
+    return {
+      move: { x: px, y: py },
+      // Scale handle: (SCALE_OX, SCALE_OY) rotated into world space → lower-right
+      scale: {
+        x: px + SCALE_OX * cos - SCALE_OY * sin,
+        y: py + SCALE_OX * sin + SCALE_OY * cos,
+      },
+      // Rotate handle: (0, -ROT_ARM) rotated into world space → directly above when rot=0
+      rotate: {
+        x: px + ROT_ARM * sin,
+        y: py - ROT_ARM * cos,
+      },
+    }
+  }
+
+  private _renderHandles(ctx: Ctx2D): void {
+    const hp = this._handlePos()
+
+    ctx.save()
+    ctx.setLineDash([])
+
+    // Dashed arm lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.38)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(hp.move.x, hp.move.y)
+    ctx.lineTo(hp.rotate.x, hp.rotate.y)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(hp.move.x, hp.move.y)
+    ctx.lineTo(hp.scale.x, hp.scale.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Scale handle — square, cyan glow (dimmed when slot bound)
+    this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
+      this._scaleSlot.isActive ? '#666688' : '#81d4fa')
+
+    // Rotate handle — circle, orange glow
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+
+    // Move handle — circle + crosshair, white glow (dimmed when slot bound)
+    this._drawGlowCircle(ctx, hp.move, HANDLE_R,
+      this._positionSlot.isActive ? '#666688' : '#ffffff')
+    const cr = HANDLE_R - 2
+    ctx.strokeStyle = 'rgba(0,0,0,0.80)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.moveTo(hp.move.x - cr, hp.move.y)
+    ctx.lineTo(hp.move.x + cr, hp.move.y)
+    ctx.moveTo(hp.move.x, hp.move.y - cr)
+    ctx.lineTo(hp.move.x, hp.move.y + cr)
+    ctx.stroke()
+
+    ctx.restore()
+  }
+
+  private _drawGlowCircle(ctx: Ctx2D, pt: Point, r: number, glowColour: string): void {
+    ctx.save()
+    ctx.shadowColor = glowColour
+    ctx.shadowBlur  = 14
+    ctx.beginPath()
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'
+    ctx.fill()
+    ctx.restore()
+    // Dark outline drawn without shadow
+    ctx.beginPath()
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+  }
+
+  private _drawGlowSquare(ctx: Ctx2D, pt: Point, s: number, glowColour: string): void {
+    ctx.save()
+    ctx.shadowColor = glowColour
+    ctx.shadowBlur  = 14
+    ctx.fillStyle   = 'rgba(255,255,255,0.95)'
+    ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2)
+    ctx.restore()
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.lineWidth   = 1.5
+    ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2)
   }
 
   // ----------------------------------------------------------
