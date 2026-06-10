@@ -213,14 +213,15 @@ export class LayerStackWidget {
     const n  = this._layers.length
     // Test from topmost (drawn last, highest z) downward.
     // Hit area matches the *visible* portion of each card:
-    //   • current card and root (fully visible) → full ch
-    //   • all others → only the sp-pixel peek at their top edge
-    // This prevents the large topmost-card area from eating clicks
-    // that were intended for middle-stack cards.
+    //   • current card and topmost card (fully visible) → full card height
+    //   • all others → only the bottom sp pixels (the label strip), since
+    //     each card's upper portion is covered by the card above it in z-order
     for (let i = n - 1; i >= 0; i--) {
       const y    = this._cardY(i, sp)
-      const hitH = (i === ci || i === 0) ? ch : sp
-      if (pt.y >= y && pt.y < y + hitH) return this._layers[i] ?? null
+      const full = (i === ci || i === n - 1)
+      const hitY = full ? y : y + ch - sp
+      const hitH = full ? ch : sp
+      if (pt.y >= hitY && pt.y < hitY + hitH) return this._layers[i] ?? null
     }
     return null
   }
