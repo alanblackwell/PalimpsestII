@@ -211,6 +211,7 @@ export class InteractionSystem {
   // ----------------------------------------------------------
 
   private _handleDown(e: PointerEvent): void {
+    if (e.button !== 0) return   // only handle primary (left) button
     // If we are already tracking a pointer, ignore additional ones.
     // (Multi-touch is not yet supported.)
     if (this._active !== null || this._widgetCapture) return
