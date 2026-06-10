@@ -521,8 +521,6 @@ export class LayerStackWidget {
     this._canvas.focus()   // ensure canvas receives subsequent key events
     const hit = this._hitTest(pt)
     if (hit !== null) {
-      this._selected    = hit
-      Node.scheduleFrame()
       this._dragLayer   = hit
       const i           = this._layers.indexOf(hit)
       this._dragOffsetY = pt.y - this._cardY(i, this._spacing())
@@ -570,6 +568,10 @@ export class LayerStackWidget {
 
     if (this._dragging && this._dragLayer !== null && this._dropIndex >= 0) {
       this._commitDrop()
+    } else if (!this._dragging && this._dragLayer !== null) {
+      // Click (no drag) — select the layer now.
+      this._selected = this._dragLayer
+      Node.scheduleFrame?.()
     }
     this._dragging  = false
     this._dragLayer = null
