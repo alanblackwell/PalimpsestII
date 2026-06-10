@@ -258,6 +258,10 @@ export class InteractionSystem {
   }
 
   private _handleKey(e: KeyboardEvent): void {
+    // Let text inputs (textarea, input, contenteditable) handle their own keys.
+    if (e.target instanceof HTMLElement &&
+        e.target.closest('textarea, input, select, [contenteditable]')) return
+
     if (e.key === ' ') {
       this._spaceAction?.()
       e.preventDefault()
