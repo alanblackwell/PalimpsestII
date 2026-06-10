@@ -36,8 +36,18 @@ import { SliderRegion } from '../regions/SliderRegion.js'
 //
 // Height should be ~44 px to accommodate two label lines.
 
-const MAX_RATE  = 8     // Hz — slider full-right
+const MIN_RATE  = 0.001  // Hz — slider full-left
+const MAX_RATE  = 8      // Hz — slider full-right
 const ACCENT    = '#e87e7e'  // Rate type colour
+
+// Logarithmic mapping between slider [0,1] and Hz [MIN_RATE, MAX_RATE].
+const _logRange = Math.log(MAX_RATE / MIN_RATE)
+function sliderToHz(v: number): number {
+  return MIN_RATE * Math.exp(v * _logRange)
+}
+function hzToSlider(hz: number): number {
+  return Math.log(Math.max(MIN_RATE, Math.min(MAX_RATE, hz)) / MIN_RATE) / _logRange
+}
 
 export class RateLayer extends Layer implements AmountSource, RateSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Amount, ValueType.Rate])
@@ -56,8 +66,8 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
 
   constructor(initialRateHz: Rate = 1.0) {
     super()
-    this._rateHz     = Math.max(0, Math.min(MAX_RATE, initialRateHz))
-    const sliderInit = this._rateHz / MAX_RATE
+    this._rateHz     = Math.max(MIN_RATE, Math.min(MAX_RATE, initialRateHz))
+    const sliderInit = hzToSlider(this._rateHz)
     this._timeSlot   = new ParameterSlot(ValueType.Amount, this)
     this._rateSlider = new SliderRegion(this, sliderInit)
     this.slots.push(this._timeSlot)
@@ -93,7 +103,7 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
 
   protected recompute(): void {
     // Rate — from slider (no Rate input slot in this implementation).
-    this._rateHz = this._rateSlider.value * MAX_RATE
+    this._rateHz = sliderToHz(this._rateSlider.value)
     this._rateSlider.interactive  = true
     this._rateSlider.displayValue = this._rateSlider.value
 

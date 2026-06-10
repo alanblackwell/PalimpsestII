@@ -373,6 +373,10 @@ export class LayerStackWidget {
       const barH = Math.round(h * 0.25)
       ctx.fillStyle = tc + '1a'
       ctx.fillRect(0, 0, w, h)
+      // Rate layers have a rapidly-changing phase value — render the bar and
+      // counter very faint so they don't dominate the thumbnail.
+      ctx.save()
+      if (t.has(ValueType.Rate)) ctx.globalAlpha *= 0.12
       ctx.fillStyle = tc
       ctx.fillRect(0, h - barH, Math.round(amt * w), barH)
       ctx.fillStyle = 'rgba(255,255,255,0.70)'
@@ -380,6 +384,7 @@ export class LayerStackWidget {
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
       ctx.fillText(amt.toFixed(2), w / 2, (h - barH) / 2)
+      ctx.restore()
       this._drawLabel(ctx, layer, w, h)
       return
     }
