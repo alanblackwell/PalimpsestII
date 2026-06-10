@@ -23,30 +23,25 @@ import { graph } from '../dataflow/Graph.js'
 //
 // The final mask is the union of all active shapes plus the painted layer.
 //
-// Controls (rendered in a panel above the slot rows, x=300):
+// Controls (panel above the slot rows at x=300):
 //   [✎ paint]  — activate paint tool (white / include)
-//   [◻ erase]  — activate erase tool (restore painted areas to excluded)
-//   [−] sz [+] — decrease / increase brush size (4–100 px)
+//   [◻ erase]  — activate erase tool (removes painted areas)
+//   sz ──●──   — brush-size slider (4–100 px), drag to adjust
 //   [✕]        — clear all freehand paint
 //   [↺]        — clear paint and unbind all shape slots
 //
-// Canvas preview: a semi-transparent overlay of the current mask is
-// shown when this layer is selected.
-//
-// Press H to hide / show the LayerStackWidget if it covers part of
-// the canvas you want to paint.
+// Press H to hide/show the LayerStackWidget if it covers the canvas.
 
-const ACCENT       = '#cfcf7e'
-const BRUSH_MIN    =  4
-const BRUSH_MAX    = 100
-const BRUSH_STEP   =  4
+const ACCENT        = '#cfcf7e'
+const BRUSH_MIN     =  4
+const BRUSH_MAX     = 100
 const BRUSH_DEFAULT = 20
-const N_SHAPES     =  4
+const N_SHAPES      =  4
 
 // Tools-panel geometry (drawn at x=300, above the slot rows)
 const PANEL_X   = 300
 const TOOLS_H   = 44
-const TOOLS_GAP =  6    // gap between tools panel and first slot row
+const TOOLS_GAP =  6
 
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
@@ -56,10 +51,11 @@ export class MaskLayer extends Layer implements MaskSource {
   private _painted:   OffscreenCanvas
   private _offscreen: OffscreenCanvas
 
-  private _activeTool: 'paint' | 'erase' | null = null
-  private _brushSize = BRUSH_DEFAULT
-  private _isDrawing = false
-  private _lastPoint: Point | null = null
+  private _activeTool:    'paint' | 'erase' | null = null
+  private _brushSize      = BRUSH_DEFAULT
+  private _isDrawing      = false
+  private _sliderDragging = false
+  private _lastPoint:   Point | null = null
   private _cursorPoint: Point | null = null
 
   constructor() {
@@ -108,15 +104,13 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   // ----------------------------------------------------------
-  // Panel layout helpers
+  // Panel layout
   // ----------------------------------------------------------
 
-  // Y coordinate of the tools panel (same column as slot rows).
   private get _toolsY(): number {
     return 50 + this.bounds.height + 8
   }
 
-  // Push slot rows down below the tools panel.
   override get panelBottom(): number {
     return this._toolsY + TOOLS_H + TOOLS_GAP
   }
@@ -136,7 +130,6 @@ export class MaskLayer extends Layer implements MaskSource {
     }
   }
 
-  // Semi-transparent mask preview.
   private _drawMaskOverlay(ctx: Ctx2D): void {
     if (this._offscreen.width <= 1) return
     ctx.save()
@@ -145,7 +138,6 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.restore()
   }
 
-  // Simplified strip pill — accent + name + slot dots.
   private _drawStripPill(ctx: Ctx2D): void {
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
@@ -163,7 +155,6 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // Layer label
     ctx.fillStyle    = 'rgba(255,255,255,0.70)'
     ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
@@ -171,8 +162,7 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.fillText('Mask', x + 12, midY)
 
     // Slot indicator dots
-    const resetX = x + width - 10
-    let dx = resetX
+    let dx = x + width - 10
     ctx.font = '9px monospace'
     for (let i = this._shapeSlots.length - 1; i >= 0; i--) {
       const active = this._shapeSlots[i]!.isActive
@@ -189,49 +179,92 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.restore()
   }
 
-  // Tool controls panel above the slot rows.
   private _drawToolsPanel(ctx: Ctx2D): void {
-    const ty = this._toolsY
-    const tw = 260
+    const ty  = this._toolsY
+    const tw  = 260
+    const midY = ty + TOOLS_H / 2
 
     ctx.save()
 
-    // Background
     ctx.fillStyle = 'rgba(0,0,0,0.40)'
     ctx.beginPath()
     ctx.roundRect(PANEL_X, ty, tw, TOOLS_H, 6)
     ctx.fill()
 
-    // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     ctx.roundRect(PANEL_X, ty, 4, TOOLS_H, [4, 0, 0, 4])
     ctx.fill()
 
-    const midY = ty + TOOLS_H / 2
-
-    // [✎ paint] and [◻ erase] tool buttons
+    // Tool buttons
     this._drawToolBtn(ctx, this._paintBtnBounds(), '✎  paint', this._activeTool === 'paint', midY)
     this._drawToolBtn(ctx, this._eraseBtnBounds(), '◻  erase', this._activeTool === 'erase', midY)
 
-    // Brush size controls
-    const sb = this._sizeBounds()
+    // "sz" label
     ctx.fillStyle    = 'rgba(255,255,255,0.35)'
     ctx.font         = '9px monospace'
-    ctx.textAlign    = 'right'
+    ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('sz', sb.minus.x - 4, midY)
-    this._drawBtn(ctx, sb.minus, '−', 'rgba(255,255,255,0.60)')
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(String(this._brushSize), sb.label.x + sb.label.width / 2, midY)
-    this._drawBtn(ctx, sb.plus, '+', 'rgba(255,255,255,0.60)')
+    ctx.fillText('sz', PANEL_X + 128, midY)
+
+    // Brush-size slider
+    this._drawSlider(ctx)
 
     // [✕] clear and [↺] reset
     this._drawBtn(ctx, this._clearBtnBounds(), '✕', 'rgba(255,180,180,0.70)')
     this._drawBtn(ctx, this._resetBtnBounds(), '↺', 'rgba(255,255,255,0.50)')
+
+    ctx.restore()
+  }
+
+  private _drawSlider(ctx: Ctx2D): void {
+    const b      = this._sliderBounds()
+    const t      = (this._brushSize - BRUSH_MIN) / (BRUSH_MAX - BRUSH_MIN)
+    const thumbR = 7
+    const midY   = b.y + b.height / 2
+    const x1     = b.x + thumbR
+    const x2     = b.x + b.width - thumbR
+    const thumbX = x1 + t * (x2 - x1)
+
+    ctx.save()
+
+    // Track background
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'
+    ctx.lineWidth   = 4
+    ctx.lineCap     = 'round'
+    ctx.beginPath()
+    ctx.moveTo(x1, midY)
+    ctx.lineTo(x2, midY)
+    ctx.stroke()
+
+    // Filled portion
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth   = 4
+    ctx.beginPath()
+    ctx.moveTo(x1, midY)
+    ctx.lineTo(thumbX, midY)
+    ctx.stroke()
+
+    // Thumb
+    ctx.fillStyle = '#e8e8e8'
+    ctx.beginPath()
+    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
+    ctx.fill()
+
+    if (this._sliderDragging) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)'
+      ctx.lineWidth   = 1.5
+      ctx.beginPath()
+      ctx.arc(thumbX, midY, thumbR + 2.5, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+
+    // Size value above the thumb
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '9px monospace'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'bottom'
+    ctx.fillText(String(this._brushSize), thumbX, midY - thumbR - 1)
 
     ctx.restore()
   }
@@ -255,15 +288,11 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._activeTool !== null) return this
-    // Strip pill
-    if (boundingBoxContains(this.bounds, point)) return this
-    // Tools panel buttons
+    if (this._activeTool !== null || this._sliderDragging) return this
+    if (boundingBoxContains(this.bounds, point))            return this
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
-    const sb = this._sizeBounds()
-    if (boundingBoxContains(sb.minus, point)) return this
-    if (boundingBoxContains(sb.plus,  point)) return this
+    if (boundingBoxContains(this._sliderBounds(),   point)) return this
     if (boundingBoxContains(this._clearBtnBounds(), point)) return this
     if (boundingBoxContains(this._resetBtnBounds(), point)) return this
     return null
@@ -282,14 +311,10 @@ export class MaskLayer extends Layer implements MaskSource {
       this._activeTool = this._activeTool === 'erase' ? null : 'erase'
       this.markDirty(); return true
     }
-    const sb = this._sizeBounds()
-    if (boundingBoxContains(sb.minus, point)) {
-      this._brushSize = Math.max(BRUSH_MIN, this._brushSize - BRUSH_STEP)
-      this.markDirty(); return true
-    }
-    if (boundingBoxContains(sb.plus, point)) {
-      this._brushSize = Math.min(BRUSH_MAX, this._brushSize + BRUSH_STEP)
-      this.markDirty(); return true
+    if (boundingBoxContains(this._sliderBounds(), point)) {
+      this._sliderDragging = true
+      this._applySlider(point.x)
+      return true
     }
     if (boundingBoxContains(this._clearBtnBounds(), point)) {
       this._clearPaint(); return true
@@ -310,14 +335,30 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   handlePointerMove(point: Point): void {
+    if (this._sliderDragging) {
+      this._applySlider(point.x)
+      return
+    }
     this._cursorPoint = point
     if (this._isDrawing) this._applyBrush(point)
     this.markDirty()
   }
 
   handlePointerUp(): void {
-    this._isDrawing = false
-    this._lastPoint = null
+    this._sliderDragging = false
+    this._isDrawing      = false
+    this._lastPoint      = null
+  }
+
+  // ----------------------------------------------------------
+  // Slider
+  // ----------------------------------------------------------
+
+  private _applySlider(px: number): void {
+    const b = this._sliderBounds()
+    const t = Math.max(0, Math.min(1, (px - b.x) / b.width))
+    this._brushSize = Math.round(BRUSH_MIN + t * (BRUSH_MAX - BRUSH_MIN))
+    this.markDirty()
   }
 
   // ----------------------------------------------------------
@@ -396,7 +437,7 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   // ----------------------------------------------------------
-  // Button bounds (all relative to PANEL_X=300, _toolsY)
+  // Button / slider bounds
   // ----------------------------------------------------------
 
   private _paintBtnBounds() {
@@ -409,27 +450,20 @@ export class MaskLayer extends Layer implements MaskSource {
     return { x: PANEL_X + 66, y: ty + 8, width: 54, height: 28 }
   }
 
-  private _sizeBounds() {
-    const ty  = this._toolsY
-    const by  = ty + 10
-    const bh  = 24
-    // "sz" label is drawn separately; minus starts after a gap following erase btn
-    const mx  = PANEL_X + 140
-    return {
-      minus: { x: mx,      y: by, width: 18, height: bh },
-      label: { x: mx + 20, y: by, width: 26, height: bh },
-      plus:  { x: mx + 48, y: by, width: 18, height: bh },
-    }
+  // Slider track area (pointer hit zone).
+  private _sliderBounds() {
+    const ty = this._toolsY
+    return { x: PANEL_X + 142, y: ty + 6, width: 72, height: 32 }
   }
 
   private _clearBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 216, y: ty + 10, width: 22, height: 24 }
+    return { x: PANEL_X + 222, y: ty + 10, width: 18, height: 24 }
   }
 
   private _resetBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 242, y: ty + 10, width: 20, height: 24 }
+    return { x: PANEL_X + 244, y: ty + 10, width: 18, height: 24 }
   }
 
   // ----------------------------------------------------------
