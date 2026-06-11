@@ -176,7 +176,7 @@ export class TileLayer extends Layer implements ImageSource {
   handlePointerUp(): void {}
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return boundingBoxContains(this.canvasBounds, point) ? this : null
   }
 
   // ----------------------------------------------------------
@@ -190,7 +190,7 @@ export class TileLayer extends Layer implements ImageSource {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
 
@@ -259,13 +259,13 @@ export class TileLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   private _toggleBtnBounds() {
-    const { x, y, height } = this.bounds
+    const { x, y, height } = this.canvasBounds
     return { x: x + 12 + 30 + PAD_X, y: y + (height - BTN_H) / 2, width: BTN_W, height: BTN_H }
   }
 
   private _marginMinusBtnBounds() {
     const tb = this._toggleBtnBounds()
-    const { y, height } = this.bounds
+    const { y, height } = this.canvasBounds
     return { x: tb.x + tb.width + PAD_X, y: y + (height - STEP_BTN) / 2, width: STEP_BTN, height: STEP_BTN }
   }
 

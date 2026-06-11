@@ -185,7 +185,7 @@ export class SelectLayer extends Layer
   // ----------------------------------------------------------
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
 
     const midY = y + height / 2

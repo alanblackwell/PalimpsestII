@@ -150,7 +150,7 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   private _drawStripPill(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
 
@@ -300,7 +300,7 @@ export class MaskLayer extends Layer implements MaskSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._activeTool !== null || this._sliderDragging) return this
-    if (boundingBoxContains(this.bounds, point))            return this
+    if (boundingBoxContains(this.canvasBounds, point))      return this
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
     if (boundingBoxContains(this._sliderBounds(),   point)) return this

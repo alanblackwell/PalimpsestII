@@ -168,7 +168,7 @@ export class ClipLayer extends Layer implements ImageSource {
   renderPanel(ctx: Ctx2D): void {
     this._renderHandles(ctx)
 
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
 
@@ -219,7 +219,7 @@ export class ClipLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    if (boundingBoxContains(this.bounds, point)) return this
+    if (boundingBoxContains(this.canvasBounds, point)) return this
     if (this._drag !== null) return this
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this

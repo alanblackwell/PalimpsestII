@@ -145,6 +145,13 @@ export abstract class Layer extends Node {
     return 50 + this.bounds.height + 8
   }
 
+  // Bounds for the canvas-area status/control pill — right of the stack
+  // widget, above the slot rows. Layers that render a pill on the canvas
+  // should use this instead of this.bounds (which is hidden by the widget).
+  get canvasBounds(): { x: number; y: number; width: number; height: number } {
+    return { x: 300, y: 50, width: 260, height: this.bounds.height }
+  }
+
   // Render parameter-slot drop targets below the layer's canvas panel.
   // Called by the Evaluator after renderPanel so it is always present.
   renderSlots(ctx: Ctx2D): void {
@@ -164,6 +171,14 @@ export abstract class Layer extends Node {
     ctx.font         = '10px monospace'
     ctx.textBaseline = 'middle'
 
+    // Dark backdrop behind all slot rows
+    const _n = this.slots.length
+    const _totalH = _n * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(PANEL_X, y, PANEL_W, _totalH, 6)
+    ctx.fill()
+
     for (const slot of this.slots) {
       const isCompat = drag.active
                     && drag.source !== null
@@ -174,7 +189,7 @@ export abstract class Layer extends Node {
       this._slotBounds.set(slot, b)
 
       // Label
-      ctx.fillStyle = 'rgba(255,255,255,0.40)'
+      ctx.fillStyle = 'rgba(255,255,255,0.62)'
       ctx.textAlign = 'left'
       ctx.fillText(slot.label, PANEL_X + 6, y + SLOT_H / 2)
 
@@ -189,9 +204,9 @@ export abstract class Layer extends Node {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = tc + '22'
         ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
-        ctx.strokeStyle = tc + '99'; ctx.lineWidth = 1; ctx.setLineDash([])
+        ctx.strokeStyle = tc + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
-        ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.textAlign = 'left'
+        ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
         ctx.fillText(srcName, vx + 6, y + SLOT_H / 2)
       } else if (isCompat) {
         ctx.fillStyle = 'rgba(50,200,70,0.18)'
@@ -204,18 +219,18 @@ export abstract class Layer extends Node {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = tc + '11'
         ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
-        ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1
+        ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
         ctx.setLineDash([3, 3])
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.setLineDash([])
-        ctx.fillStyle = 'rgba(255,255,255,0.40)'; ctx.textAlign = 'left'
+        ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
         ctx.fillText('⏸ ' + srcName, vx + 6, y + SLOT_H / 2)
       } else {
-        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
+        ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
         ctx.setLineDash([3, 3])
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.setLineDash([])
-        ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.textAlign = 'left'
+        ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
         ctx.fillText('unbound', vx + 6, y + SLOT_H / 2)
       }
 

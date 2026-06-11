@@ -146,7 +146,7 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return boundingBoxContains(this.canvasBounds, point) ? this : null
   }
 
   // ----------------------------------------------------------
@@ -162,7 +162,7 @@ export class TransformLayer extends Layer implements ImageSource {
   // ── Stack panel ─────────────────────────────────────────────
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
 
     const midY = y + height / 2

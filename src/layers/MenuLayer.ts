@@ -29,6 +29,7 @@ import { SequencerLayer }  from './SequencerLayer.js'
 import { AnimPathLayer }   from './AnimPathLayer.js'
 import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
+import { FlashLayer }      from './FlashLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -103,11 +104,12 @@ const BUTTONS: BtnDef[] = [
   { label: 'Clock',      colour: '#e87e7e', factory: ()         => new ClockLayer() },
   { label: 'Rate',       colour: '#e87e7e', factory: ()         => new RateLayer(rndR(0.1, 2.0)) },
   { label: 'Event',      colour: '#e0e060', factory: ()         => new EventLayer() },
+  { label: 'Flash',      colour: '#e0e060', factory: ()         => new FlashLayer() },
   { label: 'Count',      colour: '#a0a0a0', factory: ()         => new CountLayer(0) },
   { label: 'Select',     colour: '#4a8fe8', factory: ()         => new SelectLayer() },
   { label: 'Direction',  colour: '#7ecfcf', factory: ()         => new DirectionLayer(rnd() * Math.PI * 2, rndR(0.2, 1.0)) },
   { label: 'Math',       colour: '#4a8fe8', factory: ()         => new MathLayer(2) },
-  { label: 'Collection', colour: '#a0a4b8', factory: ()         => new CollectionLayer([rnd(), rnd(), rnd(), rnd()]) },
+  { label: 'Collection', colour: '#7ecf7e', factory: ()         => new CollectionLayer() },
   { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
   { label: 'Path',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy, rndColour()) } },
   { label: 'AnimPath',   colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },

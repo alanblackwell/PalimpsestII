@@ -118,6 +118,9 @@ const refreshStack = (selectLayer?: Layer) => {
 
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+  if (newLayer instanceof CollectionLayer) {
+    newLayer.setEjectCallback(() => refreshStack())
+  }
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
@@ -187,6 +190,38 @@ interaction.setDeleteAction(() => {
   const nextSel = below ?? deletionLayer
   deletionLayer.archive(layer)
   refreshStack(nextSel)
+})
+
+// 'c' key — collect the layer below into a CollectionLayer.
+//
+// First press: create a Collection above the selected layer, ingest the
+//              selected layer into it, and select the Collection.
+//
+// Subsequent presses: selected layer IS already a CollectionLayer — ingest
+//                     the next non-infrastructure layer below it.
+interaction.setCollectionAction(() => {
+  const selected = widget.selected
+  if (selected === null || selected === menuLayer || selected === deletionLayer || selected === root) return
+
+  if (selected instanceof CollectionLayer) {
+    // Find the next ingestable layer below the collection.
+    let below: Layer | null = selected.layerBelow
+    while (below !== null && below.isInfrastructure) below = below.layerBelow
+    if (below === null || below === deletionLayer || below === root) return
+    selected.ingest(below)
+    refreshStack(selected)
+  } else {
+    // Create a new Collection, position it where the selected layer is.
+    const collection = new CollectionLayer()
+    Layer.assignDebugName(collection)
+    collection.bounds = { x: X, y: 24, width: W, height: 36 }
+    collection.setEjectCallback(() => refreshStack())
+    // Insert above the selected layer so it takes its stack position,
+    // then ingest the selected layer (removes it from the stack).
+    collection.insertAbove(selected)
+    collection.ingest(selected)
+    refreshStack(collection)
+  }
 })
 
 interaction.setBoundCallback((source, slot) => {

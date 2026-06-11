@@ -84,8 +84,9 @@ export class InteractionSystem {
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
-  private _spaceAction:    (() => void) | null = null
-  private _deleteAction:   (() => void) | null = null
+  private _spaceAction:      (() => void) | null = null
+  private _deleteAction:     (() => void) | null = null
+  private _collectionAction: (() => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
@@ -134,6 +135,11 @@ export class InteractionSystem {
   // Register a callback invoked when the user presses Delete.
   setDeleteAction(fn: () => void): void {
     this._deleteAction = fn
+  }
+
+  // Register a callback invoked when the user presses 'c' (collect).
+  setCollectionAction(fn: () => void): void {
+    this._collectionAction = fn
   }
 
   // Register a callback invoked when a bind-drag drop creates a binding.
@@ -311,7 +317,11 @@ export class InteractionSystem {
         Node.bindDrag.source = null
         if (src !== null && selected !== null) {
           const slot = selected.hitTestSlot(point)
-          if (slot !== null) this._onBound?.(src, slot)
+          if (slot !== null) {
+            this._onBound?.(src, slot)
+          } else {
+            this._tryIngest(src, selected, point)
+          }
         }
       } else {
         this._widget?.handlePointerUp(point)
@@ -328,18 +338,35 @@ export class InteractionSystem {
     this._updateHoverCursor(e)
   }
 
+  private _tryIngest(src: Node, selected: Layer, point: Point): void {
+    const s = selected as unknown as Record<string, unknown>
+    if (typeof s['ingest'] !== 'function') return
+    const zone = s['dropZoneBounds'] as { x: number; y: number; width: number; height: number } | undefined | null
+    if (!zone) return
+    if (point.x < zone.x || point.x > zone.x + zone.width ||
+        point.y < zone.y || point.y > zone.y + zone.height) return
+    ;(s['ingest'] as (l: Node) => void)(src)
+    this._refreshCallback?.()
+  }
+
   private _handleKey(e: KeyboardEvent): void {
     // Let text inputs (textarea, input, contenteditable) handle their own keys.
     if (e.target instanceof HTMLElement &&
         e.target.closest('textarea, input, select, [contenteditable]')) return
 
     if (e.key === ' ') {
+      this._closeInspector()
       this._spaceAction?.()
       e.preventDefault()
       return
     }
     if (e.key === 'Delete' || e.key === 'Backspace') {
       this._deleteAction?.()
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
+      this._collectionAction?.()
       e.preventDefault()
       return
     }

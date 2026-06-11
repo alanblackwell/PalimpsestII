@@ -448,7 +448,7 @@ export class TextLayer extends Layer {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    if (boundingBoxContains(this.bounds, point)) return this
+    if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     return null
   }
@@ -469,7 +469,7 @@ export class TextLayer extends Layer {
   // ── Main pill ─────────────────────────────────────────────────
 
   private _renderPanelImpl(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
 
@@ -714,7 +714,7 @@ export class TextLayer extends Layer {
   }
 
   private _editBtnBounds() {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     return { x: x + width - BTN_M - BTN, y: y + (height - BTN) / 2, width: BTN, height: BTN }
   }
 

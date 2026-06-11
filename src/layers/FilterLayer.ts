@@ -221,7 +221,7 @@ export class FilterLayer extends Layer implements ImageSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.bounds, point) ? this : null
+    return boundingBoxContains(this.canvasBounds, point) ? this : null
   }
 
   // ----------------------------------------------------------
@@ -238,7 +238,7 @@ export class FilterLayer extends Layer implements ImageSource {
   // ── Stack panel ─────────────────────────────────────────────
 
   renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
 
     const midY   = y + height / 2
@@ -345,7 +345,7 @@ export class FilterLayer extends Layer implements ImageSource {
   }
 
   private _prevBtnBounds() {
-    const { x, y, height } = this.bounds
+    const { x, y, height } = this.canvasBounds
     return { x: x + PAD_X, y: y + (height - BTN_H) / 2, width: BTN_W, height: BTN_H }
   }
 

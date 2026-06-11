@@ -264,7 +264,7 @@ export class ImageLayer extends Layer implements ImageSource {
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     // Panel strip
-    if (boundingBoxContains(this.bounds, point)) return this
+    if (boundingBoxContains(this.canvasBounds, point)) return this
     // Capture all events while dragging
     if (this._drag !== null) return this
     // Transform handles (canvas space)
@@ -291,7 +291,7 @@ export class ImageLayer extends Layer implements ImageSource {
   // ── Stack panel ─────────────────────────────────────────────
 
   private _renderPanelImpl(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
 
     const midY = y + height / 2
@@ -507,7 +507,7 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   private _loadBtnBounds() {
-    const { x, y, width, height } = this.bounds
+    const { x, y, width, height } = this.canvasBounds
     return { x: x + width - BTN_M - BTN, y: y + (height - BTN) / 2, width: BTN, height: BTN }
   }
 

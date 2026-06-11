@@ -2,7 +2,7 @@ import { Layer } from '../core/Layer.js'
 import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   type Colour, type ColourSource,
   type Point,  type PointSource,
   type Amount, type AmountSource,
@@ -201,36 +201,66 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     }
   }
 
-  // Override renderSlots to add a radio checkbox to the fillModeSlot row.
+  // Override renderSlots to add a fill-mode toggle button to the fillModeSlot row.
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)   // draws all rows and populates _slotBounds
 
-    const SLOT_H  = 26
+    const SLOT_H   = 26
     const SLOT_GAP = 4
     const PANEL_X  = 300
-    const LABEL_W  = 78
+    const PANEL_W  = 260
+    const BTN_SZ   = SLOT_H - 6   // square button size
     const idx = this.slots.indexOf(this.fillModeSlot)
     if (idx < 0) return
 
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
-    // Checkbox sits at the right edge of the label column.
-    const cbx  = PANEL_X + LABEL_W - 14
-    const cbr  = 5
 
-    // Store toggle bounds (full label column height for easy clicking).
-    this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+    // Button at far right of the row, vertically centred.
+    const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
+    const btnY = y + 3
 
+    // Store toggle bounds over the button only.
+    this._toggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+
+    const state   = this.fillModeSlot.state
+    const isActive    = state === SlotState.Bound
+    const isSuspended = state === SlotState.SuspendedBound
+
+    // Button background
     ctx.save()
-    ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+    if (isActive) {
+      ctx.fillStyle = ACCENT + '33'
+    } else if (isSuspended) {
+      ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    }
+    ctx.beginPath()
+    ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
+    ctx.fill()
+
+    // Border
+    ctx.strokeStyle = isActive ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    if (isSuspended) ctx.setLineDash([2, 2])
+    ctx.beginPath()
+    ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Fill indicator circle inside button
+    const cbr = 4
+    const colour = isActive ? ACCENT : isSuspended ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.70)'
+    ctx.strokeStyle = colour
     ctx.lineWidth   = 1.5
     ctx.beginPath()
-    ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
+    ctx.arc(btnX + BTN_SZ / 2, midY, cbr, 0, Math.PI * 2)
     ctx.stroke()
     if (this._filled) {
-      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.fillStyle = colour
       ctx.beginPath()
-      ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
+      ctx.arc(btnX + BTN_SZ / 2, midY, cbr - 2, 0, Math.PI * 2)
       ctx.fill()
     }
     ctx.restore()
@@ -264,12 +294,18 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Toggle fill/outline via checkbox click
+    // Toggle fill/outline via button click
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) {
-        this._filled = !this._filled
+        if (this.fillModeSlot.state === SlotState.Bound) {
+          this.fillModeSlot.suspend()
+        } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
+          this.fillModeSlot.resume()
+        } else {
+          this._filled = !this._filled
+        }
         this.markDirty()
         return true
       }
