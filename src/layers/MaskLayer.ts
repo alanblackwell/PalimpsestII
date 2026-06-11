@@ -51,7 +51,9 @@ export class MaskLayer extends Layer implements MaskSource {
   private _painted:   OffscreenCanvas
   private _offscreen: OffscreenCanvas
 
-  private _activeTool:    'paint' | 'erase' | null = null
+  readonly blockPixelPick = true
+
+  private _activeTool:    'paint' | 'erase' | null = 'paint'
   private _brushSize      = BRUSH_DEFAULT
   private _isDrawing      = false
   private _sliderDragging = false
@@ -129,7 +131,7 @@ export class MaskLayer extends Layer implements MaskSource {
     this._drawMaskOverlay(ctx)
     this._drawStripPill(ctx)
     this._drawToolsPanel(ctx)
-    if (this._activeTool !== null && this._cursorPoint !== null) {
+    if ((this._activeTool !== null || this._sliderDragging) && this._cursorPoint !== null) {
       this._drawBrushCursor(ctx)
     }
   }
@@ -322,6 +324,7 @@ export class MaskLayer extends Layer implements MaskSource {
     }
     if (boundingBoxContains(this._sliderBounds(), point)) {
       this._sliderDragging = true
+      this._cursorPoint    = point
       this._applySlider(point.x)
       return true
     }

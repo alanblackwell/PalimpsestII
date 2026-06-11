@@ -234,7 +234,12 @@ export class InteractionSystem {
 
     if (node === null || !isDraggable(node)) {
       // No interactive hit — pixel-pick to select a layer by rendered content.
-      if (this._widget !== null) {
+      // Suppressed when the selected layer sets blockPixelPick (e.g. MaskLayer,
+      // where painting begins in transparent areas).
+      const selected = this._widget?.selected ?? null
+      const blocked = selected !== null &&
+        (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
+      if (this._widget !== null && !blocked) {
         const picked = this._pickLayerAtPixel(point)
         if (picked !== null) {
           this._widget.selected = picked
