@@ -120,6 +120,7 @@ The canvas-space panel below the strip (slot rows) starts at `this.panelBottom`
 | `src/layers/MaskLayer.ts` | Composite mask: shape slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
+| `src/layers/TileLayer.ts` | Tile or fit an image's content bbox to cover the canvas |
 | `spec/architecture.md` | Detailed architecture specification |
 
 ## MaskLayer specifics (added June 2026)
@@ -230,6 +231,96 @@ If both are active the value is their average. Point slots take precedence over 
 **Slider override**: dragging the slider while any slots are active calls `BindingLayer.findForSlot(slot)?.toggle()` on all active slots, suspending them and handing control back to the user at the current value. `SliderRegion` gained a `setOnDragStart(fn)` callback to support this; the guard `if (!this._interactive) return false` in `handlePointerDown` was removed so that the slider is always draggable.
 
 Panel shows three slot indicators right-to-left: **A** (Amount, blue), **x** (Point, purple), **y** (Point, purple).
+
+## Layer.assignDebugName and parameter-slot click-to-create/select (added June 2026)
+
+`Layer.assignDebugName(layer)` (static, in `Layer.ts`) assigns a friendly
+`debugName` of the form `"<Type> <n>"` (class name with trailing `Layer`
+stripped + a per-type running counter in `Layer._typeCounters`). All layer
+creation sites (MenuLayer buttons, OS file drop, AnimPathLayer's auto-created
+Clock/Rate, the slot-click factory below) call this instead of setting
+`debugName` to a literal, so names stay unique and consistent everywhere.
+
+`renderSlots` in `Layer.ts` now also renders `SlotState.SuspendedBound` rows:
+a dashed outline plus a `⏸ <sourceDebugName>` label, distinct from the solid
+"bound" and dashed empty-slot styles.
+
+**Click on a parameter-slot row** of the selected layer (`InteractionSystem`
+checks this in `_handleDown`, before falling back to pixel-pick, via
+`setSlotClickCallback`):
+- **Empty slot** — looks up the slot's type in `DEFAULT_VALUE_LAYER` (main.ts),
+  constructs the canonical default layer for that type (e.g. `AmountLayer(0.5)`,
+  `ColourLayer(...)`, `PointLayer(centre)`), inserts it above the consumer,
+  binds it via `BindingLayer.create`, and selects it. `DEFAULT_VALUE_HEIGHT`
+  mirrors `MenuLayer.BUTTONS`' height overrides (only Colour needs 170px).
+- **Bound slot** — selects the layer feeding it. If that layer is currently
+  archived (`layer.outsideStack`), `DeletionLayer.removeFromArchive(layer)`
+  removes it from the archive list and it's reinserted above the consumer.
+
+## ColourLayer hue/position slots (added June 2026)
+
+`ColourLayer` gained two extra input slots, active only while the main
+Colour slot is unbound:
+
+- **hue slot** (Amount) — drives the hue strip; `amount [0,1] → hue [0,360)`
+- **position slot** (Point) — drives the SV cursor; canvas `x → saturation`,
+  `y → 1 - value`
+
+`ColourPickerRegion` gained `setHue`/`setSatVal` (driven from the slot
+values each `recompute`), and per-zone `hueInteractive`/`svInteractive`
+flags. Dragging a zone that's locked by an active slot calls
+`setOnHueDragStart`/`setOnSvDragStart`, which suspend that binding via
+`BindingLayer.findForSlot(slot)?.toggle()` — same pattern as
+`AmountLayer`'s slider-override. Slot indicators **P** (position) and **H**
+(hue) are drawn right-to-left in the panel using the ●/◐/○ Bound/Suspended/Unbound
+convention.
+
+Also fixed: `renderPanel` on both `ColourLayer` and `AmountLayer` was calling
+`_drawPill` twice (once for `this.bounds`, once for the canvas-space panel) —
+the duplicate call against `this.bounds` was removed.
+
+## Edit-mode drop shadow and depth fade (fixed June 2026)
+
+In `Evaluator.render()`, the current (selected/top) layer's drop shadow now
+uses the legacy `ctx.shadowColor` / `ctx.shadowBlur` / `ctx.shadowOffsetY`
+properties instead of `ctx.filter = 'drop-shadow(...)'` — the `filter` form
+is not rendered on older Safari.
+
+The progressive fade of layers below the top one is no longer done via
+`ctx.globalAlpha` (many layers' `renderSelf` set their own
+`ctx.globalAlpha = this._opacity`, clobbering a depth-based value set by the
+Evaluator). Instead, after rendering each non-top layer, a full-canvas
+`rgba(255,255,255,0.25)` rectangle is composited over everything rendered so
+far ("atmospheric haze") — layers further down accumulate more washes and
+fade toward white. Both effects only run in edit mode (the loop over
+`layers[]` in `render()`), never in display mode.
+
+## Transform handles are panel-only (fixed June 2026)
+
+`ImageLayer` and `ClipLayer` move/scale/rotate handles are now drawn in
+`renderPanel` (called only for the selected layer, never in display mode),
+not in `renderSelf` (composited for every layer in the stack and in display
+mode). `ImageLayer.renderPanel` calls `_renderPanelImpl` then
+`_renderHandles`; `ClipLayer.renderPanel` calls `_renderHandles` first, then
+its normal panel drawing.
+
+## TileLayer (added June 2026)
+
+`src/layers/TileLayer.ts` takes any `Image` source (`sourceSlot`), finds the
+bounding box of its non-transparent content (`_contentBbox` — exact
+full-resolution `getImageData` scan, no downsampling), and either:
+
+- **tile mode** (default) — repeats that bbox content horizontally and
+  vertically to cover the canvas, anchored to the bbox's original position.
+  An adjustable pixel `_margin` (default 0, `[−]`/`[+]` buttons in the panel)
+  adds a gap between copies.
+- **fit mode** — scales the bbox content up uniformly (using whichever
+  dimension needs the larger scale factor) so it covers the whole canvas,
+  centred.
+
+A `[Tile/Fit]` button in the panel toggles modes. `autoBindRules()` binds
+`sourceSlot` to the nearest `Image`-producing layer below, with
+`removeAfterBind: true`.
 
 ## Known issues / pre-existing tech debt
 

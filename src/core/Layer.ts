@@ -1,6 +1,6 @@
 import { Node } from './Node.js'
 import { ParameterSlot } from './ParameterSlot.js'
-import { ValueType }          from './types.js'
+import { ValueType, SlotState } from './types.js'
 import type { Ctx2D, Point }  from './types.js'
 
 const SLOT_TC: Partial<Record<ValueType, string>> = {
@@ -200,6 +200,16 @@ export abstract class Layer extends Node {
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
         ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, y + SLOT_H / 2)
+      } else if (slot.state === SlotState.SuspendedBound) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = tc + '11'
+        ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.40)'; ctx.textAlign = 'left'
+        ctx.fillText('⏸ ' + srcName, vx + 6, y + SLOT_H / 2)
       } else {
         ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
         ctx.setLineDash([3, 3])
@@ -222,6 +232,21 @@ export abstract class Layer extends Node {
           point.y >= b.y && point.y <= b.y + b.height) return slot
     }
     return null
+  }
+
+  // Per-type serial counters used by assignDebugName, e.g. "Colour 1",
+  // "Colour 2" — shared across however the layer was created (menu button,
+  // empty-slot click, drag-and-drop, auto-bind helpers, ...).
+  private static _typeCounters = new Map<string, number>()
+
+  // Assign a friendly debugName of the form "<Type> <n>", where <Type> is
+  // the layer's class name with any trailing "Layer" stripped, and <n> is
+  // a per-type running count.
+  static assignDebugName(layer: Layer): void {
+    const base = layer.constructor.name.replace(/Layer$/, '')
+    const n = (Layer._typeCounters.get(base) ?? 0) + 1
+    Layer._typeCounters.set(base, n)
+    layer.debugName = `${base} ${n}`
   }
 
   // Default bindings to create when this layer is first added to the stack.

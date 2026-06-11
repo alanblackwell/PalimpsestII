@@ -1,7 +1,7 @@
 import type { Layer }           from '../core/Layer.js'
 import { Node }                 from '../core/Node.js'
 import { ParameterSlot }        from '../core/ParameterSlot.js'
-import type { Point }           from '../core/types.js'
+import { SlotState, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 
@@ -87,6 +87,7 @@ export class InteractionSystem {
   private _spaceAction:    (() => void) | null = null
   private _deleteAction:   (() => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
+  private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
 
   // Inspector popup element (right-click on a slot).
@@ -138,6 +139,12 @@ export class InteractionSystem {
   // Register a callback invoked when a bind-drag drop creates a binding.
   setBoundCallback(fn: (source: Node, slot: ParameterSlot) => void): void {
     this._onBound = fn
+  }
+
+  // Register a callback invoked when the user clicks a parameter-slot row
+  // (empty or bound) on the selected layer.
+  setSlotClickCallback(fn: (consumer: Layer, slot: ParameterSlot) => void): void {
+    this._onSlotClick = fn
   }
 
   // Register a callback invoked when a binding inspector action mutates the stack
@@ -233,10 +240,22 @@ export class InteractionSystem {
     const node  = this._hitTest(point)
 
     if (node === null || !isDraggable(node)) {
+      const selected = this._widget?.selected ?? null
+
+      // A click on a parameter-slot row (empty or bound) takes priority
+      // over pixel-pick — it either creates+binds a default layer for an
+      // empty slot, or selects/restores the layer bound to a filled slot.
+      if (selected !== null) {
+        const slot = selected.hitTestSlot(point)
+        if (slot !== null) {
+          this._onSlotClick?.(selected, slot)
+          return
+        }
+      }
+
       // No interactive hit — pixel-pick to select a layer by rendered content.
       // Suppressed when the selected layer sets blockPixelPick (e.g. MaskLayer,
       // where painting begins in transparent areas).
-      const selected = this._widget?.selected ?? null
       const blocked = selected !== null &&
         (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
       if (this._widget !== null && !blocked) {
@@ -344,7 +363,7 @@ export class InteractionSystem {
     const selected = this._widget?.selected ?? null
     if (selected === null) return
     const slot = selected.hitTestSlot(point)
-    if (slot === null || !slot.isActive) return
+    if (slot === null || slot.state === SlotState.Unbound) return
     const bl = BindingLayer.findForSlot(slot)
     if (bl === null) return
     this._showInspector(bl, slot, e.clientX, e.clientY)

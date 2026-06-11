@@ -28,6 +28,7 @@ import { TransformLayer }  from './TransformLayer.js'
 import { SequencerLayer }  from './SequencerLayer.js'
 import { AnimPathLayer }   from './AnimPathLayer.js'
 import { ClipLayer }       from './ClipLayer.js'
+import { TileLayer }       from './TileLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -122,6 +123,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h) => new GradientLayer(w, h) },
   { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
   { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
+  { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────
@@ -181,7 +183,7 @@ export class MenuLayer extends Layer {
     const cx      = this._canvasW / 2
     const cy      = this._canvasH / 2
     const newLayer = btn.factory(cx, cy, this._canvasW, this._canvasH)
-    newLayer.debugName = btn.label
+    Layer.assignDebugName(newLayer)
     newLayer.bounds    = { ...this.bounds, height: btn.height ?? this.bounds.height }
 
     const below = this.layerBelow

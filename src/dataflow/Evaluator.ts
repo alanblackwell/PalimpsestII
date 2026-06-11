@@ -157,14 +157,28 @@ export class Evaluator {
 
       if (depth === 0) {
         // Current layer floats above the rest with a drop shadow.
-        this.ctx.filter = 'drop-shadow(0px 6px 18px rgba(0,0,0,0.60))'
-      } else {
-        // Layers below fade progressively with depth.
-        this.ctx.globalAlpha = Math.max(0.08, Math.pow(0.72, depth))
+        // Use the shadow* properties rather than ctx.filter('drop-shadow(...)') —
+        // the latter is not rendered on older Safari versions.
+        this.ctx.shadowColor   = 'rgba(0,0,0,0.60)'
+        this.ctx.shadowBlur    = 18
+        this.ctx.shadowOffsetY = 6
       }
 
       layer.renderSelf(this.ctx)
       this.ctx.restore()
+
+      if (depth > 0) {
+        // Atmospheric haze: wash everything rendered so far with translucent
+        // white. Layers further down the stack accumulate more washes (one
+        // per layer above them) and fade progressively toward white — this
+        // is robust against layers that set their own globalAlpha/opacity
+        // during renderSelf, which would otherwise clobber a depth-based
+        // globalAlpha set here.
+        this.ctx.save()
+        this.ctx.fillStyle = 'rgba(255,255,255,0.25)'
+        this.ctx.fillRect(0, 0, width, height)
+        this.ctx.restore()
+      }
     }
 
     renderTop.renderPanel(this.ctx)

@@ -2,7 +2,7 @@ import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   type Amount, type AmountSource,
   type PointSource,
   type Ctx2D, type Point,
@@ -142,7 +142,6 @@ export class AmountLayer extends Layer implements AmountSource {
 
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
-    this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
   }
 
@@ -182,13 +181,21 @@ export class AmountLayer extends Layer implements AmountSource {
     ctx.font = '9px monospace'
     for (let i = slots.length - 1; i >= 0; i--) {
       const { slot, label, colour } = slots[i]!
-      const active = slot.isActive
-      ctx.fillStyle    = active ? colour : 'rgba(255,255,255,0.22)'
+      const state = slot.state
+      let dot: string, dotColour: string, labelColour: string
+      if (state === SlotState.Bound) {
+        dot = '●'; dotColour = colour; labelColour = 'rgba(255,255,255,0.55)'
+      } else if (state === SlotState.SuspendedBound) {
+        dot = '◐'; dotColour = colour + '88'; labelColour = 'rgba(255,255,255,0.40)'
+      } else {
+        dot = '○'; dotColour = 'rgba(255,255,255,0.22)'; labelColour = 'rgba(255,255,255,0.28)'
+      }
+      ctx.fillStyle    = dotColour
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
-      ctx.fillText(active ? '●' : '○', dx, midY)
+      ctx.fillText(dot, dx, midY)
       dx -= 11
-      ctx.fillStyle = active ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.28)'
+      ctx.fillStyle = labelColour
       ctx.fillText(label, dx, midY)
       dx -= ctx.measureText(label).width + 5
     }

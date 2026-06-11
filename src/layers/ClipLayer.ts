@@ -163,11 +163,11 @@ export class ClipLayer extends Layer implements ImageSource {
     // Draw the full-canvas offscreen with its centre aligned to _position.
     ctx.drawImage(this._offscreen as CanvasImageSource, -w / 2, -h / 2, w, h)
     ctx.restore()
-
-    this._renderHandles(ctx)
   }
 
   renderPanel(ctx: Ctx2D): void {
+    this._renderHandles(ctx)
+
     const { x, y, width, height } = this.bounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2

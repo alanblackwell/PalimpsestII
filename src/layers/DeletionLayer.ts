@@ -78,6 +78,19 @@ export class DeletionLayer extends Layer {
 
   get archivedLayers(): readonly Layer[] { return this._archived }
 
+  /** Remove a layer from the archive (without restoring it above the
+   *  DeletionLayer) so the caller can re-insert it elsewhere. Returns
+   *  true if the layer was found and removed. */
+  removeFromArchive(layer: Layer): boolean {
+    const idx = this._archived.indexOf(layer)
+    if (idx < 0) return false
+    this._archived.splice(idx, 1)
+    if (this._selected === idx) this._selected = -1
+    else if (this._selected > idx) this._selected -= 1
+    this.markDirty()
+    return true
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

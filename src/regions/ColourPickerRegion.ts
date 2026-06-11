@@ -89,7 +89,20 @@ export class ColourPickerRegion extends Region {
   // Visual display colour (may differ from _hue/_sat/_val when bound).
   displayColour: Colour = { r: 1, g: 0, b: 0, a: 1 }
 
+  // Overall interactive flag — false when the whole picker is bound
+  // to a Colour source (hue/sv drags are then ignored entirely).
   private _interactive = true
+
+  // Per-zone flags — false when that zone is driven by its own
+  // Amount/Point slot. A drag in a locked zone still fires the
+  // corresponding onDragStart callback (to suspend the binding)
+  // and then proceeds as a normal drag.
+  private _hueInteractive = true
+  private _svInteractive  = true
+
+  private _onHueDragStart: (() => void) | null = null
+  private _onSvDragStart:  (() => void) | null = null
+
   private _dragZone: DragZone = null
 
   constructor(parent: Layer, initial: Colour = { r: 1, g: 0, b: 0, a: 1 }) {
@@ -109,10 +122,31 @@ export class ColourPickerRegion extends Region {
   set interactive(v: boolean) { this._interactive = v }
   override get isInteractive(): boolean { return this._interactive }
 
+  // Per-zone interactivity — set by the parent layer based on
+  // whether the hue/position slots are active.
+  set hueInteractive(v: boolean) { this._hueInteractive = v }
+  set svInteractive(v: boolean)  { this._svInteractive  = v }
+
+  // Called when a drag lands on a zone that is currently locked by
+  // an active slot binding — gives the parent layer a chance to
+  // suspend that binding so the user can take over.
+  setOnHueDragStart(fn: () => void): void { this._onHueDragStart = fn }
+  setOnSvDragStart(fn: () => void): void  { this._onSvDragStart  = fn }
+
   // Called by parent layer to sync display when the slot is active.
   setDisplayColour(c: Colour): void {
     this.displayColour = c
     ;[this._hue, this._sat, this._val] = rgbToHsv(c.r, c.g, c.b)
+  }
+
+  // Drive hue/saturation/value directly from a slot binding.
+  setHue(h: number): void {
+    this._hue = Math.max(0, Math.min(359.99, h))
+  }
+
+  setSatVal(s: number, v: number): void {
+    this._sat = Math.max(0, Math.min(1, s))
+    this._val = Math.max(0, Math.min(1, v))
   }
 
   // ----------------------------------------------------------
@@ -136,9 +170,11 @@ export class ColourPickerRegion extends Region {
   handlePointerDown(point: Point): boolean {
     if (!this._interactive) return false
     if (boundingBoxContains(this._hueBounds(), point)) {
+      if (!this._hueInteractive) this._onHueDragStart?.()
       this._dragZone = 'hue'
       this._applyHueDrag(point.x)
     } else if (boundingBoxContains(this._svBounds(), point)) {
+      if (!this._svInteractive) this._onSvDragStart?.()
       this._dragZone = 'sv'
       this._applySvDrag(point.x, point.y)
     } else {

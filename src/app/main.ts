@@ -2,7 +2,7 @@
 import { Evaluator }         from '../dataflow/Evaluator.js'
 import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
-import { ValueType }         from '../core/types.js'
+import { ValueType, SlotState } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
@@ -12,7 +12,38 @@ import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
+import { AmountLayer }       from '../layers/AmountLayer.js'
+import { ColourLayer }       from '../layers/ColourLayer.js'
+import { PointLayer }        from '../layers/PointLayer.js'
+import { DirectionLayer }    from '../layers/DirectionLayer.js'
+import { CountLayer }        from '../layers/CountLayer.js'
+import { EventLayer }        from '../layers/EventLayer.js'
+import { MaskLayer }         from '../layers/MaskLayer.js'
+import { CollectionLayer }   from '../layers/CollectionLayer.js'
 import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
+
+// ------------------------------------------------------------------
+// Canonical default layer for each value type — used when the user
+// clicks an empty parameter slot.
+// ------------------------------------------------------------------
+const DEFAULT_VALUE_LAYER: Partial<Record<ValueType, (w: number, h: number) => Layer>> = {
+  [ValueType.Amount]:    ()     => new AmountLayer(0.5),
+  [ValueType.Colour]:    ()     => new ColourLayer({ r: 1, g: 0.42, b: 0.17, a: 1 }),
+  [ValueType.Point]:     (w, h) => new PointLayer({ x: w / 2, y: h / 2 }),
+  [ValueType.Direction]: ()     => new DirectionLayer(0, 0.7),
+  [ValueType.Rate]:      ()     => new RateLayer(1.0),
+  [ValueType.Count]:     ()     => new CountLayer(0),
+  [ValueType.Event]:     ()     => new EventLayer(),
+  [ValueType.Image]:     ()     => new ImageLayer(),
+  [ValueType.Mask]:      ()     => new MaskLayer(),
+  [ValueType.Collection]:()     => new CollectionLayer(),
+}
+
+// Panel-height override for the canonical layer of a given type
+// (mirrors MenuLayer.BUTTONS — only ColourLayer needs extra height).
+const DEFAULT_VALUE_HEIGHT: Partial<Record<ValueType, number>> = {
+  [ValueType.Colour]: 170,
+}
 
 // ------------------------------------------------------------------
 // Canvas setup
@@ -119,12 +150,12 @@ const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
       if (phaseSource === null) {
         const below = newLayer.layerBelow
         const clock = new ClockLayer()
-        clock.debugName = 'Clock'
+        Layer.assignDebugName(clock)
         clock.bounds = { ...newLayer.bounds }
         if (below !== null) clock.insertAbove(below)
 
         const rate = new RateLayer(1.0)
-        rate.debugName = 'Rate'
+        Layer.assignDebugName(rate)
         rate.bounds = { ...newLayer.bounds }
         rate.insertAbove(clock)
 
@@ -161,6 +192,37 @@ interaction.setDeleteAction(() => {
 interaction.setBoundCallback((source, slot) => {
   BindingLayer.create(source, slot)
   refreshStack()
+})
+
+// Click on a parameter-slot row:
+//   • Empty slot  — create a new layer of the slot's canonical default
+//                    type, insert it above the consumer, bind it, and
+//                    select it.
+//   • Bound slot  — select the layer that feeds it, restoring it from
+//                    the Deleted archive (above the consumer) if needed.
+interaction.setSlotClickCallback((consumer, slot) => {
+  if (slot.state === SlotState.Unbound) {
+    if (slot.type === null) return
+    const factory = DEFAULT_VALUE_LAYER[slot.type]
+    if (factory === undefined) return
+
+    const newLayer = factory(canvas.width, canvas.height)
+    Layer.assignDebugName(newLayer)
+    newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
+    newLayer.insertAbove(consumer)
+    BindingLayer.create(newLayer, slot)
+    refreshStack(newLayer)
+    return
+  }
+
+  const source = slot.source
+  if (!(source instanceof Layer)) return
+  if (source.outsideStack) {
+    if (deletionLayer.removeFromArchive(source)) {
+      source.insertAbove(consumer)
+    }
+  }
+  refreshStack(source)
 })
 
 interaction.setRefreshCallback(() => refreshStack())
@@ -204,7 +266,7 @@ canvas.addEventListener('drop', (e) => {
   const selected   = widget.selected
 
   const newLayer = new ImageLayer()
-  newLayer.debugName = 'Image'
+  Layer.assignDebugName(newLayer)
   newLayer.bounds    = { ...menuLayer.bounds }
 
   let targetSlot: ParameterSlot | null = null

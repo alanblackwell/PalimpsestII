@@ -285,6 +285,7 @@ export class ImageLayer extends Layer implements ImageSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._renderPanelImpl(ctx)
+    this._renderHandles(ctx)
   }
 
   // ── Stack panel ─────────────────────────────────────────────
@@ -405,9 +406,6 @@ export class ImageLayer extends Layer implements ImageSource {
       ctx.fillText('Drop image here', cw / 2, ch / 2)
       ctx.restore()
     }
-
-    // Transform handles — drawn at full opacity above image content.
-    this._renderHandles(ctx)
   }
 
   // ── Transform handles ────────────────────────────────────────
