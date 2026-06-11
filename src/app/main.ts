@@ -2,6 +2,8 @@
 import { Evaluator }         from '../dataflow/Evaluator.js'
 import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
+import { ValueType }         from '../core/types.js'
+import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
@@ -177,39 +179,61 @@ widget.setStack(menuLayer)
 interaction.setStack(menuLayer)
 
 // ------------------------------------------------------------------
-// Drag-and-drop image loading
+// Drag-and-drop image loading — always creates a new ImageLayer
 // ------------------------------------------------------------------
-
-// Find the best ImageLayer to receive a drop: prefer the selected layer,
-// then fall back to the first ImageLayer found in the stack.
-function findImageLayer(): ImageLayer | null {
-  if (widget.selected instanceof ImageLayer) return widget.selected
-  for (let l: Layer | null = menuLayer; l !== null; l = l.layerBelow) {
-    if (l instanceof ImageLayer) return l
-  }
-  return null
-}
+//
+// Placement rules:
+//   • MenuLayer selected  → new layer inserted below MenuLayer
+//   • Drop on Image slot  → new layer inserted below current layer,
+//                           bound to that slot; current layer stays selected
+//   • Otherwise           → new layer inserted above current layer,
+//                           new layer becomes selected
 
 canvas.addEventListener('dragover', (e) => {
   if (!e.dataTransfer?.types.includes('Files')) return
   e.preventDefault()
   e.dataTransfer.dropEffect = 'copy'
-  findImageLayer()?.setDragOver(true)
-})
-
-canvas.addEventListener('dragleave', (e) => {
-  // Only clear when the cursor truly leaves the canvas element.
-  if (e.relatedTarget === null || !canvas.contains(e.relatedTarget as Node)) {
-    findImageLayer()?.setDragOver(false)
-  }
 })
 
 canvas.addEventListener('drop', (e) => {
   e.preventDefault()
-  const target = findImageLayer()
-  target?.setDragOver(false)
   const file = e.dataTransfer?.files[0]
-  if (file && target) target.loadFile(file)
+  if (!file) return
+
+  const dropPoint  = { x: e.offsetX, y: e.offsetY }
+  const selected   = widget.selected
+
+  const newLayer = new ImageLayer()
+  newLayer.debugName = 'Image'
+  newLayer.bounds    = { ...menuLayer.bounds }
+
+  let targetSlot: ParameterSlot | null = null
+
+  if (selected instanceof MenuLayer) {
+    // Place below MenuLayer.
+    const below = menuLayer.layerBelow
+    newLayer.insertAbove(below ?? deletionLayer)
+  } else if (selected !== null) {
+    const slot = selected.hitTestSlot(dropPoint)
+    if (slot !== null && slot.type === ValueType.Image) {
+      // Dropped onto an Image-type slot — insert below selected, then bind.
+      targetSlot = slot
+      newLayer.insertAbove(selected.layerBelow ?? deletionLayer)
+    } else {
+      // Default: insert above current layer.
+      newLayer.insertAbove(selected)
+    }
+  } else {
+    newLayer.insertAbove(deletionLayer)
+  }
+
+  newLayer.loadFile(file)
+
+  if (targetSlot !== null) {
+    BindingLayer.create(newLayer, targetSlot)
+  }
+
+  refreshStack(targetSlot !== null ? selected! : newLayer)
 })
 
 // ------------------------------------------------------------------
