@@ -39,6 +39,10 @@ export class SliderRegion extends Region {
   // Drag state.
   private _dragging = false
 
+  // Optional callback invoked at the start of a drag, even if !interactive.
+  // Used by AmountLayer to suspend active bindings so the user can take over.
+  private _onDragStart: (() => void) | null = null
+
   constructor(parent: Layer, initial: Amount = 0.5) {
     super(parent)
     this._value    = initial
@@ -55,6 +59,8 @@ export class SliderRegion extends Region {
   // Called by the parent layer to sync interactive state with its slot.
   set interactive(v: boolean) { this._interactive = v }
 
+  setOnDragStart(fn: () => void): void { this._onDragStart = fn }
+
   override get isInteractive(): boolean { return this._interactive }
 
   // ----------------------------------------------------------
@@ -63,7 +69,10 @@ export class SliderRegion extends Region {
 
   // Returns true if the pointer hit this slider and interaction began.
   handlePointerDown(point: Point): boolean {
-    if (!this._interactive) return false
+    if (!this._interactive) {
+      // Notify parent to suspend active bindings so the user can take over.
+      this._onDragStart?.()
+    }
     this._dragging = true
     this._applyPointer(point.x)
     this.markDirty()

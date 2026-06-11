@@ -191,6 +191,46 @@ don't accidentally trigger pixel-pick layer selection.
 `BindingLayer` exposes `get slot()`, `get source()`, and
 `static findForSlot(slot)` (scans `graph.nodes`) for use by the inspector.
 
+## MaskLayer UX improvements (added June 2026)
+
+- **Default paint mode**: `_activeTool` initialises to `'paint'` — ready to paint immediately on creation.
+- **Brush preview on slider drag**: the brush outline circle is shown at the cursor position while the size slider is being dragged.
+- **Pixel-pick suppression**: `readonly blockPixelPick = true` on MaskLayer. `InteractionSystem._handleDown` checks for this flag before running the pixel-pick scan, so transparent canvas areas never accidentally switch focus away from MaskLayer while it is selected.
+
+## OS file drag-and-drop (updated June 2026)
+
+Dropping an image file from the OS onto the canvas always **creates a new `ImageLayer`**. Placement rules (in `main.ts`):
+
+| Context | Result |
+|---|---|
+| MenuLayer is selected | New layer inserted below MenuLayer |
+| Drop lands on an Image-type slot of the current layer | New layer inserted below current layer, bound to that slot; current layer stays selected |
+| Anything else | New layer inserted above current layer, becomes selected |
+
+The `dragover` handler just sets `dropEffect = 'copy'`; no existing layer state is modified.
+
+## ClipLayer transform handles (added June 2026)
+
+`ClipLayer` now has move / scale / rotate handles (identical geometry and colours to `ImageLayer`) and two new parameter slots:
+
+- **`positionSlot`** (Point) — overrides the manual move handle
+- **`scaleSlot`** (Amount) — overrides the manual scale handle
+
+The clipped content (which pixels are included) is fixed by the mask and source image in their original canvas positions. Only the rendered output is transformed: the full-canvas `_offscreen` is drawn with `translate → rotate → scale`, centred on `_position`. Default: canvas centre, scale 1, rotation 0 — identical to the previous behaviour.
+
+## AmountLayer point-coordinate slots (added June 2026)
+
+Two new `ValueType.Point` input slots derive an Amount from a Point's canvas coordinates:
+
+- **x position slot** — `point.x / canvasWidth` → [0, 1] (left→right)
+- **y position slot** — `point.y / canvasHeight` → [0, 1] (top→bottom)
+
+If both are active the value is their average. Point slots take precedence over the existing Amount slot; if nothing is active the slider is user-controlled.
+
+**Slider override**: dragging the slider while any slots are active calls `BindingLayer.findForSlot(slot)?.toggle()` on all active slots, suspending them and handing control back to the user at the current value. `SliderRegion` gained a `setOnDragStart(fn)` callback to support this; the guard `if (!this._interactive) return false` in `handlePointerDown` was removed so that the slider is always draggable.
+
+Panel shows three slot indicators right-to-left: **A** (Amount, blue), **x** (Point, purple), **y** (Point, purple).
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
