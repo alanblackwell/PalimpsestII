@@ -447,6 +447,30 @@ and slot rows (`x ≥ 300`) completely unaffected.
 Pressing **h** hides the widget, removes the clip, and makes strip pills visible —
 useful for development and inspection.
 
+## Startup flow (added June 2026)
+
+At launch the stack is `root → startupLayer` — no MenuLayer. `StartupLayer`
+(`src/layers/StartupLayer.ts`) renders two 140×140 dark rounded-rect buttons
+centred in the visible canvas area (x ≥ 300, right of the StackWidget):
+
+- **"Menu"** (left) — removes StartupLayer, inserts MenuLayer above root,
+  calls `refreshStack(menuLayer)`.
+- **"Tutorial"** (right) — removes StartupLayer, inserts MenuLayer above root,
+  then inserts a new TutorialLayer above MenuLayer, calls `refreshStack(tl)`.
+
+`blockPixelPick = true` on StartupLayer prevents accidental layer selection
+when clicking the white background area between or around the buttons.
+
+`refreshStack` was changed to walk up from `root` rather than `menuLayer`
+so it finds the correct stack top even when MenuLayer is not yet present.
+
+`TutorialLayer` (`src/layers/TutorialLayer.ts`) is a blank placeholder. It is
+also available at the end of the MenuLayer button grid (grey-blue `#a0a4b8`
+accent). Tutorial content and navigation will be added in a future session.
+
+StartupLayer is **not** listed in the MenuLayer button grid — it is only
+ever shown at launch and is destroyed when a mode is chosen.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
