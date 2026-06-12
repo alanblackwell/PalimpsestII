@@ -21,6 +21,8 @@ import { EventLayer }        from '../layers/EventLayer.js'
 import { MaskLayer }         from '../layers/MaskLayer.js'
 import { CollectionLayer }   from '../layers/CollectionLayer.js'
 import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
+import { StartupLayer }      from '../layers/StartupLayer.js'
+import { TutorialLayer }     from '../layers/TutorialLayer.js'
 
 // ------------------------------------------------------------------
 // Canonical default layer for each value type — used when the user
@@ -102,7 +104,7 @@ function applyDefaultBindings(newLayer: Layer): void {
 
 // Helper: refresh evaluator + widget + interaction after stack mutations.
 const refreshStack = (selectLayer?: Layer) => {
-  let top: Layer = menuLayer
+  let top: Layer = root
   while (top.layerAbove !== null) top = top.layerAbove
 
   // Wire the first ClockLayer found in the stack to the evaluator so the
@@ -196,7 +198,7 @@ const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
 })
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
-menuLayer.insertAbove(root)
+// menuLayer is NOT inserted at startup — StartupLayer handles that.
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
 // Prune DeletionLayer itself if the archive is now empty.
@@ -299,9 +301,32 @@ deletionLayer.setPurgeCallback((layer) => {
   refreshStack()
 })
 
-evaluator.setStack(menuLayer)
-widget.setStack(menuLayer)
-interaction.setStack(menuLayer)
+// ------------------------------------------------------------------
+// Startup layer — shown instead of MenuLayer at launch.
+// ------------------------------------------------------------------
+
+const startupLayer = new StartupLayer(
+  // "Menu" button: insert MenuLayer, remove startup, refresh.
+  () => {
+    startupLayer.removeFromStack()
+    menuLayer.insertAbove(root)
+    refreshStack(menuLayer)
+  },
+  // "Tutorial" button: insert MenuLayer as base, then a TutorialLayer above it.
+  () => {
+    startupLayer.removeFromStack()
+    menuLayer.insertAbove(root)
+    const tl = new TutorialLayer()
+    Layer.assignDebugName(tl)
+    tl.bounds = { x: X, y: 24, width: W, height: 36 }
+    tl.insertAbove(menuLayer)
+    refreshStack(tl)
+  },
+)
+startupLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+startupLayer.insertAbove(root)
+
+refreshStack(startupLayer)
 
 // ------------------------------------------------------------------
 // Drag-and-drop image loading — always creates a new ImageLayer

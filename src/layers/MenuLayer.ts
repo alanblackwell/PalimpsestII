@@ -31,6 +31,7 @@ import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
 import { FlashLayer }      from './FlashLayer.js'
 import { VideoLayer }      from './VideoLayer.js'
+import { TutorialLayer }   from './TutorialLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -128,6 +129,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
   { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
+  { label: 'Tutorial',   colour: '#a0a4b8', factory: () => new TutorialLayer() },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────
