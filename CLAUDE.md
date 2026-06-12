@@ -464,9 +464,29 @@ when clicking the white background area between or around the buttons.
 `refreshStack` was changed to walk up from `root` rather than `menuLayer`
 so it finds the correct stack top even when MenuLayer is not yet present.
 
-`TutorialLayer` (`src/layers/TutorialLayer.ts`) is a blank placeholder. It is
-also available at the end of the MenuLayer button grid (grey-blue `#a0a4b8`
-accent). Tutorial content and navigation will be added in a future session.
+`TutorialLayer` (`src/layers/TutorialLayer.ts`) is a multi-page guided tour.
+It is also available at the end of the MenuLayer button grid (grey-blue `#a0a4b8` accent).
+
+### TutorialLayer details
+
+- **Panel**: strip pill at `this.bounds` + canvas-space panel at `{ x:300, y:50, width:460 }`.
+  Height is computed dynamically from text + button rows + nav row.
+- **Pages**: defined in the module-level `PAGES` constant (`TutPage[]`), each with a title,
+  paragraphs (word-wrapped at render time), and layer-creation buttons.
+- **Buttons**: same visual style as MenuLayer buttons (BTN_W=120, BTN_H=34, BTN_GAP=8,
+  BTN_COLS=3). Each calls `_onAdded(layer)`, which inserts the new layer just below the
+  TutorialLayer and calls `refreshStack(tl)` — keeping TutorialLayer selected so multiple
+  layers can be created in sequence (same behaviour as MenuLayer).
+- **Navigation**: ◀ / ▶ buttons at bottom-left / bottom-right; Prev hidden on page 1.
+  Page indicator (`n / total`) shown when there is more than one page.
+- **`setOnAdded(fn)`**: must be called after construction (in `main.ts`'s
+  `wireTutorialLayer()` helper) to provide the layer-insertion callback. Called from
+  both the startup Tutorial button handler and the MenuLayer `onAdded` callback.
+- **`blockPixelPick = true`**: suppresses pixel-pick scan while Tutorial is selected.
+
+Current pages:
+1. **Welcome** — layer stack navigation (Up/Down/Delete/drag), then Ellipse/Rect/Text buttons.
+2. **Images and Video** — Image (file load + OS drag-and-drop), Video (camera), with Image/Video buttons.
 
 StartupLayer is **not** listed in the MenuLayer button grid — it is only
 ever shown at launch and is destroyed when a mode is chosen.

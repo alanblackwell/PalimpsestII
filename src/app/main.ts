@@ -24,6 +24,16 @@ import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 
+function wireTutorialLayer(tl: TutorialLayer): void {
+  tl.setOnAdded((newLayer) => {
+    Layer.assignDebugName(newLayer)
+    newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+    const below = tl.layerBelow
+    if (below !== null) newLayer.insertAbove(below)
+    refreshStack(tl)   // keep TutorialLayer selected, like MenuLayer keeps itself selected
+  })
+}
+
 // ------------------------------------------------------------------
 // Canonical default layer for each value type — used when the user
 // clicks an empty parameter slot.
@@ -146,6 +156,9 @@ function pruneDeletionLayerIfEmpty(): void {
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
   if (newLayer instanceof CollectionLayer) {
     newLayer.setEjectCallback(() => refreshStack())
+  }
+  if (newLayer instanceof TutorialLayer) {
+    wireTutorialLayer(newLayer)
   }
   applyDefaultBindings(newLayer)
 
@@ -322,6 +335,7 @@ const startupLayer = new StartupLayer(
     const tl = new TutorialLayer()
     Layer.assignDebugName(tl)
     tl.bounds = { x: X, y: 24, width: W, height: 36 }
+    wireTutorialLayer(tl)
     tl.insertAbove(menuLayer)
     refreshStack(tl)
   },
