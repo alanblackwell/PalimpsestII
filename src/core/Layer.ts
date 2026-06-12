@@ -39,6 +39,10 @@ export abstract class Layer extends Node {
   // LayerStackWidget and excluded from user-facing layer lists.
   readonly isInfrastructure: boolean = false
 
+  // When true, the thumbnail card is only rendered while this layer is
+  // the currently selected layer; otherwise the card body is left blank.
+  readonly thumbnailOnlyWhenSelected: boolean = false
+
   // Slot-region bounding boxes — populated by renderSlots, used by hitTestSlot.
   private _slotBounds = new Map<ParameterSlot, { x: number; y: number; width: number; height: number }>()
 

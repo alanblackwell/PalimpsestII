@@ -362,6 +362,7 @@ export class LayerStackWidget {
   // ── Thumbnail content ─────────────────────────────────────────────
 
   private _drawThumbnail(ctx: Ctx2D, layer: Layer, w: number, h: number): void {
+    if (layer.thumbnailOnlyWhenSelected && layer !== this._selected) return
     drawLayerThumbnail(ctx, layer, w, h, this._canvas.width, this._canvas.height)
   }
 
