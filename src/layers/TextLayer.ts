@@ -98,6 +98,22 @@ const FONTS: FontEntry[] = [
 // A scanline entry: first opaque x, span width (in px).
 type Scanline = { x: number; w: number } | null
 
+// Transform handle geometry (matches ImageLayer/ClipLayer conventions)
+const HANDLE_R   = 7    // circle handle radius (px)
+const HANDLE_SZ  = 6    // square handle half-size (px)
+const ROT_ARM    = 85   // rotate handle arm length from centre (px)
+const HANDLE_HIT = 14   // pointer hit-test radius (px)
+const SCALE_OFFSET_FACTOR = 1.6  // scale-handle distance, relative to font size
+
+type DragState =
+  | { type: 'move';   startMouse: Point; startPos: Point }
+  | { type: 'scale';  startDist: number; startSize: number; center: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+
+function ptDist(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
 export class TextLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
 
@@ -122,6 +138,11 @@ export class TextLayer extends Layer {
 
   // Scanline data sampled from the mask (null = no mask / not yet sampled)
   private _maskRows: Scanline[] | null = null
+
+  // Direct-manipulation state (persist across recompute when slots unbound)
+  private _rotation:       number       = 0
+  private _manualPosition: Point | null = null
+  private _drag:           DragState | null = null
 
   constructor(text = 'Hello') {
     super()
@@ -353,7 +374,7 @@ export class TextLayer extends Layer {
   protected recompute(): void {
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
-      : { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+      : (this._manualPosition ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 })
 
     this._colour = this._colourSlot.isActive
       ? (this._colourSlot.source as ColourSource).getColour()
@@ -379,11 +400,23 @@ export class TextLayer extends Layer {
   }
 
   // Sample the mask OffscreenCanvas into per-row x-extents for text flow.
+  //
+  // When rotated, the mask is first counter-rotated (-_rotation, about the
+  // canvas centre) into a temp canvas before sampling. The resulting rows
+  // describe the mask as seen from the text's own (unrotated) frame; drawing
+  // wrapped text at these row coordinates with a forward rotation transform
+  // (see _renderMasked) places it back inside the true mask outline, rotated
+  // by _rotation.
   private _sampleMask(mask: OffscreenCanvas): void {
     const w = mask.width, h = mask.height
     // Copy mask to a temp canvas to avoid touching its rendering context state.
     const tmp  = new OffscreenCanvas(w, h)
     const tctx = tmp.getContext('2d')!
+    if (this._rotation !== 0) {
+      tctx.translate(w / 2, h / 2)
+      tctx.rotate(-this._rotation)
+      tctx.translate(-w / 2, -h / 2)
+    }
     tctx.drawImage(mask as CanvasImageSource, 0, 0)
     const { data } = tctx.getImageData(0, 0, w, h)
     this._maskRows = Array.from({ length: h }, (_, y) => {
@@ -421,35 +454,108 @@ export class TextLayer extends Layer {
     }
 
     // Controls row
-    const ctrl = this._ctrlPanelBounds()
-    if (!boundingBoxContains(ctrl, point)) return false
+    if (boundingBoxContains(this._ctrlPanelBounds(), point)) {
+      if (boundingBoxContains(this._fontBtnBounds(), point)) {
+        this.openFontPicker()
+        return true
+      }
+      if (boundingBoxContains(this._boldBtnBounds(), point)) {
+        this.toggleBold()
+        return true
+      }
+      if (boundingBoxContains(this._italicBtnBounds(), point)) {
+        this.toggleItalic()
+        return true
+      }
+      if (boundingBoxContains(this._sizeMinusBounds(), point)) {
+        this.adjustSize(-4)
+        return true
+      }
+      if (boundingBoxContains(this._sizePlusBounds(), point)) {
+        this.adjustSize(+4)
+        return true
+      }
+      return false
+    }
 
-    if (boundingBoxContains(this._fontBtnBounds(), point)) {
-      this.openFontPicker()
+    // Transform handles
+    const hp = this._handlePos()
+
+    // Rotate handle — always draggable; rotates the text (and, when masked,
+    // re-derives the scanline wrap from the counter-rotated mask).
+    if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+      this._drag = {
+        type:       'rotate',
+        center:     { ...hp.center },
+        startAngle: Math.atan2(point.y - hp.center.y, point.x - hp.center.x),
+        startRot:   this._rotation,
+      }
       return true
     }
-    if (boundingBoxContains(this._boldBtnBounds(), point)) {
-      this.toggleBold()
+
+    // Scale handle — only when sizeSlot is unbound; adjusts the manual font size.
+    if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) {
+      this._drag = {
+        type:       'scale',
+        center:     { ...hp.center },
+        startDist:  Math.max(1, ptDist(point, hp.center)),
+        startSize:  this._manualSize,
+      }
       return true
     }
-    if (boundingBoxContains(this._italicBtnBounds(), point)) {
-      this.toggleItalic()
+
+    // Move handle — only when positionSlot is unbound and no mask is applied
+    // (masked text ignores _position entirely, so manual move has no effect).
+    if (!this._positionSlot.isActive && !this._maskSlot.isActive
+        && ptDist(point, hp.move) <= HANDLE_HIT) {
+      this._drag = {
+        type:       'move',
+        startMouse: { ...point },
+        startPos:   { ...this._position },
+      }
       return true
     }
-    if (boundingBoxContains(this._sizeMinusBounds(), point)) {
-      this.adjustSize(-4)
-      return true
-    }
-    if (boundingBoxContains(this._sizePlusBounds(), point)) {
-      this.adjustSize(+4)
-      return true
-    }
+
     return false
+  }
+
+  handlePointerMove(point: Point): void {
+    if (this._drag === null) return
+
+    if (this._drag.type === 'move') {
+      this._manualPosition = {
+        x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
+        y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      }
+    } else if (this._drag.type === 'scale') {
+      const d = Math.max(1, ptDist(point, this._drag.center))
+      const s = this._drag.startSize * (d / this._drag.startDist)
+      this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, s))
+    } else {
+      // rotate
+      const angle = Math.atan2(
+        point.y - this._drag.center.y,
+        point.x - this._drag.center.x,
+      )
+      this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+    }
+    this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._drag = null
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
+    if (this._drag !== null) return this
+
+    const hp = this._handlePos()
+    if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) return this
+    if (!this._positionSlot.isActive && !this._maskSlot.isActive
+        && ptDist(point, hp.move) <= HANDLE_HIT) return this
     return null
   }
 
@@ -464,6 +570,7 @@ export class TextLayer extends Layer {
   renderPanel(ctx: Ctx2D): void {
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
+    this._renderHandles(ctx)
   }
 
   // ── Main pill ─────────────────────────────────────────────────
@@ -627,23 +734,33 @@ export class TextLayer extends Layer {
     ctx.restore()
   }
 
-  // Unmasked: split on \n, render lines centred on _position.
+  // Unmasked: split on \n, render lines centred on _position, rotated about it.
   private _renderUnmasked(ctx: Ctx2D): void {
     const { x: px, y: py } = this._position
     const lines  = this._text.split('\n')
     const lineH  = Math.ceil(this._size * 1.35)
     const totalH = (lines.length - 1) * lineH
-    let y = py - totalH / 2
+
+    ctx.save()
+    ctx.translate(px, py)
+    ctx.rotate(this._rotation)
 
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
+    let y = -totalH / 2
     for (const line of lines) {
-      ctx.fillText(line, px, y)
+      ctx.fillText(line, 0, y)
       y += lineH
     }
+    ctx.restore()
   }
 
   // Masked: flow text into the mask shape using per-scanline word-wrap.
+  //
+  // _maskRows were sampled from the mask counter-rotated by -_rotation about
+  // the canvas centre (see _sampleMask). Rendering at those row coordinates
+  // under a forward rotation by _rotation (about the same centre) places the
+  // wrapped text back inside the true mask outline, rotated as a whole.
   private _renderMasked(ctx: Ctx2D): void {
     const rows  = this._maskRows!
     const lineH = Math.ceil(this._size * 1.35)
@@ -654,6 +771,14 @@ export class TextLayer extends Layer {
     let startY = 0
     while (startY < h && !rows[startY]) startY++
     if (startY >= h) return
+
+    ctx.save()
+    if (this._rotation !== 0) {
+      const cx = Node.canvasWidth / 2, cy = Node.canvasHeight / 2
+      ctx.translate(cx, cy)
+      ctx.rotate(this._rotation)
+      ctx.translate(-cx, -cy)
+    }
 
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'alphabetic'
@@ -698,6 +823,8 @@ export class TextLayer extends Layer {
       if (line) ctx.fillText(line, xStart, y)
       y += lineH
     }
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -732,6 +859,115 @@ export class TextLayer extends Layer {
   private _italicBtnBounds() { return this._ctrlBtn(118, 20) }
   private _sizeMinusBounds() { return this._ctrlBtn(146, 20) }
   private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
+
+  // ----------------------------------------------------------
+  // Transform handles
+  // ----------------------------------------------------------
+
+  // When masked, handles pivot about the canvas centre — the same point
+  // _sampleMask/_renderMasked rotate about. Unmasked, they pivot about
+  // _position (which manual move can reposition).
+  private _handlePos() {
+    const masked = this._maskRows !== null
+    const center = masked
+      ? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+      : this._position
+    const cos = Math.cos(this._rotation)
+    const sin = Math.sin(this._rotation)
+    const so  = this._size * SCALE_OFFSET_FACTOR
+
+    return {
+      center,
+      move: { x: this._position.x, y: this._position.y },
+      // Scale handle: (so, so) rotated into world space → lower-right
+      scale: {
+        x: center.x + so * cos - so * sin,
+        y: center.y + so * sin + so * cos,
+      },
+      // Rotate handle: (0, -ROT_ARM) rotated into world space → directly above when rot=0
+      rotate: {
+        x: center.x + ROT_ARM * sin,
+        y: center.y - ROT_ARM * cos,
+      },
+    }
+  }
+
+  private _renderHandles(ctx: Ctx2D): void {
+    const hp     = this._handlePos()
+    const masked = this._maskRows !== null
+
+    ctx.save()
+    ctx.setLineDash([])
+
+    // Dashed arm lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.38)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(hp.center.x, hp.center.y)
+    ctx.lineTo(hp.rotate.x, hp.rotate.y)
+    ctx.stroke()
+    ctx.beginPath()
+    ctx.moveTo(hp.center.x, hp.center.y)
+    ctx.lineTo(hp.scale.x, hp.scale.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Scale handle — square, cyan glow (dimmed when sizeSlot bound).
+    // Scaling adjusts the manual font size directly.
+    this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
+      this._sizeSlot.isActive ? '#666688' : '#81d4fa')
+
+    // Rotate handle — circle, orange glow. Always draggable, including when masked.
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+
+    // Move handle — circle + crosshair, white glow. Hidden entirely when a
+    // mask is applied, since masked text ignores _position.
+    if (!masked) {
+      this._drawGlowCircle(ctx, hp.move, HANDLE_R,
+        this._positionSlot.isActive ? '#666688' : '#ffffff')
+      const cr = HANDLE_R - 2
+      ctx.strokeStyle = 'rgba(0,0,0,0.80)'
+      ctx.lineWidth   = 1.5
+      ctx.beginPath()
+      ctx.moveTo(hp.move.x - cr, hp.move.y)
+      ctx.lineTo(hp.move.x + cr, hp.move.y)
+      ctx.moveTo(hp.move.x, hp.move.y - cr)
+      ctx.lineTo(hp.move.x, hp.move.y + cr)
+      ctx.stroke()
+    }
+
+    ctx.restore()
+  }
+
+  private _drawGlowCircle(ctx: Ctx2D, pt: Point, r: number, glowColour: string): void {
+    ctx.save()
+    ctx.shadowColor = glowColour
+    ctx.shadowBlur  = 14
+    ctx.beginPath()
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'
+    ctx.fill()
+    ctx.restore()
+    // Dark outline drawn without shadow
+    ctx.beginPath()
+    ctx.arc(pt.x, pt.y, r, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+  }
+
+  private _drawGlowSquare(ctx: Ctx2D, pt: Point, s: number, glowColour: string): void {
+    ctx.save()
+    ctx.shadowColor = glowColour
+    ctx.shadowBlur  = 14
+    ctx.fillStyle   = 'rgba(255,255,255,0.95)'
+    ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2)
+    ctx.restore()
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.lineWidth   = 1.5
+    ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2)
+  }
 
   // ----------------------------------------------------------
   // Drawing helpers

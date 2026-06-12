@@ -621,6 +621,44 @@ actual line width and colour (no closing line). Since `ValueType.Image` appears
 before `ValueType.Mask` in `thumbnail.ts`'s type-check order, the thumbnail shows
 the rendered stroke rather than the closed boundary silhouette.
 
+## TextLayer transform handles (added June 2026)
+
+`TextLayer` now has move / scale / rotate handles, drawn in `renderPanel` (panel-only,
+per the "Transform handles are panel-only" convention) with the same geometry/glow
+helpers as `ImageLayer`/`ClipLayer`:
+
+- **⊕ Move** — drags `_manualPosition` (used as the unmasked anchor when
+  `positionSlot` is unbound). **Hidden entirely when `maskSlot.isActive`** —
+  masked text ignores `_position`, so manual move would have no visible effect.
+- **□ Scale** — adjusts `_manualSize` directly (the same value the `[−]`/`[+]`
+  size buttons control), clamped to `[MIN_SIZE, MAX_SIZE]`. Dimmed/disabled when
+  `sizeSlot.isActive`. The handle offset is proportional to `_size`
+  (`SCALE_OFFSET_FACTOR = 1.6`), so it tracks the text's current display size.
+- **○ Rotate** — always draggable (no slot controls rotation), sets `_rotation`.
+  Works identically whether or not a mask is bound.
+
+**Handle pivot**: unmasked, handles pivot about `_position`. Masked, they pivot
+about the canvas centre — the same point the mask-rotation logic below rotates
+about.
+
+### Rotation within a mask
+
+Masked text flow (`_renderMasked`, scanline word-wrap) is computed in the text's
+own *unrotated* frame, then the whole render is wrapped in a rotation transform:
+
+- `_sampleMask` — when `_rotation !== 0`, the mask is first drawn into a temp
+  `OffscreenCanvas` counter-rotated by `-_rotation` about the canvas centre,
+  *then* sampled into `_maskRows`. The rows therefore describe the mask as seen
+  from the text's own frame.
+- `_renderMasked` — wraps its existing scanline-fill loop in
+  `translate(cx,cy) → rotate(_rotation) → translate(-cx,-cy)` (canvas centre
+  pivot). Drawing the rows computed above under this forward rotation places the
+  wrapped text back inside the *true* (unrotated) mask outline, rotated as a
+  whole by `_rotation`.
+
+`_renderUnmasked` rotates about `_position` directly (`translate → rotate`,
+lines drawn relative to local origin).
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
