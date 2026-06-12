@@ -60,7 +60,7 @@ app.appendChild(canvas)
 const evaluator = new Evaluator(canvas)
 
 // ------------------------------------------------------------------
-// Initial stack: Root → DeletionLayer → MenuLayer
+// Initial stack: Root → MenuLayer  (DeletionLayer added on first deletion)
 // ------------------------------------------------------------------
 const X = 40
 const W = 260
@@ -68,8 +68,8 @@ const W = 260
 const root = new RootLayer(canvas.width, canvas.height)
 
 const deletionLayer = new DeletionLayer()
-deletionLayer.bounds = { x: X, y: 24, width: W, height: 36 }
-deletionLayer.insertAbove(root)
+deletionLayer.bounds      = { x: X, y: 24, width: W, height: 36 }
+deletionLayer.outsideStack = true   // not inserted until first deletion
 
 // ------------------------------------------------------------------
 // Widget, interaction, helpers
@@ -90,7 +90,10 @@ function applyDefaultBindings(newLayer: Layer): void {
     for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
       if (!l.isInfrastructure && accepts(l)) {
         BindingLayer.create(l, slot)
-        if (removeAfterBind) deletionLayer.archive(l)
+        if (removeAfterBind) {
+          ensureDeletionLayerInStack()
+          deletionLayer.archive(l)
+        }
         break
       }
     }
@@ -114,6 +117,26 @@ const refreshStack = (selectLayer?: Layer) => {
   widget.setStack(top)
   interaction.setStack(top)
   if (selectLayer !== undefined) widget.selected = selectLayer
+}
+
+// The lowest layer above which new user layers should be inserted.
+// When DeletionLayer is in the stack it is that anchor; otherwise root is.
+function lowestAnchor(): Layer { return deletionLayer.outsideStack ? root : deletionLayer }
+
+// Ensure DeletionLayer is in the stack (inserted just above root).
+// Called before any archive() so it is always visible after a deletion.
+function ensureDeletionLayerInStack(): void {
+  if (deletionLayer.outsideStack) {
+    deletionLayer.insertAbove(root)
+  }
+}
+
+// Remove DeletionLayer from the stack when its archive is empty.
+// A future deletion will re-add it via ensureDeletionLayerInStack().
+function pruneDeletionLayerIfEmpty(): void {
+  if (deletionLayer.archivedLayers.length === 0 && !deletionLayer.outsideStack) {
+    deletionLayer.removeFromStack()
+  }
 }
 
 // MenuLayer sits at the very top.
@@ -173,11 +196,13 @@ const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
 })
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
-menuLayer.insertAbove(deletionLayer)
+menuLayer.insertAbove(root)
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
+// Prune DeletionLayer itself if the archive is now empty.
 deletionLayer.setRestoreCallback((layer) => {
   layer.insertAbove(deletionLayer)
+  pruneDeletionLayerIfEmpty()
   refreshStack(layer)
 })
 
@@ -187,6 +212,7 @@ interaction.setDeleteAction(() => {
   if (layer === null || layer === deletionLayer || layer === root || layer === menuLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
+  ensureDeletionLayerInStack()
   const nextSel = below ?? deletionLayer
   deletionLayer.archive(layer)
   refreshStack(nextSel)
@@ -255,6 +281,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
   if (source.outsideStack) {
     if (deletionLayer.removeFromArchive(source)) {
       source.insertAbove(consumer)
+      pruneDeletionLayerIfEmpty()
     }
   }
   refreshStack(source)
@@ -268,6 +295,7 @@ interaction.setRefreshCallback(() => refreshStack())
 deletionLayer.setPurgeCallback((layer) => {
   const bls = [...layer.dependents].filter(d => d instanceof BindingLayer)
   for (const bl of bls) (bl as BindingLayer).remove()
+  pruneDeletionLayerIfEmpty()
   refreshStack()
 })
 
@@ -309,19 +337,19 @@ canvas.addEventListener('drop', (e) => {
   if (selected instanceof MenuLayer) {
     // Place below MenuLayer.
     const below = menuLayer.layerBelow
-    newLayer.insertAbove(below ?? deletionLayer)
+    newLayer.insertAbove(below ?? lowestAnchor())
   } else if (selected !== null) {
     const slot = selected.hitTestSlot(dropPoint)
     if (slot !== null && slot.type === ValueType.Image) {
       // Dropped onto an Image-type slot — insert below selected, then bind.
       targetSlot = slot
-      newLayer.insertAbove(selected.layerBelow ?? deletionLayer)
+      newLayer.insertAbove(selected.layerBelow ?? lowestAnchor())
     } else {
       // Default: insert above current layer.
       newLayer.insertAbove(selected)
     }
   } else {
-    newLayer.insertAbove(deletionLayer)
+    newLayer.insertAbove(lowestAnchor())
   }
 
   newLayer.loadFile(file)
