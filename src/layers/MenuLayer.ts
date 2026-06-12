@@ -30,6 +30,7 @@ import { AnimPathLayer }   from './AnimPathLayer.js'
 import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
 import { FlashLayer }      from './FlashLayer.js'
+import { VideoLayer }      from './VideoLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -126,6 +127,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
   { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
+  { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────
