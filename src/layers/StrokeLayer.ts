@@ -50,6 +50,7 @@ const HANDLE_HIT = 14    // pointer hit radius
 const ROT_ARM    = 85    // rotation arm length from centre (px)
 const ARC_STEP   = 20    // sub-samples per Bézier segment for arc table
 const RDP_EPS    = 8     // Ramer-Douglas-Peucker tolerance (px)
+const MAX_HANDLE_BOOST = 3   // cap on control-point lengthening when shrunk below drawn size
 
 type DragState =
   | { type: 'move';   startMouse: Point; startCx: number; startCy: number }
@@ -76,6 +77,10 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   // Stroke data — local segments centred at origin (as drawn minus centroid)
   private _localSegs:   Seg[] = []
+  // _localSegs with control-point handles lengthened when _computedScale < 1
+  // (smoother small-scale rendering; recomputed each time, _localSegs untouched
+  // so the original fit is preserved and the effect is fully reversible).
+  private _renderSegs:  Seg[] = []
   private _hasStroke    = false
   private _localHalfW   = 100   // half-width of unscaled local bbox (for handle placement)
   private _localHalfH   = 60
@@ -193,13 +198,41 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this._computedScale    = this._scale
     this._computedRotation = this._rotation
 
-    if (this.startSlot.isActive && this._localSegs.length > 0) {
+    const hasStroke   = this._localSegs.length > 0
+    const startActive = this.startSlot.isActive && hasStroke
+    const endActive   = this.endSlot.isActive   && hasStroke
+
+    if (startActive && endActive) {
+      // Both endpoints pinned: derive translation, scale, and rotation that
+      // map the local start→end vector onto boundStart→boundEnd.
+      const ls          = this._localSegs[0]!.p0
+      const le          = this._localSegs[this._localSegs.length - 1]!.p1
+      const startTarget = (this.startSlot.source as PointSource).getPoint()
+      const endTarget   = (this.endSlot.source as PointSource).getPoint()
+      const localLen    = ptDist(ls, le)
+      if (localLen > 0.001) {
+        const dx = endTarget.x - startTarget.x
+        const dy = endTarget.y - startTarget.y
+        this._computedScale    = Math.hypot(dx, dy) / localLen
+        // Rotation that maps the local ls→le direction onto startTarget→endTarget
+        const localAngle  = Math.atan2(le.y - ls.y, le.x - ls.x)
+        const targetAngle = Math.atan2(dy, dx)
+        this._computedRotation = targetAngle - localAngle
+        const cos = Math.cos(this._computedRotation)
+        const sin = Math.sin(this._computedRotation)
+        this._computedCx = startTarget.x - (ls.x * cos - ls.y * sin) * this._computedScale
+        this._computedCy = startTarget.y - (ls.x * sin + ls.y * cos) * this._computedScale
+      } else {
+        this._computedCx = startTarget.x - ls.x * this._computedScale
+        this._computedCy = startTarget.y - ls.y * this._computedScale
+      }
+    } else if (startActive) {
       // Translate so the stroke's start reaches the bound point (scale/rotation unchanged).
       const target   = (this.startSlot.source as PointSource).getPoint()
       const startRaw = this._localToCanvasRaw(this._localSegs[0]!.p0)
       this._computedCx = this._cx + (target.x - startRaw.x)
       this._computedCy = this._cy + (target.y - startRaw.y)
-    } else if (this.endSlot.isActive && this._localSegs.length > 0) {
+    } else if (endActive) {
       // Resize + re-orient so the start stays fixed and the end exactly reaches
       // the bound point. Both scale and rotation are derived from the
       // start→target vector vs the local start→end vector.
@@ -223,6 +256,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       }
     }
 
+    this._updateRenderSegs()
     this._rebuildArcSamples()
     this._updateImageCanvas()
     this._updateMask()
@@ -248,14 +282,41 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   }
 
   // ----------------------------------------------------------
+  // Render-time handle boost (smoother small-scale rendering)
+  // ----------------------------------------------------------
+
+  // When the stroke is rendered smaller than it was drawn, a uniformly-scaled
+  // copy of the original curve can look more "jagged" relative to its own
+  // size — fine local detail that read as deliberate at full size becomes
+  // visual noise once shrunk. Lengthening each segment's control-point
+  // handles (relative to that segment's own endpoints) rounds out corners
+  // and transitions, making the small version read as smoother. Endpoints
+  // (p0/p1, and therefore arc-length and AnimPath sampling) are unchanged —
+  // only cp1/cp2 move further from their anchors.
+  private _updateRenderSegs(): void {
+    if (this._localSegs.length === 0) { this._renderSegs = this._localSegs; return }
+
+    const scale = this._computedScale
+    if (scale >= 1) { this._renderSegs = this._localSegs; return }
+
+    const boost = Math.min(MAX_HANDLE_BOOST, 1 / Math.sqrt(scale))
+    this._renderSegs = this._localSegs.map(s => ({
+      p0:  s.p0,
+      cp1: { x: s.p0.x + (s.cp1.x - s.p0.x) * boost, y: s.p0.y + (s.cp1.y - s.p0.y) * boost },
+      cp2: { x: s.p1.x + (s.cp2.x - s.p1.x) * boost, y: s.p1.y + (s.cp2.y - s.p1.y) * boost },
+      p1:  s.p1,
+    }))
+  }
+
+  // ----------------------------------------------------------
   // Arc-length table and mask
   // ----------------------------------------------------------
 
   private _rebuildArcSamples(): void {
-    if (this._localSegs.length === 0) { this._arcSamples = []; this._totalLen = 0; return }
+    if (this._renderSegs.length === 0) { this._arcSamples = []; this._totalLen = 0; return }
     const pts: Point[] = []
-    for (let si = 0; si < this._localSegs.length; si++) {
-      const seg = this._localSegs[si]!
+    for (let si = 0; si < this._renderSegs.length; si++) {
+      const seg = this._renderSegs[si]!
       for (let i = (si === 0 ? 0 : 1); i <= ARC_STEP; i++) {
         pts.push(this._localToCanvas(this._evalBez(seg, i / ARC_STEP)))
       }
@@ -339,7 +400,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   private _buildCtxPath(ctx: Ctx2D): void {
     let first = true
-    for (const seg of this._localSegs) {
+    for (const seg of this._renderSegs) {
       const p0  = this._localToCanvas(seg.p0)
       const cp1 = this._localToCanvas(seg.cp1)
       const cp2 = this._localToCanvas(seg.cp2)
@@ -559,6 +620,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       cp2: shift(s.cp2),
       p1:  shift(s.p1),
     }))
+    this._renderSegs = this._localSegs
 
     this._cx    = cx
     this._cy    = cy
