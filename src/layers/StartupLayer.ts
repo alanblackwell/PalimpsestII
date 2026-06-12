@@ -16,9 +16,6 @@ import type { Ctx2D, Point } from '../core/types.js'
 // Button graphics are text-only for now; the owner can replace
 // them with artwork in a future iteration.
 
-// Left edge of the visible canvas area (matches PANEL_X)
-const VISIBLE_LEFT = 300
-
 const BTN_SZ  = 140   // side length of each square button (px)
 const BTN_GAP = 24    // gap between the two buttons (px)
 const BTN_R   = 16    // corner radius
@@ -88,9 +85,8 @@ export class StartupLayer extends Layer {
   // Private helpers
   // ----------------------------------------------------------
 
-  // Centre the pair of buttons in the visible area (right of StackWidget).
   private _centreX(cw: number): number {
-    return Math.round((VISIBLE_LEFT + cw) / 2)
+    return Math.round(cw / 2)
   }
 
   private _menuBounds(cw: number, ch: number): BBox {
