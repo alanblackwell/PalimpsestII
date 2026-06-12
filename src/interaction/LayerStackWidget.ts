@@ -328,33 +328,37 @@ export class LayerStackWidget {
     ctx.rotate(TILT)
     ctx.globalAlpha = floating ? 0.78 : isSel ? 1.0 : CARD_ALPHA
 
-    // Drop shadow — drawn as a filled rect with canvas shadow, then
-    // the card body is drawn over it without shadow.
-    ctx.save()
-    ctx.shadowColor   = SHADOW_CLR
-    ctx.shadowBlur    = SHADOW_BLR
-    ctx.shadowOffsetX = SHADOW_OX
-    ctx.shadowOffsetY = SHADOW_OY
-    ctx.fillStyle     = isSel ? SEL_BG : '#ffffff'
-    ctx.fillRect(0, 0, w, h)
-    ctx.restore()   // ← clears shadow before drawing thumbnail
+    const blank = layer.thumbnailOnlyWhenSelected && !isSel
 
-    // Thumbnail, clipped to card bounds.
-    ctx.save()
-    ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
-    this._drawThumbnail(ctx, layer, w, h)
-    ctx.restore()
-
-    // Selection tint (cyan wash over thumbnail).
-    if (isSel) {
-      ctx.fillStyle = SEL_TINT
+    if (!blank) {
+      // Drop shadow — drawn as a filled rect with canvas shadow, then
+      // the card body is drawn over it without shadow.
+      ctx.save()
+      ctx.shadowColor   = SHADOW_CLR
+      ctx.shadowBlur    = SHADOW_BLR
+      ctx.shadowOffsetX = SHADOW_OX
+      ctx.shadowOffsetY = SHADOW_OY
+      ctx.fillStyle     = isSel ? SEL_BG : '#ffffff'
       ctx.fillRect(0, 0, w, h)
-    }
+      ctx.restore()   // ← clears shadow before drawing thumbnail
 
-    // Card border.
-    ctx.strokeStyle = isSel ? SEL_BORDER : 'rgba(0,0,0,0.18)'
-    ctx.lineWidth   = isSel ? 1.5 : 0.75
-    ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+      // Thumbnail, clipped to card bounds.
+      ctx.save()
+      ctx.beginPath(); ctx.rect(0, 0, w, h); ctx.clip()
+      this._drawThumbnail(ctx, layer, w, h)
+      ctx.restore()
+
+      // Selection tint (cyan wash over thumbnail).
+      if (isSel) {
+        ctx.fillStyle = SEL_TINT
+        ctx.fillRect(0, 0, w, h)
+      }
+
+      // Card border.
+      ctx.strokeStyle = isSel ? SEL_BORDER : 'rgba(0,0,0,0.18)'
+      ctx.lineWidth   = isSel ? 1.5 : 0.75
+      ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
+    }
 
     ctx.restore()
   }
