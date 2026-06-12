@@ -181,12 +181,10 @@ export class Evaluator {
       }
     }
 
-    // When the widget is visible, clip renderPanel to x ≥ widgetWidth so
-    // the strip pills in the widget column are suppressed. Canvas-space
-    // pills (x ≥ 300) and slot rows (x ≥ 300) are unaffected by the clip.
-    const ww = this._layerStackWidget?.isVisible
-      ? (this._layerStackWidget.widgetWidth ?? 0)
-      : 0
+    // When the widget is visible, clip renderPanel to x ≥ 300 (the left
+    // edge of the canvas-space panel area) so strip pills are suppressed.
+    // Canvas-space pills and slot rows all start at x = 300 and are unaffected.
+    const ww = this._layerStackWidget?.isVisible ? 300 : 0
     if (ww > 0) {
       this.ctx.save()
       this.ctx.beginPath()
