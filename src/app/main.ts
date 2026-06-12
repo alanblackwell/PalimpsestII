@@ -24,12 +24,71 @@ import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 
+// All per-type setup that runs after a new layer is inserted into the stack.
+// Called from both the MenuLayer onAdded callback and wireTutorialLayer so
+// that every creation path (menu, tutorial buttons) gets identical behaviour.
+function postInsertLayer(newLayer: Layer): void {
+  if (newLayer instanceof CollectionLayer) {
+    newLayer.setEjectCallback(() => refreshStack())
+  }
+  if (newLayer instanceof TutorialLayer) {
+    wireTutorialLayer(newLayer)
+  }
+  applyDefaultBindings(newLayer)
+
+  if (newLayer instanceof AnimPathLayer) {
+    // Auto-bind shape slot to the first samplePerimeter-capable layer below.
+    if (!newLayer.shapeSlot.isActive) {
+      let l: Layer | null = newLayer.layerBelow
+      while (l !== null) {
+        if (!l.isInfrastructure && 'samplePerimeter' in l) {
+          BindingLayer.create(l, newLayer.shapeSlot)
+          break
+        }
+        l = l.layerBelow
+      }
+    }
+
+    // Auto-bind phase slot to a Rate or Clock layer, creating both if needed.
+    if (!newLayer.phaseSlot.isActive) {
+      let phaseSource: RateLayer | ClockLayer | null = null
+      for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
+        if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+      }
+      if (phaseSource === null) {
+        for (let l: Layer | null = newLayer.layerAbove; l !== null; l = l.layerAbove) {
+          if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+        }
+      }
+
+      if (phaseSource === null) {
+        const below = newLayer.layerBelow
+        const clock = new ClockLayer()
+        Layer.assignDebugName(clock)
+        clock.bounds = { ...newLayer.bounds }
+        if (below !== null) clock.insertAbove(below)
+
+        const rate = new RateLayer(1.0)
+        Layer.assignDebugName(rate)
+        rate.bounds = { ...newLayer.bounds }
+        rate.insertAbove(clock)
+
+        BindingLayer.create(clock, rate.timeSlot)
+        phaseSource = rate
+      }
+
+      BindingLayer.create(phaseSource, newLayer.phaseSlot)
+    }
+  }
+}
+
 function wireTutorialLayer(tl: TutorialLayer): void {
   tl.setOnAdded((newLayer) => {
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
     const below = tl.layerBelow
     if (below !== null) newLayer.insertAbove(below)
+    postInsertLayer(newLayer)
     refreshStack(tl)   // keep TutorialLayer selected, like MenuLayer keeps itself selected
   })
 }
@@ -154,60 +213,7 @@ function pruneDeletionLayerIfEmpty(): void {
 
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
-  if (newLayer instanceof CollectionLayer) {
-    newLayer.setEjectCallback(() => refreshStack())
-  }
-  if (newLayer instanceof TutorialLayer) {
-    wireTutorialLayer(newLayer)
-  }
-  applyDefaultBindings(newLayer)
-
-  if (newLayer instanceof AnimPathLayer) {
-    // Auto-bind shape slot to the first samplePerimeter-capable layer below.
-    if (!newLayer.shapeSlot.isActive) {
-      let l: Layer | null = newLayer.layerBelow
-      while (l !== null) {
-        if (!l.isInfrastructure && 'samplePerimeter' in l) {
-          BindingLayer.create(l, newLayer.shapeSlot)
-          break
-        }
-        l = l.layerBelow
-      }
-    }
-
-    // Auto-bind phase slot to a Rate or Clock layer, creating both if needed.
-    if (!newLayer.phaseSlot.isActive) {
-      // Search the whole stack for the first Rate or Clock layer.
-      let phaseSource: RateLayer | ClockLayer | null = null
-      for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
-        if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
-      }
-      if (phaseSource === null) {
-        for (let l: Layer | null = newLayer.layerAbove; l !== null; l = l.layerAbove) {
-          if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
-        }
-      }
-
-      // If neither exists, create Clock → Rate and use Rate as the phase source.
-      if (phaseSource === null) {
-        const below = newLayer.layerBelow
-        const clock = new ClockLayer()
-        Layer.assignDebugName(clock)
-        clock.bounds = { ...newLayer.bounds }
-        if (below !== null) clock.insertAbove(below)
-
-        const rate = new RateLayer(1.0)
-        Layer.assignDebugName(rate)
-        rate.bounds = { ...newLayer.bounds }
-        rate.insertAbove(clock)
-
-        BindingLayer.create(clock, rate.timeSlot)
-        phaseSource = rate
-      }
-
-      BindingLayer.create(phaseSource, newLayer.phaseSlot)
-    }
-  }
+  postInsertLayer(newLayer)
   refreshStack(menuLayer)
 })
 menuLayer.debugName = 'Menu'

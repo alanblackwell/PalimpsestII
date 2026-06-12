@@ -484,9 +484,23 @@ It is also available at the end of the MenuLayer button grid (grey-blue `#a0a4b8
   both the startup Tutorial button handler and the MenuLayer `onAdded` callback.
 - **`blockPixelPick = true`**: suppresses pixel-pick scan while Tutorial is selected.
 
+`wireTutorialLayer` calls `postInsertLayer(newLayer)` before `refreshStack(tl)`, so
+Tutorial buttons get identical auto-binding behaviour to Menu buttons (AnimPath shape/phase
+wiring, CollectionLayer eject callback, etc.).
+
+### `postInsertLayer` (main.ts)
+
+All per-type setup that runs after a new layer is inserted — AnimPath auto-binding,
+CollectionLayer eject callback, TutorialLayer wiring, `applyDefaultBindings` — lives here.
+Both the MenuLayer `onAdded` callback and `wireTutorialLayer` call it, so every creation
+path gets identical behaviour. The caller is responsible for calling `refreshStack` afterwards
+(selecting `menuLayer` or `tl` as appropriate).
+
 Current pages:
 1. **Welcome** — layer stack navigation (Up/Down/Delete/drag), then Ellipse/Rect/Text buttons.
 2. **Images and Video** — Image (file load + OS drag-and-drop), Video (camera), with Image/Video buttons.
+3. **Values and Binding** — parameter slots, bind-drag gesture, click-to-create shortcut, with Colour/Amount/Point buttons.
+4. **Masks and Animation Paths** — masking shapes, AnimPath auto-wiring of shape + Clock/Rate, with Mask/AnimPath buttons.
 
 StartupLayer is **not** listed in the MenuLayer button grid — it is only
 ever shown at launch and is destroyed when a mode is chosen.

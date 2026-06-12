@@ -7,6 +7,11 @@ import { RectLayer }     from './RectLayer.js'
 import { TextLayer }     from './TextLayer.js'
 import { ImageLayer }    from './ImageLayer.js'
 import { VideoLayer }    from './VideoLayer.js'
+import { AmountLayer }   from './AmountLayer.js'
+import { ColourLayer }   from './ColourLayer.js'
+import { PointLayer }    from './PointLayer.js'
+import { MaskLayer }     from './MaskLayer.js'
+import { AnimPathLayer } from './AnimPathLayer.js'
 
 // ------------------------------------------------------------
 // TutorialLayer — guided tour with text + layer-creation buttons
@@ -98,6 +103,57 @@ const PAGES: TutPage[] = [
         label: 'Video',
         colour: '#7ecf7e',
         factory: () => new VideoLayer(),
+      },
+    ],
+  },
+  {
+    title: 'Values and Binding',
+    paragraphs: [
+      'Every layer has parameter slots — shown as dots on its card in the stack panel. A value layer feeds its value into any compatible slot on another layer.',
+      'To bind: drag from a value layer\'s card in the stack to a slot dot on a consumer layer. The slot glows green when a compatible drag is in progress. You can also click an empty slot row in the panel to create and bind a default value layer automatically.',
+      'Colour sets a shape\'s fill colour. Amount controls a numeric value such as opacity or intensity. Point sets a position on the canvas. Try creating a shape from page 1 first, then add one of these and drag it onto a slot.',
+    ],
+    buttons: [
+      {
+        label: 'Colour',
+        colour: '#e8944a',
+        factory: () => new ColourLayer(rndColour()),
+      },
+      {
+        label: 'Amount',
+        colour: '#4a8fe8',
+        factory: () => new AmountLayer(Math.random()),
+      },
+      {
+        label: 'Point',
+        colour: '#cf7ecf',
+        factory: () => new PointLayer({
+          x: Node.canvasWidth  * (0.25 + Math.random() * 0.50),
+          y: Node.canvasHeight * (0.25 + Math.random() * 0.50),
+        }),
+      },
+    ],
+  },
+  {
+    title: 'Masks and Animation Paths',
+    paragraphs: [
+      'A Mask layer uses any shape — Ellipse, Rect, or a drawn path — to cut a hole or reveal area in layers above it. Add a Mask, then bind a shape to one of its shape slots by dragging.',
+      'An Animation Path moves a Point around the perimeter of any shape over time. It needs a shape (for the path) and a Rate or Clock (for speed). When you add one, both are created automatically if not already present.',
+      'Try adding a shape from page 1, then add a Mask or AnimPath and see how it binds to the shape below.',
+    ],
+    buttons: [
+      {
+        label: 'Mask',
+        colour: '#cfcf7e',
+        factory: () => new MaskLayer(),
+      },
+      {
+        label: 'AnimPath',
+        colour: '#cf7ecf',
+        factory: () => new AnimPathLayer(
+          Node.canvasWidth  / 2,
+          Node.canvasHeight / 2,
+        ),
       },
     ],
   },
