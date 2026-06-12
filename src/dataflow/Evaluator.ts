@@ -181,7 +181,21 @@ export class Evaluator {
       }
     }
 
+    // When the widget is visible, clip renderPanel to x ≥ widgetWidth so
+    // the strip pills in the widget column are suppressed. Canvas-space
+    // pills (x ≥ 300) and slot rows (x ≥ 300) are unaffected by the clip.
+    const ww = this._layerStackWidget?.isVisible
+      ? (this._layerStackWidget.widgetWidth ?? 0)
+      : 0
+    if (ww > 0) {
+      this.ctx.save()
+      this.ctx.beginPath()
+      this.ctx.rect(ww, 0, width - ww, height)
+      this.ctx.clip()
+    }
     renderTop.renderPanel(this.ctx)
+    if (ww > 0) this.ctx.restore()
+
     // Slot drop-target regions (always shown in edit mode).
     renderTop.renderSlots(this.ctx)
     this._layerStackWidget?.render(this.ctx)
