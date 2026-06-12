@@ -77,6 +77,7 @@ deletionLayer.outsideStack = true   // not inserted until first deletion
 // Widget, interaction, helpers
 // ------------------------------------------------------------------
 const widget = new LayerStackWidget(canvas)
+widget.setVisible(false)   // hidden at startup; revealed when a mode is chosen
 evaluator.setLayerStackWidget(widget)
 
 const interaction = new InteractionSystem(canvas)
@@ -306,14 +307,16 @@ deletionLayer.setPurgeCallback((layer) => {
 // ------------------------------------------------------------------
 
 const startupLayer = new StartupLayer(
-  // "Menu" button: insert MenuLayer, remove startup, refresh.
+  // "Menu" button: show widget, insert MenuLayer, remove startup, refresh.
   () => {
+    widget.setVisible(true)
     startupLayer.removeFromStack()
     menuLayer.insertAbove(root)
     refreshStack(menuLayer)
   },
-  // "Tutorial" button: insert MenuLayer as base, then a TutorialLayer above it.
+  // "Tutorial" button: show widget, insert MenuLayer + TutorialLayer, refresh.
   () => {
+    widget.setVisible(true)
     startupLayer.removeFromStack()
     menuLayer.insertAbove(root)
     const tl = new TutorialLayer()

@@ -110,8 +110,10 @@ export class LayerStackWidget {
     return false
   }
 
-  toggleVisible(): void {
-    this._visible = !this._visible
+  toggleVisible(): void { this.setVisible(!this._visible) }
+
+  setVisible(v: boolean): void {
+    this._visible = v
     Node.scheduleFrame?.()
   }
 
