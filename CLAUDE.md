@@ -377,6 +377,76 @@ true; falls back to the original `ImageData` CPU path otherwise.
 `filterGL.canvas` (an `HTMLCanvasElement`) holds the final result after
 `apply()` returns; FilterLayer copies it to `this._result` via `drawImage`.
 
+## VideoLayer (added June 2026)
+
+`src/layers/VideoLayer.ts` captures webcam input and produces `ValueType.Image`.
+
+- Camera enumeration via `navigator.mediaDevices.enumerateDevices()` after a brief
+  permission-unlock `getUserMedia` call. ◀ / ▶ nav buttons in the canvas-space pill
+  cycle through cameras when more than one is present.
+- **Frame loop**: `recompute()` calls `queueMicrotask(() => forceDirty())` while live
+  and in the stack. The microtask fires *after* `evaluate()` clears `_dirty`, so the
+  next rAF finds the node dirty and captures a fresh frame. Loop self-terminates when
+  `_frozen || _stream === null || outsideStack`.
+- **Freeze toggle**: `enableSlot` (Event) — rising edge toggles `_frozen`. Manual
+  toggle button in the slot row follows the ShapeLayer/VideoLayer pattern
+  (`override renderSlots`). Bound → suspend, SuspendedBound → resume, Unbound → flip.
+- The hidden `<video>` element must remain in the DOM for Safari to deliver frames
+  (positioned at `top: -9999px`).
+- Panel follows the two-pill convention: strip pill at `this.bounds`, camera-selector
+  pill at `{ x: 300, y: 50, width: 260, height: bounds.height }`.
+
+## RootLayer background controls (added June 2026)
+
+`RootLayer` now has two parameter slots and interactive controls:
+
+- **`toggleSlot`** (Event) — rising edge flips `_transparent`. Default `false` = white
+  fill. `true` = checkerboard (signals no fill). Manual toggle button in the slot row.
+- **`colourSlot`** (Colour) — when bound, overrides the white fill with the bound colour.
+  Unbound = white (`{ r:1, g:1, b:1, a:1 }`).
+
+`renderSelf` uses `Node.canvasWidth/Height` (not `this.bounds`) because `this.bounds`
+covers the full canvas rect for the checkerboard — do **not** use `this.bounds` for
+panel geometry in RootLayer. Fixed constants `STRIP_X/Y/W/H` and `PANEL_X/Y/W` are
+used instead. `panelBottom` is overridden to return `PANEL_Y + STRIP_H + 8 = 94`.
+
+## DeletionLayer — deferred insertion (updated June 2026)
+
+`DeletionLayer` is no longer inserted at startup. It is added to the stack (above
+`root`) only when the first deletion occurs, and removed again when its archive is
+emptied. Two helpers in `main.ts` manage this:
+
+- `ensureDeletionLayerInStack()` — inserts above `root` if `outsideStack`; called
+  before every `deletionLayer.archive()` call.
+- `pruneDeletionLayerIfEmpty()` — calls `removeFromStack()` when archive length is 0;
+  called in the restore, purge, and slot-restore callbacks.
+- `lowestAnchor()` — returns `deletionLayer` when in stack, `root` otherwise; used
+  by drag-drop fallback insertion sites.
+
+`deletionLayer.outsideStack` is set to `true` at construction (before any insertion)
+so `lowestAnchor()` returns `root` from the start.
+
+## LayerStackWidget — thumbnail visibility (updated June 2026)
+
+`Layer` has a new property `thumbnailOnlyWhenSelected: boolean = false`. When `true`,
+`LayerStackWidget._drawCard` skips the entire card (body, shadow, thumbnail, border)
+unless the layer is the currently selected layer.
+
+`RootLayer` overrides it to `true` — its white-fill thumbnail is invisible at startup
+and reappears only when Root is selected.
+
+## Strip pill suppression (added June 2026)
+
+Strip pills (drawn at `this.bounds`, in the widget column at `x: 40–300`) are
+suppressed when the StackWidget is visible. In `Evaluator.render()`, `renderPanel` is
+wrapped in a `save() / clip(rect(300, 0, …)) / restore()` when the widget is visible.
+The clip boundary is `x = 300` (the left edge of the canvas-space panel area), which
+covers the full extent of strip pills while leaving canvas-space pills (`x ≥ 300`)
+and slot rows (`x ≥ 300`) completely unaffected.
+
+Pressing **h** hides the widget, removes the clip, and makes strip pills visible —
+useful for development and inspection.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
