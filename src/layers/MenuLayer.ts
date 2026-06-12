@@ -3,6 +3,7 @@ import { Node }            from '../core/Node.js'
 import { ValueType }       from '../core/types.js'
 import type { Point, Ctx2D } from '../core/types.js'
 import { contentLeft }     from '../interaction/layout.js'
+import { rndColour }       from '../core/colour.js'
 
 import { AmountLayer }     from './AmountLayer.js'
 import { ColourLayer }     from './ColourLayer.js'
@@ -70,23 +71,6 @@ const RIGHT_MARGIN = 12     // minimum gap to the canvas's right edge
 
 const rnd  = () => Math.random()
 const rndR = (lo: number, hi: number) => lo + rnd() * (hi - lo)
-
-// Random colour across the full hue range, avoiding near-black and near-white.
-// Saturation 0.25–1.0 (allows pastels but not grey); value 0.30–0.82.
-function rndColour(): { r: number; g: number; b: number; a: number } {
-  const h = rnd() * 360
-  const s = rndR(0.25, 1.0)
-  const v = rndR(0.30, 0.82)
-  const c = v * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = v - c
-  let r = 0, g = 0, b = 0
-  if      (h < 60)  { r = c; g = x }
-  else if (h < 120) { r = x; g = c }
-  else if (h < 180) {        g = c; b = x }
-  else if (h < 240) {        g = x; b = c }
-  else if (h < 300) { r = x;        b = c }
-  else              { r = c;        b = x }
-  return { r: r + m, g: g + m, b: b + m, a: 1 }
-}
 
 // Random shape geometry: position and size guaranteed to fit within the canvas.
 function rndShape(canvasW: number, canvasH: number): { cx: number; cy: number; sw: number; sh: number } {

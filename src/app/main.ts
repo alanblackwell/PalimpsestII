@@ -4,6 +4,7 @@ import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { ValueType, SlotState } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
+import { rndColour }         from '../core/colour.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
@@ -100,7 +101,7 @@ function wireTutorialLayer(tl: TutorialLayer): void {
 // ------------------------------------------------------------------
 const DEFAULT_VALUE_LAYER: Partial<Record<ValueType, (w: number, h: number) => Layer>> = {
   [ValueType.Amount]:    ()     => new AmountLayer(0.5),
-  [ValueType.Colour]:    ()     => new ColourLayer({ r: 1, g: 0.42, b: 0.17, a: 1 }),
+  [ValueType.Colour]:    ()     => new ColourLayer(rndColour()),
   [ValueType.Point]:     (w, h) => new PointLayer({ x: w / 2, y: h / 2 }),
   [ValueType.Direction]: ()     => new DirectionLayer(0, 0.7),
   [ValueType.Rate]:      ()     => new RateLayer(1.0),
