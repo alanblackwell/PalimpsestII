@@ -505,6 +505,79 @@ Current pages:
 StartupLayer is **not** listed in the MenuLayer button grid — it is only
 ever shown at launch and is destroyed when a mode is chosen.
 
+## StrokeLayer (added June 2026)
+
+`src/layers/StrokeLayer.ts` — freehand stroke layer. Produces `ValueType.Point`,
+`ValueType.Image`, and `ValueType.Mask`.
+
+### Drawing
+
+While selected, clicking "✎ draw" enters draw mode. `hitTestSelf` returns `this` for
+all points in draw mode (`blockPixelPick = true` suppresses pixel-pick concurrently).
+On pointer-up the raw polyline is:
+1. Simplified with Ramer-Douglas-Peucker (ε = 8 px)
+2. Fitted to G1-continuous cubic Bézier segments using Catmull-Rom tangents
+   (control-point distance = chord/3)
+3. Normalised into local coordinates (centroid at origin, `_scale = 1, _rotation = 0`)
+
+### Coordinate system
+
+Local segments (`_localSegs: Seg[]`) are centred at origin. The transform
+`(_cx, _cy, _scale, _rotation)` is the **base** transform set by the draw step and
+handle drags. `recompute()` derives a **computed** transform
+`(_computedCx, _computedCy, _computedScale, _computedRotation)` from the base +
+slot bindings, and `_localToCanvas` uses the computed values. `_localToCanvasRaw`
+uses only the base values (needed inside `recompute` to find the stable start anchor).
+
+### Handles (ImageLayer style)
+
+Three handles drawn in `renderPanel` (edit mode only):
+- **⊕ Move** (circle+crosshair, white/blue-grey) — translates `_cx/_cy`
+- **□ Scale** (square, cyan/blue-grey) — uniform scale, at local bbox lower-right
+- **○ Rotate** (circle on 85 px arm) — rotates around centre
+
+Dimmed (blue-grey) when `startSlot` or `endSlot` is active. Dragging any handle
+while an endpoint slot is active calls `_suspendEndpointSlots()`, which toggles
+the BindingLayers to `SuspendedBound` and bakes the computed transform into base.
+
+### Slots
+
+- **`widthSlot`** (Amount) — stroke width 0–30 px
+- **`colourSlot`** (Colour) — stroke colour
+- **`startSlot`** (Point) — pins the start; clicking an empty slot creates a
+  PointLayer initialised to `getStrokeStart()` (base transform, no computed offset)
+- **`endSlot`** (Point) — when active, `recompute` derives `_computedScale` and
+  `_computedRotation` so the stroke's start stays fixed (anchored by the base
+  transform) and the rendered end exactly reaches the bound point. Both scale and
+  rotation are adjusted (rubber-band behaviour):
+  ```
+  _computedScale    = ptDist(startRaw, target) / ptDist(ls, le)
+  _computedRotation = atan2(target − startRaw) − atan2(le − ls)
+  ```
+
+### Arc-length parameterisation / AnimPath source
+
+`samplePerimeter(t)` — arc-length-parameterised position along the open stroke
+(t=0 → start, t=1 → end). An AnimPath using a StrokeLayer as its shape will
+traverse the stroke end-to-end and then jump back to the start (because the stroke
+is open, not closed).
+
+`getPoint()` returns the stroke midpoint; used as fallback when AnimPath calls
+`samplePerimeter` but `samplePerimeter` isn't detected.
+
+### Mask source
+
+`getMask()` returns an `OffscreenCanvas` with the closed stroke region (the open
+stroke path + a virtual straight line back to the start), white-on-transparent,
+suitable for MaskLayer.
+
+### Image source / thumbnail
+
+`getImage()` returns a separate `_imageCanvas` with the stroke rendered at its
+actual line width and colour (no closing line). Since `ValueType.Image` appears
+before `ValueType.Mask` in `thumbnail.ts`'s type-check order, the thumbnail shows
+the rendered stroke rather than the closed boundary silhouette.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase

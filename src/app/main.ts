@@ -23,6 +23,7 @@ import { CollectionLayer }   from '../layers/CollectionLayer.js'
 import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
+import { StrokeLayer }       from '../layers/StrokeLayer.js'
 
 // All per-type setup that runs after a new layer is inserted into the stack.
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
@@ -286,6 +287,26 @@ interaction.setBoundCallback((source, slot) => {
 interaction.setSlotClickCallback((consumer, slot) => {
   if (slot.state === SlotState.Unbound) {
     if (slot.type === null) return
+
+    // StrokeLayer start/end slots: initialise the new PointLayer at the
+    // actual stroke endpoint so the binding is a no-op by default.
+    if (consumer instanceof StrokeLayer && slot.type === ValueType.Point) {
+      const pos = slot === consumer.startSlot
+        ? consumer.getStrokeStart()
+        : slot === consumer.endSlot
+          ? consumer.getStrokeEnd()
+          : null
+      if (pos !== null) {
+        const newLayer = new PointLayer(pos)
+        Layer.assignDebugName(newLayer)
+        newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+        newLayer.insertAbove(consumer)
+        BindingLayer.create(newLayer, slot)
+        refreshStack(newLayer)
+        return
+      }
+    }
+
     const factory = DEFAULT_VALUE_LAYER[slot.type]
     if (factory === undefined) return
 
