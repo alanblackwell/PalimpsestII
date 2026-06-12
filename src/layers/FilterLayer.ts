@@ -10,6 +10,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { filterGL } from './FilterGL.js'
 
 // ------------------------------------------------------------
 // FilterLayer — composable image-filter chain
@@ -526,7 +527,7 @@ export class FilterLayer extends Layer implements ImageSource {
       }
     }
 
-    // ── Apply filter chain via ImageData pixel operations ────
+    // ── Acquire source image ─────────────────────────────────
     const w = Node.canvasWidth
     const h = Node.canvasHeight
 
@@ -541,35 +542,58 @@ export class FilterLayer extends Layer implements ImageSource {
       return
     }
 
-    // Size work canvas and result canvas.
-    if (!this._workCanvas || this._workCanvas.width !== w || this._workCanvas.height !== h)
-      this._workCanvas = new OffscreenCanvas(w, h)
     if (!this._result || this._result.width !== w || this._result.height !== h)
       this._result = new OffscreenCanvas(w, h)
 
-    // Draw source into work canvas so we can read pixels from it.
-    const wctx = this._workCanvas.getContext('2d')!
-    wctx.clearRect(0, 0, w, h)
-    wctx.drawImage(src as CanvasImageSource, 0, 0, w, h)
-
-    // Capture source thumbnail — sized to match the source slot row height.
+    // ── Capture source thumbnail ─────────────────────────────
     if (!this._srcPreview || this._srcPreview.height !== SLT_H)
       this._srcPreview = new OffscreenCanvas(PREV_W, SLT_H)
     const spctx = this._srcPreview.getContext('2d')!
     spctx.clearRect(0, 0, PREV_W, SLT_H)
-    spctx.drawImage(this._workCanvas, 0, 0, PREV_W, SLT_H)
+    spctx.drawImage(src as CanvasImageSource, 0, 0, PREV_W, SLT_H)
 
-    // Pull the pixels into a mutable ImageData buffer.
+    // Build the list of enabled steps for the pipeline.
+    const enabledRows: FilterRow[] = this._rows.filter(r => r.enabled)
+    const steps = enabledRows.map(r => ({ label: r.def.label, intensity: r.intensity }))
+
+    // ── WebGL pipeline (preferred) ───────────────────────────
+    if (filterGL.supported && steps.length > 0) {
+      const thumbMap = filterGL.apply(src as CanvasImageSource, steps, w, h, PREV_H)
+
+      // Update per-row thumbnail cache from indexed results.
+      for (let i = 0; i < enabledRows.length; i++) {
+        const thumb = thumbMap.get(i)
+        if (thumb) this._rowPreviews.set(enabledRows[i]!, thumb)
+      }
+
+      // Copy GL canvas result to this._result.
+      const rctx = this._result.getContext('2d')!
+      rctx.clearRect(0, 0, w, h)
+      rctx.drawImage(filterGL.canvas, 0, 0)
+      return
+    }
+
+    // ── CPU fallback (no WebGL or no enabled filters) ────────
+    if (!this._workCanvas || this._workCanvas.width !== w || this._workCanvas.height !== h)
+      this._workCanvas = new OffscreenCanvas(w, h)
+
+    const wctx = this._workCanvas.getContext('2d')!
+    wctx.clearRect(0, 0, w, h)
+    wctx.drawImage(src as CanvasImageSource, 0, 0, w, h)
+
+    if (steps.length === 0) {
+      const rctx = this._result.getContext('2d')!
+      rctx.clearRect(0, 0, w, h)
+      rctx.drawImage(this._workCanvas, 0, 0)
+      return
+    }
+
     const imageData = wctx.getImageData(0, 0, w, h)
     const d = imageData.data
 
-    // Apply each enabled filter in order, mutating d in-place.
     for (const row of this._rows) {
       if (!row.enabled) continue
-
       row.def.apply(d, row.intensity, w, h)
-
-      // Write current state back to work canvas and capture thumbnail.
       wctx.putImageData(imageData, 0, 0)
       let prev = this._rowPreviews.get(row)
       if (!prev) { prev = new OffscreenCanvas(PREV_W, PREV_H); this._rowPreviews.set(row, prev) }
@@ -578,7 +602,6 @@ export class FilterLayer extends Layer implements ImageSource {
       pctx.drawImage(this._workCanvas, 0, 0, PREV_W, PREV_H)
     }
 
-    // Write final result.
     const rctx = this._result.getContext('2d')!
     rctx.clearRect(0, 0, w, h)
     rctx.putImageData(imageData, 0, 0)

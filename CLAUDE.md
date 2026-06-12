@@ -322,6 +322,49 @@ A `[Tile/Fit]` button in the panel toggles modes. `autoBindRules()` binds
 `sourceSlot` to the nearest `Image`-producing layer below, with
 `removeAfterBind: true`.
 
+## FilterLayer (updated June 2026)
+
+`src/layers/FilterLayer.ts` is a composable image-filter chain. Each filter is
+a draggable pill with a toggle, an intensity slider, and two parameter slots
+(Event → toggle, Amount → intensity). Pills reflow into additional columns when
+they exceed the canvas height.
+
+**14 filters:** blur, brightness, contrast, saturate, hue-rotate, grayscale,
+invert, sepia, threshold, edges (Sobel), solarise, pixelise, mosaic (Voronoi),
+shadow (drop shadow).
+
+**Source slot** sits above column 0, bound to the nearest `Image` layer below
+via `autoBindRules`. Source and per-step intermediate thumbnails are drawn to
+the right of each pill column.
+
+### WebGL pipeline (`src/layers/FilterGL.ts`)
+
+A singleton (`filterGL`) owns one hidden `<canvas>` + WebGL context shared
+across all `FilterLayer` instances (browsers cap WebGL contexts; avoid creating
+one per layer).
+
+Architecture:
+- **3 FBO textures**: A and B ping-pong for the filter chain; C saves the
+  pre-shadow input for the composite pass.
+- **Separate `_srcTex`**: the uploaded source image (never an FBO target).
+- **Transfer canvas**: `OffscreenCanvas` is not a valid WebGL 1 `texImage2D`
+  source on all Safari versions, so the source is drawn to a hidden
+  `HTMLCanvasElement` before upload. `UNPACK_FLIP_Y_WEBGL = true` keeps all
+  textures (source and FBO) in the same GL coordinate space.
+- **19 GLSL programs**, lazily compiled and cached: one per filter + `blur_h`,
+  `blur_v`, `shadow_setup`, `shadow_comp`, `_pt` (passthrough).
+- **Multi-pass filters**: blur = 3 × (H + V); shadow = setup + 3 × (H + V) +
+  composite (shadow blur radius uses `t * 0.8` as the intensity to match the
+  CPU `t * 16` scaling).
+- **Thumbnails**: after each step the current result is blitted to the GL canvas
+  and captured via `drawImage` into a small `OffscreenCanvas`.
+
+`FilterLayer.recompute()` uses the GL pipeline when `filterGL.supported` is
+true; falls back to the original `ImageData` CPU path otherwise.
+
+`filterGL.canvas` (an `HTMLCanvasElement`) holds the final result after
+`apply()` returns; FilterLayer copies it to `this._result` via `drawImage`.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
