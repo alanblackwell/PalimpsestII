@@ -103,6 +103,18 @@ Standard elements:
 The canvas-space panel below the strip (slot rows) starts at `this.panelBottom`
 (default: `50 + bounds.height + 8`) at `x: 300, width: 260`.
 
+**IMPORTANT — canvas-space pill rule:** Any interactive controls that a layer needs
+(camera selector, shape handles, colour pickers, etc.) **must** be drawn in a second
+pill at `{ x: 300, y: 50, width: 260, height: bounds.height }` inside `renderPanel`,
+*not* only in `this.bounds`. The Stack Widget covers roughly `x: 0–295`, so controls
+drawn only in `this.bounds` will be hidden behind it. See `ShapeLayer` and `VideoLayer`
+for the canonical two-pill `renderPanel` pattern.
+
+Toggle buttons for event slots (freeze/fill-mode/etc.) go in `override renderSlots`
+at `PANEL_X + PANEL_W - BTN_SZ - 3` in the corresponding slot row (BTN_SZ = 20).
+Store bounds in a `_toggleBounds` field and check it in `hitTestSelf` /
+`handlePointerDown`. See `ShapeLayer.renderSlots` for the canonical pattern.
+
 ## Key files
 
 | Path | Purpose |
