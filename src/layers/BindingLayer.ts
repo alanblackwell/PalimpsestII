@@ -4,13 +4,15 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
   boundingBoxContains,
-  type Amount,    type AmountSource,
-  type Colour,    type ColourSource,
-  type Point,     type PointSource,
-  type Direction, type DirectionSource,
-  type Rate,      type RateSource,
-  type Count,     type CountSource,
-  type EventValue, type EventSource,
+  type Amount,      type AmountSource,
+  type Colour,      type ColourSource,
+  type Point,       type PointSource,
+  type Direction,   type DirectionSource,
+  type Rate,        type RateSource,
+  type Count,       type CountSource,
+  type EventValue,  type EventSource,
+  type ImageValue,  type ImageSource,
+  type MaskValue,   type MaskSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -76,7 +78,8 @@ function primaryTypeColour(types: ReadonlySet<ValueType>): string {
 
 export class BindingLayer extends Layer
   implements AmountSource, ColourSource, PointSource,
-             DirectionSource, RateSource, CountSource, EventSource {
+             DirectionSource, RateSource, CountSource, EventSource,
+             ImageSource, MaskSource {
 
   readonly types: ReadonlySet<ValueType>
   override readonly isInfrastructure = true
@@ -177,13 +180,15 @@ export class BindingLayer extends Layer
   // Typed source interfaces — all delegate to _source
   // ----------------------------------------------------------
 
-  getAmount():    Amount    { return (this._source as AmountSource).getAmount() }
-  getColour():    Colour    { return (this._source as ColourSource).getColour() }
-  getPoint():     Point     { return (this._source as PointSource).getPoint() }
-  getDirection(): Direction { return (this._source as DirectionSource).getDirection() }
-  getRate():      Rate      { return (this._source as RateSource).getRate() }
-  getCount():     Count     { return (this._source as CountSource).getCount() }
+  getAmount():    Amount     { return (this._source as AmountSource).getAmount() }
+  getColour():    Colour     { return (this._source as ColourSource).getColour() }
+  getPoint():     Point      { return (this._source as PointSource).getPoint() }
+  getDirection(): Direction  { return (this._source as DirectionSource).getDirection() }
+  getRate():      Rate       { return (this._source as RateSource).getRate() }
+  getCount():     Count      { return (this._source as CountSource).getCount() }
   getEventTime(): EventValue { return (this._source as EventSource).getEventTime() }
+  getImage():     ImageValue { return (this._source as ImageSource).getImage() }
+  getMask():      MaskValue  { return (this._source as MaskSource).getMask() }
 
   // ----------------------------------------------------------
   // Node

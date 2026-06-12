@@ -278,7 +278,15 @@ export class InteractionSystem {
     if (!this._isOnCurrentLayer(node)) return
 
     // Let the node decide whether to accept the event.
-    if (!node.handlePointerDown(point)) return
+    if (!node.handlePointerDown(point)) {
+      // Node declined — still check whether the click landed on a slot dot.
+      const sel = this._widget?.selected ?? null
+      if (sel !== null) {
+        const slot = sel.hitTestSlot(point)
+        if (slot !== null) this._onSlotClick?.(sel, slot)
+      }
+      return
+    }
 
     this._active = { node, pointerId: e.pointerId }
     this._canvas.setPointerCapture(e.pointerId)
