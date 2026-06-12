@@ -2,6 +2,7 @@ import { Layer }     from '../core/Layer.js'
 import { Node }      from '../core/Node.js'
 import type { Ctx2D, Point } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from './thumbnail.js'
+import { stackWidgetWidth } from './layout.js'
 
 // ------------------------------------------------------------
 // LayerStackWidget — overlapping thumbnail card stack
@@ -39,9 +40,8 @@ import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 
 // ── Visual constants ─────────────────────────────────────────
 
-const WIDGET_W    = 280     // total strip width
 const CARD_X      = 16      // left margin within strip (room for shadow + tilt)
-const CARD_W      = 244     // untilted card width
+const CARD_MARGIN = 20      // gap between the card's right edge and the strip's right edge
 const TILT        = Math.PI / 90           // 2 ° clockwise
 const SHADOW_CLR  = 'rgba(0,0,0,0.50)'
 const SHADOW_BLR  = 12                     // canvas shadowBlur (≈ 6 px radius)
@@ -98,7 +98,7 @@ export class LayerStackWidget {
   get selected(): Layer | null { return this._selected }
   set selected(l: Layer | null) { this._selected = l }
 
-  get widgetWidth(): number { return WIDGET_W }
+  get widgetWidth(): number { return this._widgetW() }
 
   // Handle a key press. Returns true if the key was consumed.
   handleKey(key: string): boolean {
@@ -165,8 +165,18 @@ export class LayerStackWidget {
   // Geometry
   // ------------------------------------------------------------------
 
+  // Total strip width — 20% of canvas width, clamped to a usable range.
+  private _widgetW(): number {
+    return stackWidgetWidth(this._canvas.width)
+  }
+
+  // Untilted card width — fills the strip, minus the left margin and right gap.
+  private _cardW(): number {
+    return this._widgetW() - CARD_X - CARD_MARGIN
+  }
+
   private _cardH(): number {
-    return Math.round(CARD_W * this._canvas.height / this._canvas.width)
+    return Math.round(this._cardW() * this._canvas.height / this._canvas.width)
   }
 
   private _spacing(): number {
@@ -280,7 +290,7 @@ export class LayerStackWidget {
       const y = this._dragging
         ? this._cardYDrag(i, sp)
         : this._cardY(i, sp)
-      this._drawCard(ctx, layer, y, CARD_W, ch)
+      this._drawCard(ctx, layer, y, this._cardW(), ch)
     }
 
     // Drop-target indicator line.
@@ -290,7 +300,7 @@ export class LayerStackWidget {
 
     // Dragged card floats above everything.
     if (this._dragLayer !== null) {
-      this._drawCard(ctx, this._dragLayer, this._dragY, CARD_W, ch, true)
+      this._drawCard(ctx, this._dragLayer, this._dragY, this._cardW(), ch, true)
     }
 
     // Current-layer name strip at the very bottom of the widget area.
@@ -302,7 +312,7 @@ export class LayerStackWidget {
     if (lh < 8) return
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.72)'
-    ctx.fillRect(0, 0, WIDGET_W, lh)
+    ctx.fillRect(0, 0, this._widgetW(), lh)
     if (this._selected !== null) {
       const tc = typeColor(this._selected)
       ctx.fillStyle = tc
@@ -378,7 +388,7 @@ export class LayerStackWidget {
   // ------------------------------------------------------------------
 
   inBounds(pt: Point): boolean {
-    return this._visible && pt.x >= 0 && pt.x < WIDGET_W
+    return this._visible && pt.x >= 0 && pt.x < this._widgetW()
   }
 
   handlePointerDown(pt: Point): boolean {
@@ -400,7 +410,7 @@ export class LayerStackWidget {
     const i  = this._layers.indexOf(this._dragLayer)
     const sp = this._spacing()
 
-    if (pt.x > WIDGET_W) {
+    if (pt.x > this._widgetW()) {
       // Pointer left the strip — bind-drag mode
       Node.bindDrag.active = true
       Node.bindDrag.source = this._dragLayer
@@ -477,7 +487,7 @@ export class LayerStackWidget {
     ctx.lineWidth   = 2
     ctx.beginPath()
     ctx.moveTo(CARD_X + 6, lineY)
-    ctx.lineTo(CARD_X + CARD_W - 6, lineY)
+    ctx.lineTo(CARD_X + this._cardW() - 6, lineY)
     ctx.stroke()
     // Small chevron ▶ at left edge to indicate insertion point.
     const aw = 6

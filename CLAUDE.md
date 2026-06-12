@@ -437,15 +437,58 @@ and reappears only when Root is selected.
 
 ## Strip pill suppression (added June 2026)
 
-Strip pills (drawn at `this.bounds`, in the widget column at `x: 40–300`) are
-suppressed when the StackWidget is visible. In `Evaluator.render()`, `renderPanel` is
-wrapped in a `save() / clip(rect(300, 0, …)) / restore()` when the widget is visible.
-The clip boundary is `x = 300` (the left edge of the canvas-space panel area), which
-covers the full extent of strip pills while leaving canvas-space pills (`x ≥ 300`)
-and slot rows (`x ≥ 300`) completely unaffected.
+Strip pills (drawn at `this.bounds`, in the widget column to the left of
+`contentLeft(canvasWidth)`) are suppressed when the StackWidget is visible. In
+`Evaluator.render()`, `renderPanel` is wrapped in a `save() / clip(rect(ww, 0, …)) /
+restore()` when the widget is visible, where `ww = contentLeft(width)`. This covers
+the full extent of strip pills while leaving canvas-space pills and slot rows
+(`x ≥ contentLeft(width)`) completely unaffected.
 
 Pressing **h** hides the widget, removes the clip, and makes strip pills visible —
 useful for development and inspection.
+
+## LayerStackWidget — responsive width (added June 2026)
+
+`src/interaction/layout.ts` is the single source of truth for the widget/content
+boundary:
+- `stackWidgetWidth(canvasWidth)` — `canvas.width * 0.20`, clamped to
+  `[WIDGET_MIN=120, WIDGET_MAX=280]`.
+- `contentLeft(canvasWidth)` — `stackWidgetWidth(canvasWidth) + WIDGET_MARGIN(20)`,
+  the left edge of the canvas-space panel area (replaces the old fixed `x = 300`).
+
+`LayerStackWidget._widgetW()` calls `stackWidgetWidth`. `_cardW()` is
+`_widgetW() - CARD_X(16) - CARD_MARGIN(20)`. All draw/hit-test code (`_cardH`,
+`_drawCard`, `inBounds`, `handlePointerMove`'s bind-drag threshold, the
+current-label strip, the drop indicator) calls these instead of fixed
+`WIDGET_W`/`CARD_W` constants.
+
+At the original ~1400px-wide desktop canvas this is unchanged (280px widget,
+`contentLeft` = 300 — same as the old fixed values). On a phone-width canvas the
+widget shrinks toward the 120px floor and `contentLeft` shrinks with it.
+
+**Note:** the canvas-space pill convention for individual layers (`x: 300, width:
+260` in many `renderPanel` implementations) still uses the literal `300`, not
+`contentLeft()`. Only `LayerStackWidget`, `Evaluator`, and `MenuLayer` have been
+made responsive so far — per-layer panels are a larger follow-up if full phone
+support is needed.
+
+## MenuLayer — responsive button grid (added June 2026)
+
+The "Add layer" button grid centres itself in the space to the right of the
+LayerStackWidget and shrinks to fit narrow canvases. `MenuLayer._layout()`
+(in `src/layers/MenuLayer.ts`) computes:
+
+- **Columns**: starts at `COLS_MAX = 4`; if 4 columns at `BTN_W_MAX = 120`px
+  don't fit in the available width, drops to 3, then 2.
+- **Button width**: shrinks down to `BTN_W_MIN = 64`px to fill the available
+  width at the chosen column count (clamped to `[BTN_W_MIN, BTN_W_MAX]`).
+- **Centring**: `panX = contentLeft(canvasWidth) + leftover / 2`, so any extra
+  width beyond the grid's natural size becomes equal margins on both sides.
+
+`_drawGrid` and `_btnIndexAt` both call `_layout()` so rendering and hit-testing
+stay in sync. Button labels are clipped to their button (`ctx.clip()`) and the
+font shrinks (11px → 10px → 9px) as `btnW` drops below 95px / 75px, so labels
+don't overflow into neighbouring buttons on narrow grids.
 
 ## Startup flow (added June 2026)
 

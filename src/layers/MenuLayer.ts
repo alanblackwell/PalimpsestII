@@ -1,6 +1,8 @@
 import { Layer }           from '../core/Layer.js'
+import { Node }            from '../core/Node.js'
 import { ValueType }       from '../core/types.js'
 import type { Point, Ctx2D } from '../core/types.js'
+import { contentLeft }     from '../interaction/layout.js'
 
 import { AmountLayer }     from './AmountLayer.js'
 import { ColourLayer }     from './ColourLayer.js'
@@ -50,15 +52,19 @@ import { StrokeLayer }    from './StrokeLayer.js'
 
 const ACCENT   = '#888888'
 
-// Button grid layout (canvas-space)
-const COLS     = 4
-const BTN_W    = 120
-const BTN_H    = 34
-const BTN_GAP  = 7
-const PANEL_X  = 308    // left edge of grid (just right of the strip)
-const PANEL_Y  = 54     // top of panel
-const HEADER_H = 28     // height of the "Add layer" title row
-const PAD      = 10     // inner padding below header
+// Button grid layout (canvas-space).
+// The grid is centred in the space to the right of the LayerStackWidget.
+// On narrow canvases there isn't room for COLS_MAX columns at BTN_W_MAX,
+// so columns and/or button width shrink — see _layout().
+const COLS_MAX     = 4
+const BTN_W_MAX    = 120
+const BTN_W_MIN    = 64
+const BTN_H        = 34
+const BTN_GAP      = 7
+const PANEL_Y      = 54     // top of panel
+const HEADER_H     = 28     // height of the "Add layer" title row
+const PAD          = 10     // inner padding below header
+const RIGHT_MARGIN = 12     // minimum gap to the canvas's right edge
 
 // ── Randomisation helpers ──────────────────────────────────────
 
@@ -207,28 +213,58 @@ export class MenuLayer extends Layer {
   // Private helpers
   // ----------------------------------------------------------
 
+  // Choose the column count and button width that best fill the space to
+  // the right of the LayerStackWidget. Starts at COLS_MAX/BTN_W_MAX; if
+  // that doesn't fit, drops columns (down to 2) and shrinks button width
+  // (down to BTN_W_MIN) so the grid fills the available width. The panel
+  // is then centred in any leftover space.
+  private _layout(): { cols: number; btnW: number; panX: number; panW: number } {
+    const canvasW = Node.canvasWidth
+    const left    = contentLeft(canvasW)
+    const availW  = Math.max(BTN_W_MIN + PAD * 2, canvasW - left - RIGHT_MARGIN)
+
+    let cols = COLS_MAX
+    let btnW = BTN_W_MAX
+    for (; cols > 2; cols--) {
+      btnW = (availW - PAD * 2 - (cols - 1) * BTN_GAP) / cols
+      if (btnW >= BTN_W_MIN) break
+    }
+    if (cols === 2) btnW = (availW - PAD * 2 - BTN_GAP) / 2
+    btnW = Math.min(BTN_W_MAX, Math.max(BTN_W_MIN, btnW))
+
+    const gridW = cols * btnW + (cols - 1) * BTN_GAP
+    const panW  = gridW + PAD * 2
+    const panX  = left + Math.max(0, (availW - panW) / 2)
+
+    return { cols, btnW, panX, panW }
+  }
+
   private _btnIndexAt(point: Point): number {
-    const gy = PANEL_Y + HEADER_H + PAD
+    const { cols, btnW, panX } = this._layout()
+    const gridX = panX + PAD
+    const gy    = PANEL_Y + HEADER_H + PAD
     for (let i = 0; i < BUTTONS.length; i++) {
-      const col = i % COLS
-      const row = Math.floor(i / COLS)
-      const bx  = PANEL_X + col * (BTN_W + BTN_GAP)
-      const by  = gy       + row * (BTN_H + BTN_GAP)
-      if (point.x >= bx && point.x <= bx + BTN_W &&
+      const col = i % cols
+      const row = Math.floor(i / cols)
+      const bx  = gridX + col * (btnW + BTN_GAP)
+      const by  = gy    + row * (BTN_H + BTN_GAP)
+      if (point.x >= bx && point.x <= bx + btnW &&
           point.y >= by && point.y <= by + BTN_H) return i
     }
     return -1
   }
 
   private _drawGrid(ctx: Ctx2D): void {
-    const rows  = Math.ceil(BUTTONS.length / COLS)
-    const gridW = COLS * BTN_W + (COLS - 1) * BTN_GAP
+    const { cols, btnW, panX, panW } = this._layout()
+    const rows  = Math.ceil(BUTTONS.length / cols)
     const gridH = rows * BTN_H + (rows - 1) * BTN_GAP
-    const panW  = gridW + PAD * 2
     const panH  = HEADER_H + PAD + gridH + PAD
-    const panX  = PANEL_X - PAD
+    const gridX = panX + PAD
 
     this._cpBounds = { x: panX, y: PANEL_Y, width: panW, height: panH }
+
+    // Shrink the label font as buttons get narrower so labels stay legible.
+    const fontSize = btnW < 75 ? 9 : btnW < 95 ? 10 : 11
 
     ctx.save()
 
@@ -256,16 +292,16 @@ export class MenuLayer extends Layer {
 
     for (let i = 0; i < BUTTONS.length; i++) {
       const btn  = BUTTONS[i]!
-      const col  = i % COLS
-      const row  = Math.floor(i / COLS)
-      const bx   = PANEL_X + col * (BTN_W + BTN_GAP)
-      const by   = gy       + row * (BTN_H + BTN_GAP)
+      const col  = i % cols
+      const row  = Math.floor(i / cols)
+      const bx   = gridX + col * (btnW + BTN_GAP)
+      const by   = gy    + row * (BTN_H + BTN_GAP)
       const midY = by + BTN_H / 2
 
       // Button background
       ctx.fillStyle = 'rgba(255,255,255,0.07)'
       ctx.beginPath()
-      ctx.roundRect(bx, by, BTN_W, BTN_H, 5)
+      ctx.roundRect(bx, by, btnW, BTN_H, 5)
       ctx.fill()
 
       // Colour-coded left stripe
@@ -274,12 +310,17 @@ export class MenuLayer extends Layer {
       ctx.roundRect(bx, by, 3, BTN_H, [5, 0, 0, 5])
       ctx.fill()
 
-      // Label
+      // Label, clipped to the button so it can't bleed into neighbours
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(bx, by, btnW, BTN_H)
+      ctx.clip()
       ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-      ctx.font         = '11px monospace'
+      ctx.font         = `${fontSize}px monospace`
       ctx.textAlign    = 'left'
       ctx.textBaseline = 'middle'
       ctx.fillText(btn.label, bx + 10, midY)
+      ctx.restore()
     }
 
     ctx.restore()

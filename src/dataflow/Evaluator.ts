@@ -3,6 +3,7 @@ import { Layer }     from '../core/Layer.js'
 import { ValueType } from '../core/types.js'
 import { Clock }     from './Clock.js'
 import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // Evaluator — drives the render loop and wires everything together
@@ -181,10 +182,10 @@ export class Evaluator {
       }
     }
 
-    // When the widget is visible, clip renderPanel to x ≥ 300 (the left
-    // edge of the canvas-space panel area) so strip pills are suppressed.
-    // Canvas-space pills and slot rows all start at x = 300 and are unaffected.
-    const ww = this._layerStackWidget?.isVisible ? 300 : 0
+    // When the widget is visible, clip renderPanel to x ≥ contentLeft (the
+    // left edge of the canvas-space panel area) so strip pills are suppressed.
+    // Canvas-space pills and slot rows start at this boundary and are unaffected.
+    const ww = this._layerStackWidget?.isVisible ? contentLeft(width) : 0
     if (ww > 0) {
       this.ctx.save()
       this.ctx.beginPath()

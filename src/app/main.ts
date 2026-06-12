@@ -134,8 +134,12 @@ const evaluator = new Evaluator(canvas)
 // ------------------------------------------------------------------
 // Initial stack: Root → MenuLayer  (DeletionLayer added on first deletion)
 // ------------------------------------------------------------------
-const X = 40
-const W = 260
+// X/W size every layer's "strip pill" (debug panel, this.bounds) — it's
+// normally hidden under the LayerStackWidget. X + W must stay comfortably
+// below WIDGET_MIN (120, see interaction/layout.ts) so it stays hidden even
+// at the narrowest widget width, with margin for label text overflow.
+const X = 8
+const W = 100
 
 const root = new RootLayer(canvas.width, canvas.height)
 
