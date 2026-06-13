@@ -343,13 +343,23 @@ export class TextLayer extends Layer implements MaskSource {
       document.body.removeChild(overlay)
     }
 
+    // Track whether the user has edited the textarea since opening — if not,
+    // the unedited default text is cleared before pasting over it.
+    let textEdited = false
+    textarea.addEventListener('input', () => { textEdited = true })
+
     pasteBtn.onclick = async () => {
       try {
         const clip = await navigator.clipboard.readText()
+        if (!textEdited) {
+          textarea.value = ''
+          textarea.selectionStart = textarea.selectionEnd = 0
+        }
         const s = textarea.selectionStart, e = textarea.selectionEnd
         textarea.value =
           textarea.value.slice(0, s) + clip + textarea.value.slice(e)
         textarea.selectionStart = textarea.selectionEnd = s + clip.length
+        textEdited = true
         textarea.focus()
       } catch { /* clipboard access denied */ }
     }
