@@ -313,6 +313,12 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    // Parameter-slot rows take priority over painting, so clicks (and
+    // right-clicks) there reach the slot-click / binding-inspector logic
+    // in InteractionSystem instead of starting a brush stroke. Painting
+    // under a slot row is still possible by starting the stroke just
+    // outside it and dragging in.
+    if (this.hitTestSlot(point) !== null) return null
     if (this._activeTool !== null || this._sliderDragging) return this
     if (boundingBoxContains(this.canvasBounds, point))      return this
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
