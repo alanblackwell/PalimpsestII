@@ -240,7 +240,7 @@ Dropping an image file from the OS onto the canvas always **creates a new `Image
 | Context | Result |
 |---|---|
 | MenuLayer is selected | New layer inserted below MenuLayer |
-| Drop lands on an Image-type slot of the current layer | New layer inserted below current layer, bound to that slot; current layer stays selected |
+| Drop lands on an Image-type slot of the current layer, or the current layer has an empty Image slot | New layer inserted below current layer, bound to that slot; current layer stays selected |
 | Anything else | New layer inserted above current layer, becomes selected |
 
 The `dragover` handler just sets `dropEffect = 'copy'`; no existing layer state is modified.

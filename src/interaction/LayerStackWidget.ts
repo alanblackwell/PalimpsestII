@@ -536,6 +536,54 @@ export class LayerStackWidget {
     this._reorderLiveStack(layer, to)
   }
 
+  // ------------------------------------------------------------------
+  // External (OS file) drag — driven by main.ts's dragover/drop handlers.
+  // `layer` is a freshly-created, not-yet-placed Layer (outsideStack).
+  // ------------------------------------------------------------------
+
+  // Open a gap and start floating `layer` at `pt`, as if its thumbnail card
+  // had been picked up and was already being dragged within the widget.
+  beginExternalDrag(layer: Layer, pt: Point): void {
+    this._layers.push(layer)
+    this._dragLayer = layer
+    this._dragging  = true
+    this._dragY     = pt.y - this._cardH() / 2
+    this._updateDropIndex(pt.y)
+    Node.scheduleFrame?.()
+  }
+
+  // Track the pointer during an external drag.
+  updateExternalDrag(pt: Point): void {
+    if (this._dragLayer === null) return
+    this._dragY = pt.y - this._cardH() / 2
+    this._updateDropIndex(pt.y)
+    Node.scheduleFrame?.()
+  }
+
+  // Insert `layer` into the live stack at its current drop position.
+  commitExternalDrag(): void {
+    const layer = this._dragLayer
+    if (layer === null) return
+    const from = this._layers.indexOf(layer)
+    const to   = Math.max(1, Math.min(this._layers.length - 1, this._dropIndex))
+    this._layers.splice(from, 1)
+    this._layers.splice(to,   0, layer)
+    this._reorderLiveStack(layer, to)
+    this._dragLayer = null
+    this._dragging  = false
+  }
+
+  // Abandon an external drag — remove the placeholder card without touching
+  // the live stack (the caller is responsible for discarding `layer`).
+  cancelExternalDrag(): void {
+    if (this._dragLayer === null) return
+    const i = this._layers.indexOf(this._dragLayer)
+    if (i >= 0) this._layers.splice(i, 1)
+    this._dragLayer = null
+    this._dragging  = false
+    Node.scheduleFrame?.()
+  }
+
   // Update the live linked-list layer stack to match the display-list position `to`.
   // Index 0 = root (bottommost), index N-1 = topmost.
   private _reorderLiveStack(layer: Layer, to: number): void {

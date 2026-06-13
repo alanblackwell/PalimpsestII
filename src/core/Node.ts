@@ -45,6 +45,10 @@ export abstract class Node {
     y: number
   } = { active: false, source: null, x: 0, y: 0 }
 
+  // Set by main.ts while an OS file (image) is being dragged over the canvas.
+  // Read by Layer.renderSlots to highlight empty Image slots as drop targets.
+  static fileDragActive = false
+
   // Current canvas dimensions — updated by Evaluator on construction and resize.
   // Layers that produce full-canvas outputs (e.g. MaskLayer, ShapeLayer mask)
   // use these to size their OffscreenCanvases.

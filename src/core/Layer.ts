@@ -207,10 +207,13 @@ export abstract class Layer extends Node {
     ctx.fill()
 
     for (const slot of this.slots) {
-      const isCompat = drag.active
+      const isCompat = (drag.active
                     && drag.source !== null
                     && slot.type !== null
-                    && drag.source.types.has(slot.type)
+                    && drag.source.types.has(slot.type))
+                    || (Node.fileDragActive
+                    && slot.type === ValueType.Image
+                    && slot.state === SlotState.Unbound)
 
       const b = { x: PANEL_X, y, width: PANEL_W, height: SLOT_H }
       this._slotBounds.set(slot, b)
@@ -272,6 +275,14 @@ export abstract class Layer extends Node {
     for (const [slot, b] of this._slotBounds) {
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) return slot
+    }
+    return null
+  }
+
+  // Return the first unbound slot of the given type, or null.
+  findEmptySlot(type: ValueType): ParameterSlot | null {
+    for (const slot of this.slots) {
+      if (slot.type === type && slot.state === SlotState.Unbound) return slot
     }
     return null
   }

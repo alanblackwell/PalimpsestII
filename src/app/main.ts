@@ -2,6 +2,7 @@
 import { Evaluator }         from '../dataflow/Evaluator.js'
 import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
+import { Node }              from '../core/Node.js'
 import { ValueType, SlotState } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { rndColour }         from '../core/colour.js'
@@ -571,21 +572,89 @@ refreshStack(startupLayer)
 // ------------------------------------------------------------------
 //
 // Placement rules:
-//   • MenuLayer selected  → new layer inserted below MenuLayer
-//   • Drop on Image slot  → new layer inserted below current layer,
-//                           bound to that slot; current layer stays selected
-//   • Otherwise           → new layer inserted above current layer,
-//                           new layer becomes selected
+//   • Dragged over the LayerStackWidget → a placeholder card opens a gap
+//     at the pointer position and follows it, exactly like reordering an
+//     existing layer's thumbnail; dropping inserts the new ImageLayer at
+//     that position in the stack and selects it.
+//   • MenuLayer selected      → new layer inserted below MenuLayer
+//   • Drop on Image slot, or
+//     current layer has an
+//     empty Image slot        → new layer inserted below current layer,
+//                                bound to that slot; current layer stays selected
+//   • Otherwise                → new layer inserted above current layer,
+//                                new layer becomes selected
+
+// Placeholder ImageLayer for a drag currently hovering the stack widget —
+// not yet linked into the live stack (outsideStack) until the drop commits.
+let fileDragGhost: ImageLayer | null = null
 
 canvas.addEventListener('dragover', (e) => {
   if (!e.dataTransfer?.types.includes('Files')) return
   e.preventDefault()
   e.dataTransfer.dropEffect = 'copy'
+
+  const pt = { x: e.offsetX, y: e.offsetY }
+
+  if (widget.inBounds(pt)) {
+    if (Node.fileDragActive) {
+      Node.fileDragActive = false
+      Node.scheduleFrame?.()
+    }
+    if (fileDragGhost === null) {
+      fileDragGhost = new ImageLayer()
+      Layer.assignDebugName(fileDragGhost)
+      fileDragGhost.bounds = { ...menuLayer.bounds }
+      widget.beginExternalDrag(fileDragGhost, pt)
+    } else {
+      widget.updateExternalDrag(pt)
+    }
+    return
+  }
+
+  if (fileDragGhost !== null) {
+    widget.cancelExternalDrag()
+    graph.unregister(fileDragGhost)
+    fileDragGhost = null
+  }
+
+  if (!Node.fileDragActive) {
+    Node.fileDragActive = true
+    Node.scheduleFrame?.()
+  }
+})
+
+canvas.addEventListener('dragleave', () => {
+  if (fileDragGhost !== null) {
+    widget.cancelExternalDrag()
+    graph.unregister(fileDragGhost)
+    fileDragGhost = null
+  }
+  if (Node.fileDragActive) {
+    Node.fileDragActive = false
+    Node.scheduleFrame?.()
+  }
 })
 
 canvas.addEventListener('drop', (e) => {
   e.preventDefault()
+  Node.fileDragActive = false
+
   const file = e.dataTransfer?.files[0]
+
+  if (fileDragGhost !== null) {
+    const ghost = fileDragGhost
+    fileDragGhost = null
+    if (file) {
+      widget.commitExternalDrag()
+      ghost.loadFile(file)
+      refreshStack(ghost)
+    } else {
+      widget.cancelExternalDrag()
+      graph.unregister(ghost)
+    }
+    return
+  }
+
   if (!file) return
 
   const dropPoint  = { x: e.offsetX, y: e.offsetY }
@@ -602,9 +671,14 @@ canvas.addEventListener('drop', (e) => {
     const below = menuLayer.layerBelow
     newLayer.insertAbove(below ?? lowestAnchor())
   } else if (selected !== null) {
-    const slot = selected.hitTestSlot(dropPoint)
-    if (slot !== null && slot.type === ValueType.Image) {
-      // Dropped onto an Image-type slot — insert below selected, then bind.
+    const hitSlot = selected.hitTestSlot(dropPoint)
+    const slot = (hitSlot !== null && hitSlot.type === ValueType.Image)
+      ? hitSlot
+      : selected.findEmptySlot(ValueType.Image)
+
+    if (slot !== null) {
+      // Dropped onto an Image-type slot, or the current layer has an empty
+      // image slot — insert below selected, then bind.
       targetSlot = slot
       newLayer.insertAbove(selected.layerBelow ?? lowestAnchor())
     } else {
