@@ -14,6 +14,12 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { contentLeft } from '../interaction/layout.js'
+import { ClipRectLayer }    from './ClipRectLayer.js'
+import { ClipEllipseLayer } from './ClipEllipseLayer.js'
+import { ClipPathLayer }    from './ClipPathLayer.js'
+import { ClipTextLayer }    from './ClipTextLayer.js'
+import { ClipDrawingLayer } from './ClipDrawingLayer.js'
 
 // ------------------------------------------------------------
 // ClipLayer — clip an image to a mask region, with transform handles
@@ -55,6 +61,33 @@ function ptDist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+// ------------------------------------------------------------
+// Bottom button row — invokes a specialised Clip<Shape> layer, which
+// replaces this ClipLayer at the same stack position (see setOnReplace).
+// Centred and responsive, mirroring MenuLayer's column-shrinking layout.
+// ------------------------------------------------------------
+
+// The union of specialised Clip<Shape> layers a ClipLayer can be replaced
+// with — each has its own geometry/handles but shares an `imageSlot`.
+export type ClipShapeLayer =
+  | ClipRectLayer | ClipEllipseLayer | ClipPathLayer | ClipTextLayer | ClipDrawingLayer
+
+const REPLACE_BTN_COLOUR = '#e8a04a'
+const REPLACE_BUTTONS: ReadonlyArray<{ label: string; factory: () => ClipShapeLayer }> = [
+  { label: 'ClipRect',    factory: () => new ClipRectLayer() },
+  { label: 'ClipEllipse', factory: () => new ClipEllipseLayer() },
+  { label: 'ClipPath',    factory: () => new ClipPathLayer() },
+  { label: 'ClipText',    factory: () => new ClipTextLayer() },
+  { label: 'ClipDrawing', factory: () => new ClipDrawingLayer() },
+]
+
+const BTN_W_MAX    = 110
+const BTN_W_MIN    = 64
+const BTN_H        = 30
+const BTN_GAP      = 8
+const BOTTOM_GAP   = 16   // gap between the row and the bottom edge of the canvas
+const RIGHT_MARGIN = 12
+
 export class ClipLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
@@ -65,6 +98,10 @@ export class ClipLayer extends Layer implements ImageSource {
   private readonly _rotationSlot: ParameterSlot
 
   private _offscreen: OffscreenCanvas
+
+  // Set by main.ts (wireClipLayer): invoked when a bottom-row button is
+  // pressed, with a factory for the chosen specialised Clip<Shape> layer.
+  private _onReplace: ((factory: () => ClipShapeLayer) => void) | null = null
 
   // Transform state
   private _rotation:       number       = 0
@@ -92,6 +129,26 @@ export class ClipLayer extends Layer implements ImageSource {
     this.slots.push(this._imageSlot, this._maskSlot, this._positionSlot, this._scaleSlot, this._rotationSlot)
     this.debugName = 'ClipLayer'
     graph.register(this)
+  }
+
+  // The image input slot — exposed so main.ts can carry over its binding
+  // (if any) when replacing this layer with a specialised Clip<Shape>.
+  get imageSlot(): ParameterSlot { return this._imageSlot }
+
+  setOnReplace(fn: (factory: () => ClipShapeLayer) => void): void {
+    this._onReplace = fn
+  }
+
+  // True if this layer has state beyond its image binding that the user
+  // might want to restore later: a bound mask/position/scale/rotation slot
+  // (e.g. a shape feeding the mask), or a manually adjusted transform (move/
+  // scale/rotate handle drag). Used by main.ts to decide whether replacing
+  // this layer should archive it (recoverable) or delete it permanently.
+  hasRestorableState(): boolean {
+    return this._maskSlot.isActive || this._positionSlot.isActive ||
+      this._scaleSlot.isActive || this._rotationSlot.isActive ||
+      this._manualPosition !== null || this._manualScale !== null ||
+      this._rotation !== 0
   }
 
   // ----------------------------------------------------------
@@ -227,6 +284,81 @@ export class ClipLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
+
+    this._renderReplaceButtons(ctx)
+  }
+
+  // ----------------------------------------------------------
+  // Bottom button row — specialised Clip<Shape> layers
+  // ----------------------------------------------------------
+
+  // Centre the row in the space right of the LayerStackWidget, shrinking
+  // button width (down to BTN_W_MIN) if there isn't room at BTN_W_MAX —
+  // same general approach as MenuLayer._layout(). The row sits just above
+  // the bottom edge of the canvas, recomputed every frame so it tracks
+  // window resizes.
+  private _replaceLayout(): { x0: number; btnW: number; y: number } {
+    const canvasW = Node.canvasWidth
+    const canvasH = Node.canvasHeight
+    const left    = contentLeft(canvasW)
+    const availW  = Math.max(BTN_W_MIN, canvasW - left - RIGHT_MARGIN)
+
+    const n        = REPLACE_BUTTONS.length
+    const totalGap = (n - 1) * BTN_GAP
+    let btnW = BTN_W_MAX
+    if (n * btnW + totalGap > availW) {
+      btnW = Math.max(BTN_W_MIN, (availW - totalGap) / n)
+    }
+
+    const rowW = n * btnW + totalGap
+    const x0   = left + Math.max(0, (availW - rowW) / 2)
+    const y    = canvasH - BTN_H - BOTTOM_GAP
+
+    return { x0, btnW, y }
+  }
+
+  private _replaceBtnIndexAt(point: Point): number {
+    const { x0, btnW, y } = this._replaceLayout()
+    if (point.y < y || point.y > y + BTN_H) return -1
+    for (let i = 0; i < REPLACE_BUTTONS.length; i++) {
+      const bx = x0 + i * (btnW + BTN_GAP)
+      if (point.x >= bx && point.x <= bx + btnW) return i
+    }
+    return -1
+  }
+
+  private _renderReplaceButtons(ctx: Ctx2D): void {
+    const { x0, btnW, y } = this._replaceLayout()
+    const fontSize = btnW < 75 ? 9 : btnW < 95 ? 10 : 11
+
+    ctx.save()
+    for (let i = 0; i < REPLACE_BUTTONS.length; i++) {
+      const btn  = REPLACE_BUTTONS[i]!
+      const bx   = x0 + i * (btnW + BTN_GAP)
+      const midY = y + BTN_H / 2
+
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'
+      ctx.beginPath()
+      ctx.roundRect(bx, y, btnW, BTN_H, 6)
+      ctx.fill()
+
+      ctx.fillStyle = REPLACE_BTN_COLOUR + 'cc'
+      ctx.beginPath()
+      ctx.roundRect(bx, y, 3, BTN_H, [6, 0, 0, 6])
+      ctx.fill()
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(bx, y, btnW, BTN_H)
+      ctx.clip()
+      ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+      ctx.font         = `${fontSize}px monospace`
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(btn.label, bx + btnW / 2, midY)
+      ctx.restore()
+    }
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -234,6 +366,7 @@ export class ClipLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._replaceBtnIndexAt(point) >= 0) return this
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (this._drag !== null) return this
     const hp = this._handlePos()
@@ -244,6 +377,12 @@ export class ClipLayer extends Layer implements ImageSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    const btnIdx = this._replaceBtnIndexAt(point)
+    if (btnIdx >= 0) {
+      this._onReplace?.(REPLACE_BUTTONS[btnIdx]!.factory)
+      return true
+    }
+
     const hp = this._handlePos()
 
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {

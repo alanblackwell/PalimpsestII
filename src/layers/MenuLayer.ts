@@ -36,11 +36,6 @@ import { FlashLayer }      from './FlashLayer.js'
 import { VideoLayer }      from './VideoLayer.js'
 import { TutorialLayer }   from './TutorialLayer.js'
 import { StrokeLayer }    from './StrokeLayer.js'
-import { ClipRectLayer }  from './ClipRectLayer.js'
-import { ClipEllipseLayer } from './ClipEllipseLayer.js'
-import { ClipPathLayer }  from './ClipPathLayer.js'
-import { ClipTextLayer }  from './ClipTextLayer.js'
-import { ClipDrawingLayer } from './ClipDrawingLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
 
 // ------------------------------------------------------------
@@ -125,11 +120,6 @@ const BUTTONS: BtnDef[] = [
   { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h) => new GradientLayer(w, h) },
   { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
   { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
-  { label: 'ClipRect',   colour: '#e8a04a', factory: () => new ClipRectLayer() },
-  { label: 'ClipEllipse', colour: '#e8a04a', factory: () => new ClipEllipseLayer() },
-  { label: 'ClipPath',   colour: '#e8a04a', factory: () => new ClipPathLayer() },
-  { label: 'ClipText',   colour: '#e8a04a', factory: () => new ClipTextLayer() },
-  { label: 'ClipDrawing', colour: '#e8a04a', factory: () => new ClipDrawingLayer() },
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
   { label: 'Rotate',     colour: '#7ecf7e', factory: () => new RotateLayer() },
   { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },

@@ -5,6 +5,7 @@ import { Layer }             from '../core/Layer.js'
 import { ValueType, SlotState } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { rndColour }         from '../core/colour.js'
+import { graph }             from '../dataflow/Graph.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
@@ -26,6 +27,8 @@ import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 import { StrokeLayer }       from '../layers/StrokeLayer.js'
+import { ClipLayer }         from '../layers/ClipLayer.js'
+import type { ClipShapeLayer } from '../layers/ClipLayer.js'
 import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
 import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
@@ -88,6 +91,9 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof TutorialLayer) {
     wireTutorialLayer(newLayer)
   }
+  if (newLayer instanceof ClipLayer) {
+    wireClipLayer(newLayer)
+  }
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
@@ -146,6 +152,54 @@ function postInsertLayer(newLayer: Layer): void {
 
     BindingLayer.create(maskHelper, newLayer.clipMaskSlot)
   }
+}
+
+// Wire a ClipLayer's bottom-row "replace with specialised Clip<Shape>"
+// buttons. Pressing one creates the chosen layer at this ClipLayer's stack
+// position, carries over the image binding (if any) and redirects any
+// consumers of this ClipLayer's image output to the new layer, then either
+// archives the old ClipLayer (recoverable via DeletionLayer, same as Delete)
+// or — if it had no other bindings/manual transform worth keeping — purges
+// it permanently.
+function wireClipLayer(clipLayer: ClipLayer): void {
+  clipLayer.setOnReplace((factory: () => ClipShapeLayer) => {
+    const below = clipLayer.layerBelow
+    if (below === null) return
+
+    const newLayer = factory()
+    Layer.assignDebugName(newLayer)
+    newLayer.bounds = { ...clipLayer.bounds }
+
+    // Carry over the image binding, if any.
+    const imgBinding = BindingLayer.findForSlot(clipLayer.imageSlot)
+    const imgSource  = imgBinding?.source ?? null
+    imgBinding?.remove()
+
+    // Redirect any layers consuming this ClipLayer's image output.
+    const outBindings = [...clipLayer.dependents].filter(
+      (d): d is BindingLayer => d instanceof BindingLayer,
+    )
+
+    newLayer.insertAbove(below)
+
+    if (imgSource !== null) {
+      BindingLayer.create(imgSource, newLayer.imageSlot)
+    }
+    for (const bl of outBindings) {
+      BindingLayer.create(newLayer, bl.slot)
+    }
+
+    if (clipLayer.hasRestorableState()) {
+      ensureDeletionLayerInStack()
+      deletionLayer.archive(clipLayer)
+    } else {
+      clipLayer.removeFromStack()
+      graph.unregister(clipLayer)
+    }
+
+    postInsertLayer(newLayer)
+    refreshStack(newLayer)
+  })
 }
 
 function wireTutorialLayer(tl: TutorialLayer): void {
