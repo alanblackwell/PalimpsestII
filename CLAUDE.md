@@ -989,3 +989,21 @@ Direction accent `#7ecfcf` (drift) when the slot is active, otherwise the
 noise accent `#b8a050`. `NoiseLayer` gained `handlePointerMove`/
 `handlePointerUp` (previously not implemented) to track slider drags via
 `_sliderDrag`.
+
+## CollectionLayer index slot (added June 2026)
+
+`CollectionLayer` gained a `Count`-typed `indexSlot` (label "index"). When
+bound and active (`indexSlot.isActive`), `recompute()` renders only
+`_layers[selectedIndex()]` into `_compositeCanvas` instead of compositing all
+ingested layers — so both `renderSelf` and `getImage()` (the `ImageSource`
+output) become that single item.
+
+`selectedIndex()` reads the bound `CountSource`'s count and wraps it modulo
+`_layers.length` (`((raw % n) + n) % n`), so indices run 0..N-1 regardless of
+the bound count's range or sign.
+
+The header pill shows `#i of N layers` instead of `N layers` while indexed,
+and the selected thumbnail in the grid gets a thicker `#a0a0a0` (Count accent)
+border. `panelBottom` is now overridden to sit below the thumbnail grid
+(previously the default `50 + bounds.height + 8` coincided with the grid's
+top edge, so the new slot row would have overlapped it).

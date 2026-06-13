@@ -1,9 +1,11 @@
 import { Layer } from '../core/Layer.js'
 import { Node }  from '../core/Node.js'
+import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
   boundingBoxContains,
   type ImageValue, type ImageSource,
+  type CountSource,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -49,15 +51,23 @@ export class CollectionLayer extends Layer implements ImageSource {
   private _compositeCanvas: OffscreenCanvas | null = null
   private _ejectCallback:   (() => void) | null = null
 
+  // When bound and active, selects a single item (by index, mod N) as the
+  // collection's image value instead of the full composite.
+  private readonly _indexSlot: ParameterSlot
+
   // Double-click tracking
   private _lastClickTime = 0
   private _lastClickIdx  = -1
 
   constructor() {
     super()
+    this._indexSlot = new ParameterSlot(ValueType.Count, this, 'index')
+    this.slots.push(this._indexSlot)
     this.debugName = 'Collection'
     graph.register(this)
   }
+
+  get indexSlot(): ParameterSlot { return this._indexSlot }
 
   // ----------------------------------------------------------
   // ImageSource
@@ -124,10 +134,24 @@ export class CollectionLayer extends Layer implements ImageSource {
     const ctx = this._compositeCanvas.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
 
-    for (const layer of this._layers) {
+    if (this._indexSlot.isActive) {
+      const layer = this._layers[this.selectedIndex()]!
       layer.evaluate()
       layer.renderSelf(ctx)
+    } else {
+      for (const layer of this._layers) {
+        layer.evaluate()
+        layer.renderSelf(ctx)
+      }
     }
+  }
+
+  // The currently-selected item index (indexSlot's Count, modulo the number
+  // of items). Only meaningful when indexSlot.isActive and _layers is non-empty.
+  selectedIndex(): number {
+    const n = this._layers.length
+    const raw = (this._indexSlot.source as CountSource).getCount()
+    return ((raw % n) + n) % n
   }
 
   // ----------------------------------------------------------
@@ -147,6 +171,13 @@ export class CollectionLayer extends Layer implements ImageSource {
     if (w <= 0 || h <= 0) return
     this._drawHeaderPill(ctx, x, y, w, h)
     this._drawGrid(ctx)
+  }
+
+  // Slot rows are drawn below the thumbnail grid, not directly below the
+  // header pill.
+  override get panelBottom(): number {
+    const gb = this._gridBounds()
+    return gb.y + gb.height + 8
   }
 
   // ----------------------------------------------------------
@@ -237,8 +268,11 @@ export class CollectionLayer extends Layer implements ImageSource {
     const n = this._layers.length
     ctx.fillStyle = 'rgba(255,255,255,0.45)'
     ctx.textAlign = 'right'
+    const countText = n > 0 ? `${n} layer${n !== 1 ? 's' : ''}` : 'empty'
     ctx.fillText(
-      n > 0 ? `${n} layer${n !== 1 ? 's' : ''}` : 'empty',
+      this._indexSlot.isActive && n > 0
+        ? `#${this.selectedIndex()} of ${countText}`
+        : countText,
       x + w - 8, midY,
     )
 
@@ -297,9 +331,10 @@ export class CollectionLayer extends Layer implements ImageSource {
         ctx.drawImage(thumb, tx, ty)
         ctx.restore()
 
-        // Cell border
-        ctx.strokeStyle = typeColor(this._layers[i]) + '88'
-        ctx.lineWidth   = 1
+        // Cell border — highlighted when this item is the active index.
+        const isSelected = this._indexSlot.isActive && i === this.selectedIndex()
+        ctx.strokeStyle = isSelected ? '#a0a0a0' : typeColor(this._layers[i]) + '88'
+        ctx.lineWidth   = isSelected ? 2 : 1
         ctx.beginPath()
         ctx.roundRect(tx + 0.5, ty + 0.5, TW - 1, TH - 1, 4)
         ctx.stroke()
