@@ -138,9 +138,10 @@ export class LayerStackWidget {
   }
 
   // Reorder: move selected layer one position higher (Shift+ArrowUp).
+  // ci === 0 is Root, which never moves.
   moveUp(): void {
     const ci = this._currentIndex()
-    if (ci < 0 || ci >= this._layers.length - 1) return
+    if (ci <= 0 || ci >= this._layers.length - 1) return
     const layer = this._layers[ci]!
     const to    = ci + 1
     this._layers.splice(ci, 1)
@@ -150,9 +151,11 @@ export class LayerStackWidget {
   }
 
   // Reorder: move selected layer one position lower (Shift+ArrowDown).
+  // ci <= 1 is Root itself, or the layer directly above it — neither may
+  // move into Root's slot at index 0.
   moveDown(): void {
     const ci = this._currentIndex()
-    if (ci <= 0) return
+    if (ci <= 1) return
     const layer = this._layers[ci]!
     const to    = ci - 1
     this._layers.splice(ci, 1)
@@ -509,8 +512,9 @@ export class LayerStackWidget {
     const sp = this._spacing()
     const ch = this._cardH()
     // Find the index where inserting would be closest to the mouse.
-    let best = 0, bestDist = Infinity
-    for (let i = 0; i < this._layers.length; i++) {
+    // Index 0 is Root's slot and is never a valid drop target.
+    let best = 1, bestDist = Infinity
+    for (let i = 1; i < this._layers.length; i++) {
       if (this._layers[i] === this._dragLayer) continue
       const y    = this._cardY(i, sp)
       const mid  = y + ch / 2
@@ -523,7 +527,8 @@ export class LayerStackWidget {
   private _commitDrop(): void {
     const layer = this._dragLayer!
     const from  = this._layers.indexOf(layer)
-    const to    = Math.max(0, Math.min(this._layers.length - 1, this._dropIndex))
+    if (from <= 0) return   // Root never moves
+    const to = Math.max(1, Math.min(this._layers.length - 1, this._dropIndex))
     if (from === to) return
 
     this._layers.splice(from, 1)

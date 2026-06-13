@@ -373,8 +373,12 @@ interaction.setDeleteAction(() => {
   if (layer === null || layer === deletionLayer || layer === root || layer === menuLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
+  // If this is the bottom-most layer (nothing but Root below it), focus
+  // moves up to the layer above rather than down to Root/DeletionLayer.
+  if (below === root) below = null
+  const above = layer.layerAbove
   ensureDeletionLayerInStack()
-  const nextSel = below ?? deletionLayer
+  const nextSel = below ?? above ?? deletionLayer
   deletionLayer.archive(layer)
   refreshStack(nextSel)
 })
@@ -389,7 +393,11 @@ interaction.setBackgroundAction(() => {
       layer === menuLayer || layer === backgroundLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
-  const nextSel = below ?? lowestAnchor()
+  // If this is the bottom-most layer (nothing but Root below it), focus
+  // moves up to the layer above rather than down to Root.
+  if (below === root) below = null
+  const above = layer.layerAbove
+  const nextSel = below ?? above ?? lowestAnchor()
   backgroundLayer.add(layer)
   refreshStack(nextSel)
 })
@@ -436,7 +444,8 @@ interaction.setBoundCallback((source, slot) => {
 //                    type, insert it above the consumer, bind it, and
 //                    select it.
 //   • Bound slot  — select the layer that feeds it, restoring it from
-//                    the Deleted archive (above the consumer) if needed.
+//                    the Deleted archive (above the consumer) or the
+//                    Background collection (below the consumer) if needed.
 interaction.setSlotClickCallback((consumer, slot) => {
   if (slot.state === SlotState.Unbound) {
     if (slot.type === null) return
@@ -508,6 +517,8 @@ interaction.setSlotClickCallback((consumer, slot) => {
     if (deletionLayer.removeFromArchive(source)) {
       source.insertAbove(consumer)
       pruneDeletionLayerIfEmpty()
+    } else if (backgroundLayer.removeItem(source)) {
+      source.insertBelow(consumer)
     }
   }
   refreshStack(source)
