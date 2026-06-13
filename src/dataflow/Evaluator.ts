@@ -29,6 +29,7 @@ export class Evaluator {
 
   private _stackTop:         Layer | null  = null
   private _clock:            Clock | null  = null
+  private _background:       Node | null   = null
   private _layerStackWidget: LayerStackWidget | null = null
   private _continuous               = false
   private _animFrameId: number | null = null
@@ -73,6 +74,14 @@ export class Evaluator {
     if (this._continuous) this.scheduleFrame()
   }
 
+  // Attach the Background collection. Evaluated every frame, independent
+  // of the current selection/stack chain, so its items keep recomputing
+  // even while they're off-canvas.
+  setBackground(background: Node | null): void {
+    this._background = background
+    this.scheduleFrame()
+  }
+
   // ----------------------------------------------------------
   // Frame scheduling
   // ----------------------------------------------------------
@@ -108,13 +117,18 @@ export class Evaluator {
     // 1. Advance time — this marks Clock's dependents dirty.
     this._clock?.tick(timestamp)
 
-    // 2. Evaluate and render the stack.
+    // 2. Evaluate the Background collection — independent of the current
+    //    selection/stack chain, so its items keep recomputing even while
+    //    off-canvas.
+    this._background?.evaluate()
+
+    // 3. Evaluate and render the stack.
     this.render()
 
-    // 3. Update FPS counter.
+    // 4. Update FPS counter.
     this.updateFps(timestamp)
 
-    // 4. Reschedule if running continuously.
+    // 5. Reschedule if running continuously.
     if (this._continuous) this.scheduleFrame()
   }
 

@@ -13,6 +13,7 @@ import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
+import { BackgroundLayer }   from '../layers/BackgroundLayer.js'
 import { AmountLayer }       from '../layers/AmountLayer.js'
 import { ColourLayer }       from '../layers/ColourLayer.js'
 import { PointLayer }        from '../layers/PointLayer.js'
@@ -195,6 +196,13 @@ const deletionLayer = new DeletionLayer()
 deletionLayer.bounds      = { x: X, y: 24, width: W, height: 36 }
 deletionLayer.outsideStack = true   // not inserted until first deletion
 
+// Background collection — never part of the layer stack; the Evaluator
+// evaluates it directly every frame so its items keep recomputing while
+// off-canvas. Browsed via DeletionLayer's toggle.
+const backgroundLayer = new BackgroundLayer()
+evaluator.setBackground(backgroundLayer)
+deletionLayer.setBackgroundLayer(backgroundLayer)
+
 // ------------------------------------------------------------------
 // Widget, interaction, helpers
 // ------------------------------------------------------------------
@@ -256,10 +264,13 @@ function ensureDeletionLayerInStack(): void {
   }
 }
 
-// Remove DeletionLayer from the stack when its archive is empty.
-// A future deletion will re-add it via ensureDeletionLayerInStack().
+// Remove DeletionLayer from the stack when both the archive and the
+// Background collection are empty. A future deletion or background-send
+// will re-add it via ensureDeletionLayerInStack().
 function pruneDeletionLayerIfEmpty(): void {
-  if (deletionLayer.archivedLayers.length === 0 && !deletionLayer.outsideStack) {
+  if (deletionLayer.archivedLayers.length === 0 &&
+      backgroundLayer.items.length === 0 &&
+      !deletionLayer.outsideStack) {
     deletionLayer.removeFromStack()
   }
 }
@@ -290,6 +301,22 @@ interaction.setDeleteAction(() => {
   ensureDeletionLayerInStack()
   const nextSel = below ?? deletionLayer
   deletionLayer.archive(layer)
+  refreshStack(nextSel)
+})
+
+// 'b' key: move the selected layer into the Background collection — it
+// keeps recomputing every frame (so downstream bindings stay live) but is
+// removed from the main stack and never rendered. Browsed via DeletionLayer's
+// toggle; restore/purge use the same callbacks as the Deleted archive.
+interaction.setBackgroundAction(() => {
+  const layer = widget.selected
+  if (layer === null || layer === deletionLayer || layer === root ||
+      layer === menuLayer || layer === backgroundLayer) return
+  let below: Layer | null = layer.layerBelow
+  while (below !== null && below.isInfrastructure) below = below.layerBelow
+  ensureDeletionLayerInStack()
+  const nextSel = below ?? deletionLayer
+  backgroundLayer.add(layer)
   refreshStack(nextSel)
 })
 

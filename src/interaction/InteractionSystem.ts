@@ -87,6 +87,7 @@ export class InteractionSystem {
   private _spaceAction:      (() => void) | null = null
   private _deleteAction:     (() => void) | null = null
   private _collectionAction: (() => void) | null = null
+  private _backgroundAction: (() => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
@@ -140,6 +141,11 @@ export class InteractionSystem {
   // Register a callback invoked when the user presses 'c' (collect).
   setCollectionAction(fn: () => void): void {
     this._collectionAction = fn
+  }
+
+  // Register a callback invoked when the user presses 'b' (send to background).
+  setBackgroundAction(fn: () => void): void {
+    this._backgroundAction = fn
   }
 
   // Register a callback invoked when a bind-drag drop creates a binding.
@@ -375,6 +381,11 @@ export class InteractionSystem {
     }
     if (e.key === 'c' && !e.ctrlKey && !e.metaKey) {
       this._collectionAction?.()
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'b' && !e.ctrlKey && !e.metaKey) {
+      this._backgroundAction?.()
       e.preventDefault()
       return
     }

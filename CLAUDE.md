@@ -890,3 +890,40 @@ an `ImageSource`.
   since this layer already has its own paint tools, but keeps the pattern —
   and the "click bound slot to expose" gesture — consistent across all
   Clip\<X\> layers.
+
+## BackgroundLayer and the DeletionLayer toggle (added June 2026)
+
+`src/layers/BackgroundLayer.ts` is a second "collection" alongside
+`DeletionLayer`'s archive — a place for layers that must keep recomputing
+(so downstream bindings stay live) but are never rendered on the main
+canvas.
+
+- **Not a stack member.** Unlike `DeletionLayer`, `BackgroundLayer` is never
+  inserted into the layer stack — in edit mode, `Evaluator.render()` only
+  evaluates layers from the current `renderTop` down to `root`, so a layer
+  positioned above the selection would sometimes be skipped. Instead
+  `Evaluator.setBackground(node)` stores it and `frame()` calls
+  `this._background?.evaluate()` directly every frame, the same way `_clock`
+  is ticked.
+- **Self-perpetuating.** `recompute()` calls `.evaluate()` on each item in
+  `_items`, then — while `_items.length > 0` — does
+  `queueMicrotask(() => this.forceDirty())`, the same pattern `VideoLayer`
+  uses for its frame loop. This keeps `BackgroundLayer` (and therefore its
+  items) recomputing every frame even with no Clock and no dependents.
+- **API**: `add(layer)` (removes from stack, pushes onto `_items`),
+  `removeItem(layer)` (splices without re-inserting), `get items()`.
+
+**DeletionLayer toggle** — `DeletionLayer.setBackgroundLayer(bg)` links the
+two. A toggle button (`_toggleBounds`, top-right of the grid header, only
+drawn when a `BackgroundLayer` is linked) flips `_showBackground` and swaps
+the entire grid — header hint, thumbnails, trash buttons, double-click
+restore — between `_archived` and `bg.items` via `_activeItems()` /
+`_removeFromActive()`. Restore and purge use the same `_onRestore`/`_onPurge`
+callbacks for both lists.
+
+**`'b'` key** (`InteractionSystem.setBackgroundAction`) moves the selected
+layer into `backgroundLayer`, mirroring the Delete-key archive flow
+(`ensureDeletionLayerInStack()` first, select the layer below afterwards).
+`pruneDeletionLayerIfEmpty()` now checks both `deletionLayer.archivedLayers`
+and `backgroundLayer.items` before removing `DeletionLayer` from the stack,
+so its toggle stays reachable while either collection is non-empty.
