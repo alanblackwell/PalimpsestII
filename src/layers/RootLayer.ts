@@ -35,10 +35,7 @@ const COLOUR_B = '#2d2d2d'
 const ACCENT  = '#888888'
 const STRIPE  = 4
 
-// Fixed strip pill position (left widget column)
-const STRIP_X = 40
-const STRIP_Y = 24
-const STRIP_W = 260
+// Fixed panel height
 const STRIP_H = 36
 
 // Canvas-space pill position (right of Stack Widget)
@@ -146,7 +143,6 @@ export class RootLayer extends Layer {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    this._drawPill(ctx, { x: STRIP_X, y: STRIP_Y, width: STRIP_W, height: STRIP_H })
     this._drawPill(ctx, { x: PANEL_X, y: PANEL_Y, width: PANEL_W, height: STRIP_H })
   }
 
