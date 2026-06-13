@@ -31,6 +31,52 @@ import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
 import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
+import { RotateLayer }       from '../layers/RotateLayer.js'
+
+// Auto-bind a phase slot to a Rate or Clock layer, creating both (a hidden
+// helper RateLayer above `host`, plus a background ClockLayer) if neither
+// is found nearby. Shared by AnimPathLayer and RotateLayer.
+function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
+  if (phaseSlot.isActive) return
+
+  let phaseSource: RateLayer | ClockLayer | null = null
+  for (let l: Layer | null = host.layerBelow; l !== null; l = l.layerBelow) {
+    if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+  }
+  if (phaseSource === null) {
+    for (let l: Layer | null = host.layerAbove; l !== null; l = l.layerAbove) {
+      if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+    }
+  }
+
+  if (phaseSource === null) {
+    // The auto-created Clock is unlikely to need its own controls —
+    // send it straight to the Background collection (still ticked by
+    // the Evaluator every frame, recoverable via DeletionLayer's toggle)
+    // rather than adding it to the visible stack.
+    const clock = new ClockLayer()
+    Layer.assignDebugName(clock)
+    clock.bounds = { ...host.bounds }
+    backgroundLayer.add(clock)
+
+    // The Rate layer is created as a hidden helper directly above the
+    // host, bound to its phase slot. It stays with the host as it moves,
+    // and has no thumbnail in the stack widget unless exposed (by clicking
+    // the phase slot it's bound to).
+    const rate = new RateLayer(1.0)
+    Layer.assignDebugName(rate)
+    rate.bounds = { ...host.bounds }
+    rate.insertAbove(host)
+    rate.isHiddenHelper = true
+    rate.helperHost = host
+    host.hiddenHelper = rate
+
+    BindingLayer.create(clock, rate.timeSlot)
+    phaseSource = rate
+  }
+
+  BindingLayer.create(phaseSource, phaseSlot)
+}
 
 // All per-type setup that runs after a new layer is inserted into the stack.
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
@@ -58,45 +104,12 @@ function postInsertLayer(newLayer: Layer): void {
     }
 
     // Auto-bind phase slot to a Rate or Clock layer, creating both if needed.
-    if (!newLayer.phaseSlot.isActive) {
-      let phaseSource: RateLayer | ClockLayer | null = null
-      for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
-        if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
-      }
-      if (phaseSource === null) {
-        for (let l: Layer | null = newLayer.layerAbove; l !== null; l = l.layerAbove) {
-          if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
-        }
-      }
+    ensurePhaseSource(newLayer, newLayer.phaseSlot)
+  }
 
-      if (phaseSource === null) {
-        // The auto-created Clock is unlikely to need its own controls —
-        // send it straight to the Background collection (still ticked by
-        // the Evaluator every frame, recoverable via DeletionLayer's toggle)
-        // rather than adding it to the visible stack.
-        const clock = new ClockLayer()
-        Layer.assignDebugName(clock)
-        clock.bounds = { ...newLayer.bounds }
-        backgroundLayer.add(clock)
-
-        // The Rate layer is created as a hidden helper directly above the
-        // new AnimPath, bound to its phase slot. It stays with this
-        // AnimPath as it moves, and has no thumbnail in the stack widget
-        // unless exposed (by clicking the phase slot it's bound to).
-        const rate = new RateLayer(1.0)
-        Layer.assignDebugName(rate)
-        rate.bounds = { ...newLayer.bounds }
-        rate.insertAbove(newLayer)
-        rate.isHiddenHelper = true
-        rate.helperHost = newLayer
-        newLayer.hiddenHelper = rate
-
-        BindingLayer.create(clock, rate.timeSlot)
-        phaseSource = rate
-      }
-
-      BindingLayer.create(phaseSource, newLayer.phaseSlot)
-    }
+  if (newLayer instanceof RotateLayer) {
+    // Same phase auto-binding as AnimPathLayer.
+    ensurePhaseSource(newLayer, newLayer.phaseSlot)
   }
 
   if (newLayer instanceof ClipRectLayer || newLayer instanceof ClipEllipseLayer || newLayer instanceof ClipPathLayer || newLayer instanceof ClipDrawingLayer) {

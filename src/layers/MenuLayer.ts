@@ -41,6 +41,7 @@ import { ClipEllipseLayer } from './ClipEllipseLayer.js'
 import { ClipPathLayer }  from './ClipPathLayer.js'
 import { ClipTextLayer }  from './ClipTextLayer.js'
 import { ClipDrawingLayer } from './ClipDrawingLayer.js'
+import { RotateLayer }     from './RotateLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -130,6 +131,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'ClipText',   colour: '#e8a04a', factory: () => new ClipTextLayer() },
   { label: 'ClipDrawing', colour: '#e8a04a', factory: () => new ClipDrawingLayer() },
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
+  { label: 'Rotate',     colour: '#7ecf7e', factory: () => new RotateLayer() },
   { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
   { label: 'Tutorial',   colour: '#a0a4b8', factory: () => new TutorialLayer() },
 ]
