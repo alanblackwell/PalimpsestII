@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
@@ -9,13 +10,15 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { SliderRegion } from '../regions/SliderRegion.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // CompositeLayer — blends two images with an optional mask
 // ------------------------------------------------------------
 //
-// Reads baseSlot and blendSlot (both Image), composites them using
-// the selected blend mode at the given opacity, and optionally
+// Reads leftSlot and rightSlot (both Image), composites them using
+// the selected blend mode at the given amount, and optionally
 // constrains the blend to where maskSlot is white.
 //
 // The result is written to an internal OffscreenCanvas and returned
@@ -25,13 +28,13 @@ import { graph } from '../dataflow/Graph.js'
 //
 // Compositing pipeline:
 //   1. Clear result canvas.
-//   2. Draw base (if bound).
+//   2. Draw left (if bound).
 //   3. If mask is bound:
-//        a. Draw blend onto a temp canvas.
+//        a. Draw right onto a temp canvas.
 //        b. Apply mask to temp via `destination-in`.
-//        c. Draw temp onto result with blend mode + opacity.
+//        c. Draw temp onto result with blend mode + amount.
 //      Else:
-//        c. Draw blend directly onto result with blend mode + opacity.
+//        c. Draw right directly onto result with blend mode + amount.
 //
 // Blend modes (13):
 //   normal  multiply  screen  overlay
@@ -39,15 +42,22 @@ import { graph } from '../dataflow/Graph.js'
 //   exclusion  hard-light  soft-light  color-burn  color-dodge
 //
 // Input slots:
-//   baseSlot    (Image)  — background image
-//   blendSlot   (Image)  — foreground image being composited
-//   maskSlot    (Mask)   — white=blend, black=base (optional)
-//   opacitySlot (Amount) — blend layer opacity [0, 1]; default 1
+//   leftSlot    (Image)  — background image
+//   rightSlot   (Image)  — foreground image being composited
+//   maskSlot    (Mask)   — white=right, black=left (optional)
+//   opacitySlot (Amount) — blend amount [0, 1]; default 0.5
+//
+// A centre-of-canvas widget (panel-only, selected layer) shows small
+// thumbnails of the left/right images at either end of a slider whose
+// handle is "the amount" (opacitySlot when bound, otherwise a
+// user-draggable value defaulting to 0.5 — same suspend-on-touch
+// pattern as AmountLayer's slider). A button below the slider swaps
+// the leftSlot/rightSlot bindings.
 //
 // Visual layout of the stack panel (height ≈ 36 px):
 //
 //   ┌──────────────────────────────────────────────────────────┐
-//   │ ▌  [◀] multiply [▶]    base ●  blend ●  mask ○  α ○    │
+//   │ ▌  [◀] multiply [▶]    left ●  right ●  mask ○  α ○    │
 //   └──────────────────────────────────────────────────────────┘
 //
 // Call resize(w, h) when the canvas dimensions change.
@@ -86,15 +96,28 @@ const BTN_W   = 18
 const BTN_H   = 22
 const LABEL_W = 72          // blend mode name zone
 
+// Centre-of-canvas amount widget geometry
+const WIDGET_PAD   = 12
+const THUMB        = 48
+const SLIDER_W     = 160
+const SLIDER_H     = 24
+const ROW_GAP      = 10
+const SWAP_BTN_W   = 90
+const SWAP_BTN_H   = 24
+
 export class CompositeLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
-  private readonly _baseSlot:    ParameterSlot
-  private readonly _blendSlot:   ParameterSlot
+  private readonly _leftSlot:    ParameterSlot
+  private readonly _rightSlot:   ParameterSlot
   private readonly _maskSlot:    ParameterSlot
   private readonly _opacitySlot: ParameterSlot
 
   private _modeIndex: number = 0  // default: normal
+
+  // "Amount" handle — used when opacitySlot is unbound. Default 0.5.
+  private _amount: Amount = 0.5
+  private readonly _slider: SliderRegion
 
   // Off-screen surfaces — recreated on resize()
   private _result: OffscreenCanvas
@@ -104,11 +127,13 @@ export class CompositeLayer extends Layer implements ImageSource {
     super()
     this._result      = new OffscreenCanvas(canvasWidth, canvasHeight)
     this._temp        = new OffscreenCanvas(canvasWidth, canvasHeight)
-    this._baseSlot    = new ParameterSlot(ValueType.Image,  this)
-    this._blendSlot   = new ParameterSlot(ValueType.Image,  this)
+    this._leftSlot    = new ParameterSlot(ValueType.Image,  this)
+    this._rightSlot   = new ParameterSlot(ValueType.Image,  this)
     this._maskSlot    = new ParameterSlot(ValueType.Mask,   this)
     this._opacitySlot = new ParameterSlot(ValueType.Amount, this)
-    this.slots.push(this._baseSlot, this._blendSlot, this._maskSlot, this._opacitySlot)
+    this._slider      = new SliderRegion(this, this._amount)
+    this.slots.push(this._leftSlot, this._rightSlot, this._maskSlot, this._opacitySlot)
+    this._slider.setOnDragStart(() => this._suspendAmountSlot())
     this.debugName = 'CompositeLayer'
     graph.register(this)
   }
@@ -123,10 +148,44 @@ export class CompositeLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get baseSlot():    ParameterSlot { return this._baseSlot    }
-  get blendSlot():   ParameterSlot { return this._blendSlot   }
+  get leftSlot():    ParameterSlot { return this._leftSlot    }
+  get rightSlot():   ParameterSlot { return this._rightSlot   }
   get maskSlot():    ParameterSlot { return this._maskSlot    }
   get opacitySlot(): ParameterSlot { return this._opacitySlot }
+
+  // ----------------------------------------------------------
+  // Amount handle
+  // ----------------------------------------------------------
+
+  // Called by SliderRegion when the user drags the handle.
+  setValue(v: Amount): void {
+    this._amount = v
+    this.markDirty()
+  }
+
+  // Suspend an active opacitySlot binding so the user can take manual
+  // control of the handle (same pattern as AmountLayer's slider).
+  private _suspendAmountSlot(): void {
+    if (this._opacitySlot.isActive) {
+      BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+    }
+  }
+
+  // ----------------------------------------------------------
+  // Default bindings
+  // ----------------------------------------------------------
+
+  // Bind the nearest two Image-producing layers below to left/right
+  // at creation time, if both can be found, and move them to the
+  // Background collection — both inputs are fully consumed by the
+  // composite, so they no longer need their own stack position.
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
+    const isImage = (l: Layer) => l.types.has(ValueType.Image)
+    return [
+      { slot: this._leftSlot,  accepts: isImage, sendToBackgroundAfterBind: true },
+      { slot: this._rightSlot, accepts: (l: Layer) => isImage(l) && l !== this._leftSlot.source, sendToBackgroundAfterBind: true },
+    ]
+  }
 
   // ----------------------------------------------------------
   // Mode cycling
@@ -153,52 +212,59 @@ export class CompositeLayer extends Layer implements ImageSource {
     const w = this._result.width
     const h = this._result.height
 
-    const base    = this._baseSlot.isActive
-      ? (this._baseSlot.source as ImageSource).getImage()    : null
-    const blend   = this._blendSlot.isActive
-      ? (this._blendSlot.source as ImageSource).getImage()   : null
+    const left    = this._leftSlot.isActive
+      ? (this._leftSlot.source as ImageSource).getImage()    : null
+    const right   = this._rightSlot.isActive
+      ? (this._rightSlot.source as ImageSource).getImage()   : null
     const mask    = this._maskSlot.isActive
       ? (this._maskSlot.source as MaskSource).getMask()      : null
-    const opacity = this._opacitySlot.isActive
-      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+
+    if (this._opacitySlot.isActive) {
+      this._amount = (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      this._slider.displayValue = this._amount
+      this._slider.interactive  = false
+    } else {
+      this._slider.interactive  = true
+      this._slider.displayValue = this._amount
+    }
+    const opacity = this._amount
 
     const rctx = this._result.getContext('2d')!
     rctx.clearRect(0, 0, w, h)
 
-    // Draw base
-    if (base !== null) {
+    // Draw left
+    if (left !== null) {
       rctx.globalCompositeOperation = 'source-over'
       rctx.globalAlpha = 1
-      rctx.drawImage(base as CanvasImageSource, 0, 0, w, h)
+      rctx.drawImage(left as CanvasImageSource, 0, 0, w, h)
     }
 
-    if (blend === null) return
+    if (right === null) return
 
     const mode = MODES[this._modeIndex]
 
     if (mask !== null) {
-      // 1. Draw blend onto temp canvas
+      // 1. Draw right onto temp canvas
       const tctx = this._temp.getContext('2d')!
       tctx.clearRect(0, 0, w, h)
       tctx.globalCompositeOperation = 'source-over'
       tctx.globalAlpha = 1
-      tctx.drawImage(blend as CanvasImageSource, 0, 0, w, h)
+      tctx.drawImage(right as CanvasImageSource, 0, 0, w, h)
 
       // 2. Apply mask — keep only where mask is opaque (white)
       tctx.globalCompositeOperation = 'destination-in'
       tctx.globalAlpha = 1
       tctx.drawImage(mask as CanvasImageSource, 0, 0, w, h)
 
-      // 3. Composite masked blend onto result
+      // 3. Composite masked right onto result
       rctx.globalCompositeOperation = mode.op
       rctx.globalAlpha = opacity
       rctx.drawImage(this._temp as CanvasImageSource, 0, 0)
     } else {
-      // No mask — composite blend directly
+      // No mask — composite right directly
       rctx.globalCompositeOperation = mode.op
       rctx.globalAlpha = opacity
-      rctx.drawImage(blend as CanvasImageSource, 0, 0, w, h)
+      rctx.drawImage(right as CanvasImageSource, 0, 0, w, h)
     }
 
     rctx.globalCompositeOperation = 'source-over'
@@ -213,11 +279,15 @@ export class CompositeLayer extends Layer implements ImageSource {
     if (boundingBoxContains(this._prevBtnBounds(), point)) { this.cyclePrev(); return true }
     if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._modeLabelBounds(), point)) { this.cycleNext(); return true }
+    if (boundingBoxContains(this._swapBtnBounds(), point)) { this._swapLeftRight(); return true }
     return false
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.canvasBounds, point) ? this : null
+    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (this._slider.hitTest(point) !== null) return this._slider
+    if (boundingBoxContains(this._swapBtnBounds(), point)) return this
+    return null
   }
 
   // ----------------------------------------------------------
@@ -273,8 +343,8 @@ export class CompositeLayer extends Layer implements ImageSource {
 
     // Slot indicators — right side
     const slots = [
-      { slot: this._baseSlot,    label: 'base'  },
-      { slot: this._blendSlot,   label: 'blend' },
+      { slot: this._leftSlot,    label: 'left'  },
+      { slot: this._rightSlot,   label: 'right' },
       { slot: this._maskSlot,    label: 'mask'  },
       { slot: this._opacitySlot, label: 'α'     },
     ]
@@ -294,6 +364,91 @@ export class CompositeLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
+
+    // Centre-of-canvas amount widget
+    this._renderAmountWidget(ctx)
+  }
+
+  // ── Centre-of-canvas amount widget ──────────────────────────
+
+  private _renderAmountWidget(ctx: Ctx2D): void {
+    const wb = this._widgetBounds()
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.roundRect(wb.x, wb.y, wb.width, wb.height, 10)
+    ctx.fill()
+
+    // Thumbnails
+    this._drawThumb(ctx, this._leftThumbBounds(),  this._leftSlot)
+    this._drawThumb(ctx, this._rightThumbBounds(), this._rightSlot)
+
+    // Slider
+    this._slider.bounds = this._sliderBounds()
+    this._slider.renderSelf(ctx)
+
+    // Swap button
+    const sb = this._swapBtnBounds()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(sb.x, sb.y, sb.width, sb.height, 4)
+    ctx.fill()
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('⇄ swap', sb.x + sb.width / 2, sb.y + sb.height / 2)
+
+    ctx.restore()
+  }
+
+  private _drawThumb(
+    ctx: Ctx2D,
+    b: { x: number; y: number; width: number; height: number },
+    slot: ParameterSlot,
+  ): void {
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.06)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+    ctx.fill()
+
+    if (slot.isActive) {
+      const img = (slot.source as ImageSource).getImage()
+      if (img !== null) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+        ctx.clip()
+        ctx.drawImage(img as CanvasImageSource, b.x, b.y, b.width, b.height)
+        ctx.restore()
+      }
+    }
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // Swap the source layers bound to leftSlot and rightSlot (any
+  // combination of bound/unbound is handled).
+  private _swapLeftRight(): void {
+    const leftBL  = BindingLayer.findForSlot(this._leftSlot)
+    const rightBL = BindingLayer.findForSlot(this._rightSlot)
+    const leftSource  = leftBL?.source  ?? null
+    const rightSource = rightBL?.source ?? null
+
+    leftBL?.remove()
+    rightBL?.remove()
+
+    if (rightSource !== null) BindingLayer.create(rightSource, this._leftSlot)
+    if (leftSource  !== null) BindingLayer.create(leftSource,  this._rightSlot)
   }
 
   // ----------------------------------------------------------
@@ -330,5 +485,46 @@ export class CompositeLayer extends Layer implements ImageSource {
   private _nextBtnBounds() {
     const lb = this._modeLabelBounds()
     return { x: lb.x + LABEL_W + 4, y: lb.y, width: BTN_W, height: BTN_H }
+  }
+
+  // ── Centre-of-canvas amount widget geometry ─────────────────
+
+  private _widgetBounds() {
+    const width  = WIDGET_PAD * 2 + THUMB * 2 + 16 + SLIDER_W
+    const height = WIDGET_PAD * 2 + THUMB + ROW_GAP + SWAP_BTN_H
+    const cx = Node.canvasWidth  / 2
+    const cy = Node.canvasHeight / 2
+    return { x: cx - width / 2, y: cy - height / 2, width, height }
+  }
+
+  private _leftThumbBounds() {
+    const wb = this._widgetBounds()
+    return { x: wb.x + WIDGET_PAD, y: wb.y + WIDGET_PAD, width: THUMB, height: THUMB }
+  }
+
+  private _rightThumbBounds() {
+    const wb = this._widgetBounds()
+    return { x: wb.x + wb.width - WIDGET_PAD - THUMB, y: wb.y + WIDGET_PAD, width: THUMB, height: THUMB }
+  }
+
+  private _sliderBounds() {
+    const lt = this._leftThumbBounds()
+    const rt = this._rightThumbBounds()
+    return {
+      x:      lt.x + lt.width + 8,
+      y:      lt.y + (THUMB - SLIDER_H) / 2,
+      width:  rt.x - 8 - (lt.x + lt.width + 8),
+      height: SLIDER_H,
+    }
+  }
+
+  private _swapBtnBounds() {
+    const wb = this._widgetBounds()
+    return {
+      x: wb.x + (wb.width - SWAP_BTN_W) / 2,
+      y: wb.y + WIDGET_PAD + THUMB + ROW_GAP,
+      width:  SWAP_BTN_W,
+      height: SWAP_BTN_H,
+    }
   }
 }
