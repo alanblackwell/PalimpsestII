@@ -62,7 +62,7 @@ import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 //             texture. If unbound, time is frozen at 0.
 //   speedSlot (Amount) — "speed": multiplies elapsed time to give the
 //             evolution rate actually used by the noise field. Manual
-//             control: [−]/[+] stepper, initialised to a random, gentle
+//             control: slider, 0–1, initialised to a random, gentle
 //             per-instance value. For static/colour this instead directly
 //             scales the fraction of grid cells re-rolled each frame
 //             (0 = frozen).
@@ -71,34 +71,36 @@ import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 //   scaleSlot    (Amount)    — "scale": maps [0, 1] → frequency [0.5, 16].
 //                               For static/colour this sets the grid
 //                               granularity (cell size from ~32px down to 1px).
+//                               Manual control: slider, 0–1 (the value shown
+//                               is the resolved frequency).
 //   detailSlot   (Amount)    — "warp": algorithm-specific detail/strength
 //                               (crack thickness, ripple density, warp
-//                               displacement, organic mix). Manual [−]/[+].
+//                               displacement, organic mix). Manual slider, 0–1.
 //                               Unused by static/colour.
 //   driftSlot    (Direction) — "drift": orientation (+ strength via
 //                               magnitude) of the anisotropic component of
-//                               each algorithm's animation. Manual [‹]/[›]
-//                               steps the angle in 22.5° increments.
-//                               Unused by static/colour.
+//                               each algorithm's animation. Manual control:
+//                               slider, 0–360°. Unused by static/colour.
 //   positionSlot (Point)     — "sample": canvas point at which the Amount
 //                               output is read from the noise texture.
 //
 // Manual controls:
 //   [◀] / [▶]     — cycle noise type
 //   seed  [−][+]  — integer seed (0–99), shifts the hash domain
-//   speed [−][+]  — evolution speed, 0–1
-//   warp  [−][+]  — detail/strength amount, 0–1
-//   drift [‹][›]  — drift direction, in 22.5° steps
+//   scale/speed/warp/drift — one slider per row, FilterLayer-style
 //
-// Touching any of speed/warp/drift while its slot is bound suspends that
-// binding (same slider-override pattern as AmountLayer), handing manual
-// control back to the user at the current effective value.
+// Touching any of scale/speed/warp/drift while its slot is bound suspends
+// that binding (same slider-override pattern as AmountLayer/FilterLayer),
+// handing manual control back to the user at the current effective value.
 //
-// Visual layout (two rows, height ≈ 78 px):
+// Visual layout (5 rows, height ≈ 161 px):
 //
 //   ┌──────────────────────────────────────────────────────────────┐
-//   │ ▌ [◀] cracks [▶]   seed [−] 7 [+]        time ●  pos ○  scale ○│
-//   │   speed [−] 0.15 [+]  warp [−] 0.50 [+]  drift [‹] 90° [›]  …  │
+//   │ ▌ [◀] cracks [▶]   seed [−] 7 [+]              time ●   pos ○ │
+//   │   scale  ───────●───────────────────────────────  3.00    ○  │
+//   │   speed  ───●────────────────────────────────────  0.15    ○  │
+//   │   warp   ─────────────────●──────────────────────  0.50    ●  │
+//   │   drift  ──────●─────────────────────────────────   90°    ○  │
 //   └──────────────────────────────────────────────────────────────┘
 //
 // The noise texture is rendered full-canvas below the panel; it
@@ -302,18 +304,18 @@ function sampleNoise(
 // ------------------------------------------------------------------
 
 const ACCENT     = '#b8a050'   // warm amber — noise / procedural
+const AM_COL     = '#4a8fe8'   // Amount type accent (scale/speed/warp slots)
+const DIR_COL    = '#7ecfcf'   // Direction type accent (drift slot)
 const NOISE_SIZE = 256         // internal noise texture resolution (CPU path)
 const GL_NOISE_SIZE = 1024     // internal noise texture resolution (GPU path)
 
-const DEFAULT_FREQ = 3.0
-const MIN_FREQ   = 0.5
-const MAX_FREQ   = 16.0
+const DEFAULT_FREQ  = 3.0
+const MIN_FREQ      = 0.5
+const MAX_FREQ      = 16.0
+const DEFAULT_SCALE = (DEFAULT_FREQ - MIN_FREQ) / (MAX_FREQ - MIN_FREQ)
 
 // elapsed seconds × speedAmount[0,1] × SPEED_SCALE → evolveTime
 const SPEED_SCALE = 0.3
-const SPEED_STEP  = 0.05
-const DETAIL_STEP = 0.05
-const DRIFT_STEP  = Math.PI / 8   // 22.5°
 
 // static/colour — TV-snow grid. Granularity (cells per axis) scales linearly
 // with frequency: MIN_FREQ → ~8 cells (32px blocks), MAX_FREQ → NOISE_SIZE
@@ -327,11 +329,17 @@ const STATIC_UPDATE_FRACTION = 0.15
 const MANUAL_DRIFT_MAGNITUDE = 0.5
 
 // Panel layout
-const ROW_H   = 33
-const ROW_GAP = 4
-const PAD     = 4
-const BTN_W   = 18
-const BTN_H   = 22
+const ROW_H        = 33    // row 1: type cycler / seed
+const SLIDER_ROW_H = 26    // rows 2-5: scale/speed/warp/drift sliders
+const ROW_GAP      = 4
+const PAD          = 4
+const BTN_W        = 18
+const BTN_H        = 22
+const LABEL_W      = 44    // slider row label column width
+const VALUE_W      = 40    // slider row value-text column width
+
+// Panel height = PAD*2 + ROW_H + 4*ROW_GAP + 4*SLIDER_ROW_H = 161.
+// MenuLayer's BUTTONS entry for 'Noise' overrides bounds.height to this value.
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -357,9 +365,14 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   private _noiseCanvas: OffscreenCanvas
 
   // Manual values, used while the corresponding slot is unbound.
+  private _scale:      number = DEFAULT_SCALE   // [0, 1] -> frequency [MIN_FREQ, MAX_FREQ]
   private _speed:      number   // [0, 1]
   private _detail:     number = 0.5
   private _driftAngle: number   // radians
+
+  // Index (0=scale, 1=speed, 2=warp, 3=drift) of the slider currently being
+  // dragged, or null if none.
+  private _sliderDrag: number | null = null
 
   // Resolved each recompute
   private _frequency:  number = DEFAULT_FREQ
@@ -411,7 +424,9 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   getAmount(): Amount     { return this._amountOut   }
   getImage():  ImageValue { return this._noiseCanvas }
 
-  // Wider than the default 260px canvas pill, to fit two rows of controls.
+  // Wider than the default 260px canvas pill, to fit the type-cycle/seed row
+  // plus four full-width slider rows. Height comes from `this.bounds.height`
+  // (set by MenuLayer's BUTTONS entry — see PANEL_H below).
   override get canvasBounds(): { x: number; y: number; width: number; height: number } {
     return { ...super.canvasBounds, width: 460 }
   }
@@ -454,27 +469,24 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     for (let i = 0; i < this._staticGrid.length; i++) this._staticGrid[i] = Math.random()
   }
 
-  // Touching a manual control while its slot is bound suspends the
-  // binding first, handing control back to the user at the current value.
-  private _bumpAmount(slot: ParameterSlot, get: () => number, set: (v: number) => void, delta: number): void {
+  // Touching a slider while its slot is bound suspends the binding first,
+  // handing control back to the user at the current value (same pattern as
+  // AmountLayer's slider-override and FilterLayer's intensity sliders).
+  private _setManual(slot: ParameterSlot, set: (v: number) => void, v: number): void {
     if (slot.state === SlotState.Bound) BindingLayer.findForSlot(slot)?.toggle()
-    set(Math.max(0, Math.min(1, get() + delta)))
+    set(Math.max(0, Math.min(1, v)))
     this.markDirty()
   }
 
-  incrSpeed():  void { this._bumpAmount(this._speedSlot,  () => this._speed,  v => this._speed  = v, SPEED_STEP)  }
-  decrSpeed():  void { this._bumpAmount(this._speedSlot,  () => this._speed,  v => this._speed  = v, -SPEED_STEP) }
-  incrDetail(): void { this._bumpAmount(this._detailSlot, () => this._detail, v => this._detail = v, DETAIL_STEP)  }
-  decrDetail(): void { this._bumpAmount(this._detailSlot, () => this._detail, v => this._detail = v, -DETAIL_STEP) }
+  setScale(v: number):  void { this._setManual(this._scaleSlot,  val => this._scale  = val, v) }
+  setSpeed(v: number):  void { this._setManual(this._speedSlot,  val => this._speed  = val, v) }
+  setDetail(v: number): void { this._setManual(this._detailSlot, val => this._detail = val, v) }
 
-  private _bumpDrift(delta: number): void {
+  setDrift(v: number): void {
     if (this._driftSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._driftSlot)?.toggle()
-    const twoPi = Math.PI * 2
-    this._driftAngle = ((this._driftAngle + delta) % twoPi + twoPi) % twoPi
+    this._driftAngle = Math.max(0, Math.min(1, v)) * Math.PI * 2
     this.markDirty()
   }
-  incrDrift(): void { this._bumpDrift(DRIFT_STEP)  }
-  decrDrift(): void { this._bumpDrift(-DRIFT_STEP) }
 
   // ----------------------------------------------------------
   // Node
@@ -485,9 +497,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
       ? (this._timeSlot.source as AmountSource).getAmount() as Amount
       : 0
 
-    this._frequency = this._scaleSlot.isActive
-      ? MIN_FREQ + ((this._scaleSlot.source as AmountSource).getAmount() as Amount) * (MAX_FREQ - MIN_FREQ)
-      : DEFAULT_FREQ
+    const scaleAmt = this._scaleSlot.isActive
+      ? (this._scaleSlot.source as AmountSource).getAmount() as Amount
+      : this._scale
+    this._frequency = MIN_FREQ + scaleAmt * (MAX_FREQ - MIN_FREQ)
 
     this._speedAmt = this._speedSlot.isActive
       ? (this._speedSlot.source as AmountSource).getAmount() as Amount
@@ -542,14 +555,40 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     if (boundingBoxContains(r1.seedDecr, point)) { this.decrSeed(); return true }
     if (boundingBoxContains(r1.seedIncr, point)) { this.incrSeed(); return true }
 
-    const r2 = this._row2()
-    if (boundingBoxContains(r2.speedDecr,  point)) { this.decrSpeed();  return true }
-    if (boundingBoxContains(r2.speedIncr,  point)) { this.incrSpeed();  return true }
-    if (boundingBoxContains(r2.detailDecr, point)) { this.decrDetail(); return true }
-    if (boundingBoxContains(r2.detailIncr, point)) { this.incrDetail(); return true }
-    if (boundingBoxContains(r2.driftDecr,  point)) { this.decrDrift();  return true }
-    if (boundingBoxContains(r2.driftIncr,  point)) { this.incrDrift();  return true }
+    for (let i = 0; i < 4; i++) {
+      const row = this._sliderRow(i)
+      if (point.x >= row.sld0 - 6 && point.x <= row.sldR + 6 &&
+          point.y >= row.y    && point.y <= row.y + SLIDER_ROW_H) {
+        this._sliderDrag = i
+        this._setSliderFromPointer(i, point.x)
+        return true
+      }
+    }
     return false
+  }
+
+  handlePointerMove(point: Point): void {
+    if (this._sliderDrag === null) return
+    this._setSliderFromPointer(this._sliderDrag, point.x)
+  }
+
+  handlePointerUp(): void {
+    this._sliderDrag = null
+  }
+
+  private _setSliderFromPointer(i: number, px: number): void {
+    const row    = this._sliderRow(i)
+    const thumbR = 5
+    const lo     = row.sld0 + thumbR
+    const hi     = row.sldR - thumbR
+    const range  = Math.max(1e-6, hi - lo)
+    const v      = Math.max(0, Math.min(1, (px - lo) / range))
+    switch (i) {
+      case 0: this.setScale(v);  break
+      case 1: this.setSpeed(v);  break
+      case 2: this.setDetail(v); break
+      case 3: this.setDrift(v);  break
+    }
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
@@ -592,7 +631,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     ctx.fill()
 
     this._renderRow1(ctx)
-    this._renderRow2(ctx)
+    this._renderSliders(ctx)
 
     ctx.restore()
   }
@@ -630,67 +669,90 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
     // Indicators
     this._drawIndicators(ctx, [
-      { slot: this._timeSlot,     label: 'time'  },
-      { slot: this._positionSlot, label: 'pos'   },
-      { slot: this._scaleSlot,    label: 'scale' },
+      { slot: this._timeSlot,     label: 'time' },
+      { slot: this._positionSlot, label: 'pos'  },
     ], x + width - 8, r1.midY)
   }
 
-  private _renderRow2(ctx: Ctx2D): void {
-    const { x, width } = this.canvasBounds
-    const r2 = this._row2()
+  // Rows 2-5: one slider per row, FilterLayer-style — label, slider, value,
+  // ●/○ bind indicator.
+  private _renderSliders(ctx: Ctx2D): void {
+    const speedVal = this._speedSlot.isActive
+      ? ((this._speedSlot.source as AmountSource).getAmount() as Amount)
+      : this._speed
+    const detailVal = this._detailSlot.isActive
+      ? ((this._detailSlot.source as AmountSource).getAmount() as Amount)
+      : this._detail
+    const scaleVal = this._scaleSlot.isActive
+      ? ((this._scaleSlot.source as AmountSource).getAmount() as Amount)
+      : this._scale
 
-    // speed
+    let deg = Math.round(this._drift.angle * 180 / Math.PI)
+    deg = ((deg % 360) + 360) % 360
+    const twoPi = Math.PI * 2
+    const driftAmt = (((this._drift.angle % twoPi) + twoPi) % twoPi) / twoPi
+
+    this._renderSliderRow(ctx, 0, 'scale', this._scaleSlot,  scaleVal,  this._frequency.toFixed(2), AM_COL)
+    this._renderSliderRow(ctx, 1, 'speed', this._speedSlot,  speedVal,  speedVal.toFixed(2),        AM_COL)
+    this._renderSliderRow(ctx, 2, 'warp',  this._detailSlot, detailVal, detailVal.toFixed(2),       AM_COL)
+    this._renderSliderRow(ctx, 3, 'drift', this._driftSlot,  driftAmt,  `${deg}°`,                  DIR_COL)
+  }
+
+  private _renderSliderRow(
+    ctx: Ctx2D, i: number, label: string, slot: ParameterSlot,
+    value01: number, valueText: string, activeColour: string,
+  ): void {
+    const row    = this._sliderRow(i)
+    const active = slot.isActive
+    const colour = active ? activeColour : ACCENT
+
     ctx.font         = '10px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.50)'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('speed', r2.speedLabelX, r2.midY)
-    this._drawBtn(ctx, r2.speedDecr, '−', 'rgba(255,255,255,0.65)')
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-    ctx.textAlign    = 'center'
-    const speedVal = this._speedSlot.isActive
-      ? ((this._speedSlot.source as AmountSource).getAmount() as Amount)
-      : this._speed
-    ctx.fillText(speedVal.toFixed(2), r2.speedValueX + 15, r2.midY)
-    this._drawBtn(ctx, r2.speedIncr, '+', 'rgba(255,255,255,0.65)')
+    ctx.fillText(label, row.labelX, row.midY)
 
-    // warp / detail
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.50)'
-    ctx.textAlign = 'left'
-    ctx.fillText('warp', r2.detailLabelX, r2.midY)
-    this._drawBtn(ctx, r2.detailDecr, '−', 'rgba(255,255,255,0.65)')
+    this._drawSlider(ctx, row.midY, row.sld0, row.sldR, value01, colour)
+
     ctx.font      = '10px monospace'
     ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'center'
-    const detailVal = this._detailSlot.isActive
-      ? ((this._detailSlot.source as AmountSource).getAmount() as Amount)
-      : this._detail
-    ctx.fillText(detailVal.toFixed(2), r2.detailValueX + 15, r2.midY)
-    this._drawBtn(ctx, r2.detailIncr, '+', 'rgba(255,255,255,0.65)')
+    ctx.textAlign = 'right'
+    ctx.fillText(valueText, row.valueRight, row.midY)
 
-    // drift
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.50)'
-    ctx.textAlign = 'left'
-    ctx.fillText('drift', r2.driftLabelX, r2.midY)
-    this._drawNavBtn(ctx, r2.driftDecr, '‹', r2.midY)
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'center'
-    let deg = Math.round(this._drift.angle * 180 / Math.PI)
-    deg = ((deg % 360) + 360) % 360
-    ctx.fillText(`${deg}°`, r2.driftValueX + 18, r2.midY)
-    this._drawNavBtn(ctx, r2.driftIncr, '›', r2.midY)
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', row.indX, row.midY)
+  }
 
-    // Indicators
-    this._drawIndicators(ctx, [
-      { slot: this._speedSlot,  label: 'speed' },
-      { slot: this._detailSlot, label: 'warp'  },
-      { slot: this._driftSlot,  label: 'drift' },
-    ], x + width - 8, r2.midY)
+  // Track + filled portion + thumb, same visual style as FilterLayer's
+  // intensity sliders.
+  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
+    const thumbR = 5
+    const lo     = x0 + thumbR
+    const hi     = x1 - thumbR
+    const range  = Math.max(0, hi - lo)
+    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
+
+    ctx.lineCap = 'round'
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth   = 3
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(hi, midY)
+    ctx.stroke()
+
+    ctx.strokeStyle = colour
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(thumbX, midY)
+    ctx.stroke()
+
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
+    ctx.fill()
   }
 
   private _drawIndicators(ctx: Ctx2D, items: Array<{ slot: ParameterSlot; label: string }>, rightX: number, midY: number): void {
@@ -885,45 +947,19 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     return { y: ry, midY, prev, label, next, seedLabelX, seedDecr, seedValueX, seedIncr }
   }
 
-  // Row 2: speed [−] N [+]   warp [−] N [+]   drift [‹] N° [›]   indicators
-  private _row2() {
-    const { x, y } = this.canvasBounds
-    const ry   = y + PAD + ROW_H + ROW_GAP
-    const midY = ry + ROW_H / 2
-    const by   = ry + (ROW_H - BTN_H) / 2
+  // Rows 2-5: slider row `i` (0=scale, 1=speed, 2=warp, 3=drift) —
+  // label | slider track [sld0, sldR] | value text | ●/○ indicator.
+  private _sliderRow(i: number) {
+    const { x, y, width } = this.canvasBounds
+    const ry   = y + PAD + ROW_H + ROW_GAP + i * (SLIDER_ROW_H + ROW_GAP)
+    const midY = ry + SLIDER_ROW_H / 2
 
-    let cx = x + 8
-    const speedLabelX = cx
-    cx += 32
-    const speedDecr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 2
-    const speedValueX = cx
-    cx += 30
-    const speedIncr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 14
+    const labelX     = x + 8
+    const sld0       = x + 8 + LABEL_W
+    const indX       = x + width - 8
+    const valueRight = indX - 14
+    const sldR       = valueRight - VALUE_W - 6
 
-    const detailLabelX = cx
-    cx += 30
-    const detailDecr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 2
-    const detailValueX = cx
-    cx += 30
-    const detailIncr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 14
-
-    const driftLabelX = cx
-    cx += 32
-    const driftDecr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 2
-    const driftValueX = cx
-    cx += 36
-    const driftIncr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-
-    return {
-      y: ry, midY,
-      speedLabelX, speedDecr, speedValueX, speedIncr,
-      detailLabelX, detailDecr, detailValueX, detailIncr,
-      driftLabelX, driftDecr, driftValueX, driftIncr,
-    }
+    return { y: ry, midY, labelX, sld0, sldR, valueRight, indX }
   }
 }

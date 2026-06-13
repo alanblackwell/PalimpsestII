@@ -961,3 +961,31 @@ tracks deletion count alone, regardless of what `backgroundLayer.items`
 holds. Items in `BackgroundLayer` keep recomputing via
 `Evaluator.setBackground()` either way; they're just not browsable via the
 toggle while the archive is empty.
+
+## NoiseLayer slider panel (updated June 2026)
+
+`NoiseLayer`'s panel (`src/layers/NoiseLayer.ts`) now has one slider per row
+for **scale**, **speed**, **warp**, and **drift** — FilterLayer-style (label +
+track + thumb + value text + ●/○ bind indicator), replacing the previous
+`[−]/[+]`/`[‹]/[›]` steppers. The panel grew from 2 rows (78px) to 5 rows
+(161px): row 1 is unchanged (type cycler, seed, `time`/`pos` indicators); rows
+2-5 are the new sliders. `MenuLayer`'s `BUTTONS` entry for `'Noise'` was
+updated to `height: 161` to match.
+
+- **scale** — a new manual fallback `_scale` (`[0,1]`, default ≈0.16) is
+  introduced; previously frequency was a fixed `DEFAULT_FREQ` when
+  `scaleSlot` was unbound. The slider maps `[0,1] → frequency [MIN_FREQ,
+  MAX_FREQ]` (same mapping as the bound case) and displays the resolved
+  frequency.
+- **speed** / **warp** — sliders directly on `_speed`/`_detail` (`[0,1]`),
+  displaying the value to 2 decimals.
+- **drift** — slider `[0,1] ↔ angle [0, 2π)`, displaying degrees.
+
+Dragging any slider while its slot is bound suspends that binding via
+`BindingLayer.findForSlot(slot)?.toggle()` on first touch — the same
+suspend-on-touch convention used elsewhere (`AmountLayer`, `FilterLayer`).
+Slider fill colour is the Amount accent `#4a8fe8` (scale/speed/warp) or
+Direction accent `#7ecfcf` (drift) when the slot is active, otherwise the
+noise accent `#b8a050`. `NoiseLayer` gained `handlePointerMove`/
+`handlePointerUp` (previously not implemented) to track slider drags via
+`_sliderDrag`.
