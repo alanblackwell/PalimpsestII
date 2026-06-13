@@ -898,10 +898,12 @@ etc. — the same way `RectLayer`/`EllipseLayer`/`PathLayer` already do via
 `ShapeLayer`.
 
 `getImage()` returns `_imageCanvas`, rebuilt in `recompute()` by
-`_updateImageCanvas()`: clears the canvas and calls `_renderCanvas(ctx)` —
-the same method `renderSelf` uses — so the image is the glyphs at their
-actual colour/typography/drop-shadow, in whatever layout (masked word-wrap or
-unmasked centred lines) is currently active.
+`_updateImageCanvas()`: clears the canvas and calls `_renderCanvas(ctx,
+false)` — the same method `renderSelf` uses (which calls it with
+`withShadow = true`), but with the drop-shadow `ctx.shadow*` properties
+skipped — so the image is just the glyphs at their actual colour/typography,
+in whatever layout (masked word-wrap or unmasked centred lines) is currently
+active.
 
 Since `ValueType.Image` is checked before `ValueType.Mask` in both
 `thumbnail.ts` and `typeColor()`, `TextLayer`'s thumbnail and accent colour

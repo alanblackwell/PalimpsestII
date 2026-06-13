@@ -487,7 +487,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     const ctx = this._imageCanvas.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
-    this._renderCanvas(ctx)
+    this._renderCanvas(ctx, false)
   }
 
   // Sample the mask OffscreenCanvas into per-row x-extents for text flow.
@@ -808,7 +808,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   // ── Canvas rendering ─────────────────────────────────────────
 
-  private _renderCanvas(ctx: Ctx2D): void {
+  private _renderCanvas(ctx: Ctx2D, withShadow = true): void {
     if (!this._text) return
     const c = this._colour
     const css = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a.toFixed(2)})`
@@ -816,10 +816,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.save()
     ctx.font         = this._fontString()
     ctx.fillStyle    = css
-    ctx.shadowColor  = 'rgba(0,0,0,0.70)'
-    ctx.shadowBlur   = 6
-    ctx.shadowOffsetX = 1
-    ctx.shadowOffsetY = 1
+    if (withShadow) {
+      ctx.shadowColor   = 'rgba(0,0,0,0.70)'
+      ctx.shadowBlur    = 6
+      ctx.shadowOffsetX = 1
+      ctx.shadowOffsetY = 1
+    }
 
     if (this._maskRows !== null) {
       this._renderMasked(ctx)
