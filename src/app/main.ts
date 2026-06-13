@@ -154,7 +154,7 @@ const DEFAULT_VALUE_LAYER: Partial<Record<ValueType, (w: number, h: number) => L
   [ValueType.Amount]:    ()     => new AmountLayer(0.5),
   [ValueType.Colour]:    ()     => new ColourLayer(rndColour()),
   [ValueType.Point]:     (w, h) => new PointLayer({ x: w / 2, y: h / 2 }),
-  [ValueType.Direction]: ()     => new DirectionLayer(0, 0.7),
+  [ValueType.Direction]: ()     => new DirectionLayer(0, 1),
   [ValueType.Rate]:      ()     => new RateLayer(1.0),
   [ValueType.Count]:     ()     => new CountLayer(0),
   [ValueType.Event]:     ()     => new EventLayer(),
@@ -381,6 +381,26 @@ interaction.setSlotClickCallback((consumer, slot) => {
         ? consumer.getStrokeStart()
         : slot === consumer.endSlot
           ? consumer.getStrokeEnd()
+          : null
+      if (pos !== null) {
+        const newLayer = new PointLayer(pos)
+        Layer.assignDebugName(newLayer)
+        newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+        newLayer.insertAbove(consumer)
+        BindingLayer.create(newLayer, slot)
+        refreshStack(newLayer)
+        return
+      }
+    }
+
+    // DirectionLayer position/handle slots: initialise the new PointLayer
+    // at the dial's current centre / control-handle position so the
+    // binding is a no-op by default.
+    if (consumer instanceof DirectionLayer && slot.type === ValueType.Point) {
+      const pos = slot === consumer.positionSlot
+        ? consumer.getDialPosition()
+        : slot === consumer.handleSlot
+          ? consumer.getHandlePosition()
           : null
       if (pos !== null) {
         const newLayer = new PointLayer(pos)
