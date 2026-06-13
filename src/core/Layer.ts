@@ -298,7 +298,6 @@ export abstract class Layer extends Node {
   autoBindRules(): Array<{
     slot: ParameterSlot
     accepts: (layer: Layer) => boolean
-    removeAfterBind?: boolean
     sendToBackgroundAfterBind?: boolean
   }> {
     return []

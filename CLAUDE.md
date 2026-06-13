@@ -157,7 +157,7 @@ hit-test returns nothing.
 
 ## Default binding rules (`autoBindRules`) (added June 2026)
 
-`Layer.autoBindRules()` returns an array of `{ slot, accepts, removeAfterBind?,
+`Layer.autoBindRules()` returns an array of `{ slot, accepts,
 sendToBackgroundAfterBind? }` descriptors. `applyDefaultBindings(layer)` in
 `main.ts` walks down the stack from the newly-added layer and binds the first
 non-infrastructure, non-hidden-helper layer that satisfies each `accepts`
@@ -168,25 +168,30 @@ Layers currently declaring rules:
   with `sendToBackgroundAfterBind: true` (see below). `ClipDrawingLayer` inherits
   this rule via `...super.autoBindRules()`.
 - **ClipLayer** — binds image slot to nearest `Image`; mask slot to nearest `Mask`;
-  both with `removeAfterBind: true` (sources are archived after binding)
+  both with `sendToBackgroundAfterBind: true`
+- **TileLayer** — binds source slot to nearest `Image`, with
+  `sendToBackgroundAfterBind: true`
 - **AnimPathLayer** — special-cased in `main.ts` (creates Clock/Rate if absent)
 
 To add rules to a new layer, override `autoBindRules()` in the layer class.
 
 ### `sendToBackgroundAfterBind` (added June 2026)
 
-A shape bound straight into a freshly-created `MaskLayer`'s (or
-`ClipDrawingLayer`'s) first shape slot is unlikely to be needed for anything
-else — once a shape defines a mask, its role is fixed. `applyDefaultBindings`
-moves that source layer into the `BackgroundLayer` collection (via
-`backgroundLayer.add(l)`) instead of leaving it in the main stack: it keeps
-recomputing (so the mask stays live) but no longer clutters the stack, and
-remains recoverable via `DeletionLayer`'s Background toggle (once
-`DeletionLayer` is in the stack — see `pruneDeletionLayerIfEmpty()` below,
-which keys its visibility on deletion count alone, not on Background
-contents). This is the same outcome as `removeAfterBind`'s archiving, but to
-the Background collection rather than the Deleted archive, since the shape
-is still "in use" rather than discarded.
+A source layer bound straight into a freshly-created layer's slot at creation
+time — a shape into a `MaskLayer`'s first shape slot, or an image/mask into a
+`ClipLayer`, or an image into a `TileLayer` — is unlikely to be needed for
+anything else, but its output is still part of the result (the mask, the
+clip's content, the tile's source) so it must keep recomputing.
+`applyDefaultBindings` moves that source layer into the `BackgroundLayer`
+collection (via `backgroundLayer.add(l)`) instead of leaving it in the main
+stack: it keeps recomputing but no longer clutters the stack, and remains
+recoverable via `DeletionLayer`'s Background toggle (once `DeletionLayer` is
+in the stack — see `pruneDeletionLayerIfEmpty()` below, which keys its
+visibility on deletion count alone, not on Background contents).
+
+Hidden helper layers (see below) are unaffected by this — they remain in the
+stack, in their fixed position relative to their host, just not rendered or
+given a thumbnail.
 
 ## DeletionLayer (updated June 2026)
 
@@ -350,7 +355,7 @@ full-resolution `getImageData` scan, no downsampling), and either:
 
 A `[Tile/Fit]` button in the panel toggles modes. `autoBindRules()` binds
 `sourceSlot` to the nearest `Image`-producing layer below, with
-`removeAfterBind: true`.
+`sendToBackgroundAfterBind: true`.
 
 ## FilterLayer (updated June 2026)
 
@@ -775,7 +780,12 @@ the pair always travels together.
 found), the `RateLayer` is inserted directly **above** the AnimPath as a
 hidden helper (`rate.isHiddenHelper = true`, linked via `helperHost`/
 `hiddenHelper`) and bound to `phaseSlot`. The `ClockLayer` it derives its time
-from remains a normal, visible layer below the AnimPath.
+from is sent straight to `backgroundLayer` (`backgroundLayer.add(clock)`,
+never inserted into the stack) — same "unlikely to need its own controls"
+reasoning as `sendToBackgroundAfterBind`. `refreshStack` (`main.ts`) falls
+back to scanning `backgroundLayer.items` for a `ClockLayer` when none is
+found in the stack, so `evaluator.setClock()` still picks it up and
+`tick()`/continuous rendering work as normal.
 
 **Exposure**: clicking the AnimPath's `phaseSlot` row (a bound slot) in
 `interaction.setSlotClickCallback` checks `source.isHiddenHelper` first — if

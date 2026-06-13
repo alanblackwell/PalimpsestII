@@ -146,9 +146,13 @@ export class TileLayer extends Layer implements ImageSource {
     }
   }
 
-  override autoBindRules() {
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
     return [
-      { slot: this._sourceSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), removeAfterBind: true },
+      // The image bound straight into a freshly-created TileLayer is
+      // unlikely to be needed for anything else — move it to the
+      // Background collection (still evaluated, recoverable via
+      // DeletionLayer's toggle) rather than leaving it cluttering the stack.
+      { slot: this._sourceSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), sendToBackgroundAfterBind: true },
     ]
   }
 

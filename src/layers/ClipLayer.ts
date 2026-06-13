@@ -152,10 +152,14 @@ export class ClipLayer extends Layer implements ImageSource {
     }
   }
 
-  override autoBindRules() {
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
     return [
-      { slot: this._imageSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), removeAfterBind: true },
-      { slot: this._maskSlot,  accepts: (l: Layer) => l.types.has(ValueType.Mask),  removeAfterBind: true },
+      // The image and mask bound straight into a freshly-created ClipLayer
+      // are unlikely to be needed for anything else — move them to the
+      // Background collection (still evaluated, recoverable via
+      // DeletionLayer's toggle) rather than leaving them cluttering the stack.
+      { slot: this._imageSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), sendToBackgroundAfterBind: true },
+      { slot: this._maskSlot,  accepts: (l: Layer) => l.types.has(ValueType.Mask),  sendToBackgroundAfterBind: true },
     ]
   }
 

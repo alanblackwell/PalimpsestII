@@ -70,11 +70,14 @@ function postInsertLayer(newLayer: Layer): void {
       }
 
       if (phaseSource === null) {
-        const below = newLayer.layerBelow
+        // The auto-created Clock is unlikely to need its own controls —
+        // send it straight to the Background collection (still ticked by
+        // the Evaluator every frame, recoverable via DeletionLayer's toggle)
+        // rather than adding it to the visible stack.
         const clock = new ClockLayer()
         Layer.assignDebugName(clock)
         clock.bounds = { ...newLayer.bounds }
-        if (below !== null) clock.insertAbove(below)
+        backgroundLayer.add(clock)
 
         // The Rate layer is created as a hidden helper directly above the
         // new AnimPath, bound to its phase slot. It stays with this
@@ -218,15 +221,12 @@ interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 // Each rule names a slot and a predicate; we walk down the stack and bind
 // the first non-infrastructure layer that satisfies the predicate.
 function applyDefaultBindings(newLayer: Layer): void {
-  for (const { slot, accepts, removeAfterBind, sendToBackgroundAfterBind } of newLayer.autoBindRules()) {
+  for (const { slot, accepts, sendToBackgroundAfterBind } of newLayer.autoBindRules()) {
     if (slot.isActive) continue
     for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
       if (!l.isInfrastructure && !l.isHiddenHelper && accepts(l)) {
         BindingLayer.create(l, slot)
-        if (removeAfterBind) {
-          ensureDeletionLayerInStack()
-          deletionLayer.archive(l)
-        } else if (sendToBackgroundAfterBind) {
+        if (sendToBackgroundAfterBind) {
           backgroundLayer.add(l)
         }
         break
@@ -240,11 +240,17 @@ const refreshStack = (selectLayer?: Layer) => {
   let top: Layer = root
   while (top.layerAbove !== null) top = top.layerAbove
 
-  // Wire the first ClockLayer found in the stack to the evaluator so the
-  // render loop runs continuously while a clock is present.
+  // Wire the first ClockLayer found — in the stack, or (failing that) in
+  // the Background collection, where auto-created Clocks live — to the
+  // evaluator so the render loop runs continuously while a clock is present.
   let clock: ClockLayer | null = null
   for (let l: Layer | null = top; l !== null; l = l.layerBelow) {
     if (l instanceof ClockLayer) { clock = l; break }
+  }
+  if (clock === null) {
+    for (const item of backgroundLayer.items) {
+      if (item instanceof ClockLayer) { clock = item; break }
+    }
   }
   evaluator.setClock(clock)
 
