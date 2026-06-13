@@ -36,6 +36,7 @@ const PAD_X = 8
 const STEP_BTN  = 18    // size of margin +/- buttons
 const STEP_VAL_W = 22   // width of margin value label
 const MARGIN_STEP = 1   // px per click
+const MARGIN_MIN  = -2  // px (overlap — "bleed" — avoids hairline gaps at tile edges)
 const MARGIN_MAX  = 200 // px
 
 type Mode = 'tile' | 'fit'
@@ -46,7 +47,9 @@ export class TileLayer extends Layer implements ImageSource {
   private readonly _sourceSlot: ParameterSlot
 
   private _mode:       Mode = 'tile'
-  private _margin:     number = 0   // px gap between tiles (tile mode only)
+  // px gap between tiles (tile mode only). Defaults to a 2px overlap
+  // ("bleed") so adjacent copies abut with no hairline gap.
+  private _margin:     number = MARGIN_MIN
   private _offscreen:  OffscreenCanvas
 
   constructor() {
@@ -89,7 +92,7 @@ export class TileLayer extends Layer implements ImageSource {
   }
 
   decreaseMargin(): void {
-    this._margin = Math.max(0, this._margin - MARGIN_STEP)
+    this._margin = Math.max(MARGIN_MIN, this._margin - MARGIN_STEP)
     this.markDirty()
   }
 
@@ -129,7 +132,9 @@ export class TileLayer extends Layer implements ImageSource {
     } else {
       // Tile the bbox content across the canvas, anchored so one tile
       // aligns with the original bbox position. _margin pixels of gap
-      // (transparent) are left between adjacent tiles.
+      // (transparent) are left between adjacent tiles — negative values
+      // (the default) overlap adjacent tiles by that many pixels instead,
+      // avoiding hairline gaps from sub-pixel edge rounding.
       const tw = bbox.w + this._margin
       const th = bbox.h + this._margin
       const startX = ((bbox.x % tw) + tw) % tw - tw
@@ -233,7 +238,7 @@ export class TileLayer extends Layer implements ImageSource {
 
     // Margin [-] value [+]
     const mmB = this._marginMinusBtnBounds()
-    this._drawBtn(ctx, mmB, '−', this._margin > 0 ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.18)')
+    this._drawBtn(ctx, mmB, '−', this._margin > MARGIN_MIN ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.18)')
 
     const mvB = this._marginValueBounds()
     ctx.fillStyle    = 'rgba(255,255,255,0.70)'
