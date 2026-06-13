@@ -69,8 +69,4 @@ export class Clock extends Layer {
 
   // Clock produces no visible render.
   renderSelf(_ctx: Ctx2D): void {}
-
-  protected hitTestSelf(_point: { x: number; y: number }): null {
-    return null
-  }
 }
