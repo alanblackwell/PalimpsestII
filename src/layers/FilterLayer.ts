@@ -11,6 +11,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { filterGL } from './FilterGL.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // FilterLayer — composable image-filter chain
@@ -394,8 +395,6 @@ const ACCENT  = '#7ecf7e'    // Image type / enabled colour
 const EV_COL  = '#e0e060'    // Event type colour
 const AM_COL  = '#4a8fe8'    // Amount type colour
 
-const PX      = 300           // pill column left edge (= canvasBounds.x)
-const PW      = 260           // pill column width
 const PY0     = 50            // pill column top (= canvasBounds.y)
 const PH_CTRL = 32            // control row height
 const SLT_H   = 26            // slot row height (matches Layer.renderSlots)
@@ -403,7 +402,15 @@ const SLT_GAP = 3             // padding above / between / below slot rows
 const PH      = PH_CTRL + SLT_GAP + SLT_H + SLT_GAP + SLT_H + SLT_GAP  // 93
 const PGAP    = 4             // gap between pills
 
-// Left side offsets (relative to PX):
+// Column layout — pills are centred in the space to the right of the
+// LayerStackWidget, shrinking width (down to PW_MIN) if there isn't room
+// for all columns at PW_MAX. Same general approach as MenuLayer._layout().
+const PW_MAX       = 260
+const PW_MIN       = 190
+const COL_GAP      = 16        // horizontal gap between columns
+const RIGHT_MARGIN = 12        // minimum gap to the canvas's right edge
+
+// Left side offsets (relative to each pill's left edge):
 const STRIPE  = 4             // accent stripe width
 const DRAG_OX = STRIPE + 4   // drag handle x-offset  (8)
 const DRAG_W  = 14            // drag handle width
@@ -413,20 +420,17 @@ const NAME_OX = TOG_OX + TOG_SZ + 4    // name label x-offset    (52)
 const NAME_W  = 54            // name label width
 const SLD_OX  = NAME_OX + NAME_W + 4   // slider x-offset        (110)
 
-// Right side — positions are relative to each column's left edge
+// Right side — relative to each pill's left edge
 const RPAD    = 8
-const SLD_OR  = PW - RPAD                                         // 252 (slider right offset)
-const SLD_W   = Math.max(0, SLD_OR - SLD_OX)                      // 142
 
 // Slot row label column width (matches Layer.renderSlots LABEL_W)
 const SLT_LW  = 78
 
-// Multi-column layout
-const COL_GAP = 16            // horizontal gap between columns
-
-// Intermediate preview thumbnails — shown to the right of each pill's column.
-const PREV_W = 54
-const PREV_H = PH_CTRL   // thumbnail height = control row only
+// Intermediate preview thumbnails — overlaid at the top-right of each pill's
+// control row (and the source slot row), rather than in a separate column.
+const THUMB_W   = 40
+const THUMB_H   = 24
+const THUMB_GAP = 6     // gap between slider/value box and the thumbnail
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -546,11 +550,11 @@ export class FilterLayer extends Layer implements ImageSource {
       this._result = new OffscreenCanvas(w, h)
 
     // ── Capture source thumbnail ─────────────────────────────
-    if (!this._srcPreview || this._srcPreview.height !== SLT_H)
-      this._srcPreview = new OffscreenCanvas(PREV_W, SLT_H)
+    if (!this._srcPreview || this._srcPreview.height !== THUMB_H)
+      this._srcPreview = new OffscreenCanvas(THUMB_W, THUMB_H)
     const spctx = this._srcPreview.getContext('2d')!
-    spctx.clearRect(0, 0, PREV_W, SLT_H)
-    spctx.drawImage(src as CanvasImageSource, 0, 0, PREV_W, SLT_H)
+    spctx.clearRect(0, 0, THUMB_W, THUMB_H)
+    spctx.drawImage(src as CanvasImageSource, 0, 0, THUMB_W, THUMB_H)
 
     // Build the list of enabled steps for the pipeline.
     const enabledRows: FilterRow[] = this._rows.filter(r => r.enabled)
@@ -558,7 +562,7 @@ export class FilterLayer extends Layer implements ImageSource {
 
     // ── WebGL pipeline (preferred) ───────────────────────────
     if (filterGL.supported && steps.length > 0) {
-      const thumbMap = filterGL.apply(src as CanvasImageSource, steps, w, h, PREV_H)
+      const thumbMap = filterGL.apply(src as CanvasImageSource, steps, w, h, THUMB_H)
 
       // Update per-row thumbnail cache from indexed results.
       for (let i = 0; i < enabledRows.length; i++) {
@@ -596,10 +600,10 @@ export class FilterLayer extends Layer implements ImageSource {
       row.def.apply(d, row.intensity, w, h)
       wctx.putImageData(imageData, 0, 0)
       let prev = this._rowPreviews.get(row)
-      if (!prev) { prev = new OffscreenCanvas(PREV_W, PREV_H); this._rowPreviews.set(row, prev) }
+      if (!prev) { prev = new OffscreenCanvas(THUMB_W, THUMB_H); this._rowPreviews.set(row, prev) }
       const pctx = prev.getContext('2d')!
-      pctx.clearRect(0, 0, PREV_W, PREV_H)
-      pctx.drawImage(this._workCanvas, 0, 0, PREV_W, PREV_H)
+      pctx.clearRect(0, 0, THUMB_W, THUMB_H)
+      pctx.drawImage(this._workCanvas, 0, 0, THUMB_W, THUMB_H)
     }
 
     const rctx = this._result.getContext('2d')!
@@ -619,11 +623,35 @@ export class FilterLayer extends Layer implements ImageSource {
   private _pillsPerCol(): number {
     return Math.max(1, Math.floor((Node.canvasHeight - PY0) / (PH + PGAP)))
   }
-  private _pillX(i: number): number {
-    return PX + Math.floor(i / this._pillsPerCol()) * (PW + COL_GAP)
+
+  // Pills are centred in the space right of the LayerStackWidget, shrinking
+  // width (down to PW_MIN) if there isn't room for all columns at PW_MAX —
+  // same general approach as MenuLayer._layout().
+  private _layout(): { panX: number; pillW: number; ppc: number } {
+    const canvasW = Node.canvasWidth
+    const left    = contentLeft(canvasW)
+    const availW  = Math.max(PW_MIN, canvasW - left - RIGHT_MARGIN)
+
+    const ppc  = this._pillsPerCol()
+    const cols = Math.max(1, Math.ceil(this._rows.length / ppc))
+
+    const totalGap = (cols - 1) * COL_GAP
+    let pillW = PW_MAX
+    if (cols * PW_MAX + totalGap > availW) {
+      pillW = Math.max(PW_MIN, (availW - totalGap) / cols)
+    }
+
+    const gridW = cols * pillW + totalGap
+    const panX  = left + Math.max(0, (availW - gridW) / 2)
+
+    return { panX, pillW, ppc }
   }
-  private _pillY(i: number): number {
-    return PY0 + (i % this._pillsPerCol()) * (PH + PGAP)
+
+  private _pillX(i: number, panX: number, pillW: number, ppc: number): number {
+    return panX + Math.floor(i / ppc) * (pillW + COL_GAP)
+  }
+  private _pillY(i: number, ppc: number): number {
+    return PY0 + (i % ppc) * (PH + PGAP)
   }
 
   override get panelBottom(): number {
@@ -635,7 +663,8 @@ export class FilterLayer extends Layer implements ImageSource {
   renderPanel(ctx: Ctx2D): void {
     this._filterSlotBounds.clear()
 
-    const N        = this._rows.length
+    const N = this._rows.length
+    const { panX, pillW, ppc } = this._layout()
     const srcSlotY = PY0 - SLT_H - PGAP
 
     ctx.save()
@@ -643,48 +672,45 @@ export class FilterLayer extends Layer implements ImageSource {
     // ── Source image slot — above column 0 ───────────────────
     ctx.fillStyle = 'rgba(0,0,0,0.40)'
     ctx.beginPath()
-    ctx.roundRect(PX, srcSlotY, PW, SLT_H, 6)
+    ctx.roundRect(panX, srcSlotY, pillW, SLT_H, 6)
     ctx.fill()
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(PX, srcSlotY, STRIPE, SLT_H, [3, 0, 0, 3])
+    ctx.roundRect(panX, srcSlotY, STRIPE, SLT_H, [3, 0, 0, 3])
     ctx.fill()
-    this._drawSlotRow(ctx, this._sourceSlot, 'image', PX, srcSlotY, ACCENT)
-    this._filterSlotBounds.set(this._sourceSlot, { x: PX, y: srcSlotY, width: PW, height: SLT_H })
+    this._drawSlotRow(ctx, this._sourceSlot, 'image', panX, srcSlotY, pillW, ACCENT, this._srcPreview)
+    this._filterSlotBounds.set(this._sourceSlot, { x: panX, y: srcSlotY, width: pillW, height: SLT_H })
 
     // ── Pills ─────────────────────────────────────────────────
     for (let i = 0; i < N; i++) {
       const row  = this._rows[i]!
-      const colX = this._pillX(i)
-      const py   = this._pillY(i)
+      const colX = this._pillX(i, panX, pillW, ppc)
+      const py   = this._pillY(i, ppc)
 
       if (this._dragRow === i) {
         ctx.globalAlpha = 0.25
-        this._drawPill(ctx, row, colX, py, false)
+        this._drawPill(ctx, row, colX, py, pillW, false)
         ctx.globalAlpha = 1
       } else {
-        this._drawPill(ctx, row, colX, py, true)
+        this._drawPill(ctx, row, colX, py, pillW, true)
       }
     }
 
     // Floating dragged pill + drop target indicator
     if (this._dragRow >= 0 && this._dragRow < N) {
-      this._drawPill(ctx, this._rows[this._dragRow]!, this._dragX, this._dragY, false)
+      this._drawPill(ctx, this._rows[this._dragRow]!, this._dragX, this._dragY, pillW, false)
       if (this._dragTarget >= 0 && this._dragTarget !== this._dragRow) {
-        const tx = this._pillX(this._dragTarget)
-        const ty = this._pillY(this._dragTarget)
+        const tx = this._pillX(this._dragTarget, panX, pillW, ppc)
+        const ty = this._pillY(this._dragTarget, ppc)
         ctx.strokeStyle = ACCENT
         ctx.lineWidth   = 2
         ctx.setLineDash([4, 4])
         ctx.beginPath()
-        ctx.roundRect(tx + 2, ty + 2, PW - 4, PH - 4, 5)
+        ctx.roundRect(tx + 2, ty + 2, pillW - 4, PH - 4, 5)
         ctx.stroke()
         ctx.setLineDash([])
       }
     }
-
-    // ── Preview thumbnails ────────────────────────────────────
-    this._drawPreviews(ctx)
 
     ctx.restore()
   }
@@ -696,14 +722,14 @@ export class FilterLayer extends Layer implements ImageSource {
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
-    const N        = this._rows.length
-    const ppc      = this._pillsPerCol()
+    const N = this._rows.length
+    const { panX, pillW, ppc } = this._layout()
     const numCols  = Math.ceil(N / ppc)
     const nRows    = Math.min(N, ppc)
-    const totalW   = numCols * (PW + COL_GAP) - COL_GAP
+    const totalW   = numCols * (pillW + COL_GAP) - COL_GAP
     const totalH   = nRows * (PH + PGAP) - PGAP
     const srcSlotY = PY0 - SLT_H - PGAP
-    return (point.x >= PX && point.x <= PX + totalW &&
+    return (point.x >= panX && point.x <= panX + totalW &&
             point.y >= srcSlotY && point.y <= PY0 + totalH) ? this : null
   }
 
@@ -718,11 +744,12 @@ export class FilterLayer extends Layer implements ImageSource {
 
   handlePointerDown(point: Point): boolean {
     const N = this._rows.length
+    const { panX, pillW, ppc } = this._layout()
     for (let i = 0; i < N; i++) {
       const row  = this._rows[i]!
-      const colX = this._pillX(i)
-      const py   = this._pillY(i)
-      if (point.x < colX || point.x > colX + PW) continue
+      const colX = this._pillX(i, panX, pillW, ppc)
+      const py   = this._pillY(i, ppc)
+      if (point.x < colX || point.x > colX + pillW) continue
       if (point.y < py   || point.y > py   + PH) continue
 
       // Slot row area — return false so InteractionSystem routes to _onSlotClick
@@ -750,11 +777,12 @@ export class FilterLayer extends Layer implements ImageSource {
 
       // Slider zone
       const sldX0 = colX + SLD_OX
-      const sldXR = colX + SLD_OR
-      if (point.x >= sldX0 && point.x <= sldXR && SLD_W > 0) {
+      const sldXR = colX + pillW - RPAD - THUMB_W - THUMB_GAP
+      const sldW  = sldXR - sldX0
+      if (point.x >= sldX0 && point.x <= sldXR && sldW > 0) {
         if (row.amountSlot.isActive) row.amountSlot.suspend()
         row.sliderDragging = true
-        this._setSlider(row, colX, point.x)
+        this._setSlider(row, colX, point.x, pillW)
         return true
       }
 
@@ -764,18 +792,20 @@ export class FilterLayer extends Layer implements ImageSource {
   }
 
   handlePointerMove(point: Point): void {
+    const { panX, pillW, ppc } = this._layout()
+
     // Drag reorder
     if (this._dragRow >= 0) {
       const N = this._rows.length
       this._dragX = point.x - this._dragOffsetX
       this._dragY = point.y - this._dragOffset
       // Find nearest pill by Euclidean distance from ghost centre
-      const gx = this._dragX + PW / 2
+      const gx = this._dragX + pillW / 2
       const gy = this._dragY + PH / 2
       let bestIdx = 0, bestDist = Infinity
       for (let i = 0; i < N; i++) {
-        const cx = this._pillX(i) + PW / 2
-        const cy = this._pillY(i) + PH / 2
+        const cx = this._pillX(i, panX, pillW, ppc) + pillW / 2
+        const cy = this._pillY(i, ppc) + PH / 2
         const d  = (gx - cx) ** 2 + (gy - cy) ** 2
         if (d < bestDist) { bestDist = d; bestIdx = i }
       }
@@ -788,7 +818,7 @@ export class FilterLayer extends Layer implements ImageSource {
     for (let i = 0; i < this._rows.length; i++) {
       const row = this._rows[i]!
       if (row.sliderDragging) {
-        this._setSlider(row, this._pillX(i), point.x)
+        this._setSlider(row, this._pillX(i, panX, pillW, ppc), point.x, pillW)
         return
       }
     }
@@ -827,59 +857,45 @@ export class FilterLayer extends Layer implements ImageSource {
     }
   }
 
-  private _setSlider(row: FilterRow, colX: number, px: number): void {
-    row.intensity = Math.max(0, Math.min(1, (px - colX - SLD_OX) / SLD_W))
+  private _setSlider(row: FilterRow, colX: number, px: number, pillW: number): void {
+    const sldX0 = colX + SLD_OX
+    const sldXR = colX + pillW - RPAD - THUMB_W - THUMB_GAP
+    const sldW  = sldXR - sldX0
+    if (sldW <= 0) return
+    row.intensity = Math.max(0, Math.min(1, (px - sldX0) / sldW))
     this.markDirty()
   }
 
-  private _drawPreviews(ctx: Ctx2D): void {
-    const N        = this._rows.length
-    const srcSlotY = PY0 - SLT_H - PGAP
-    const srcPrevX = PX + PW + 10
-
-    // Source thumbnail — aligned with the source slot row.
-    if (this._srcPreview) {
+  /** Overlaid preview thumbnail at the top-right of a pill's control row. */
+  private _drawThumb(
+    ctx: Ctx2D, thumb: OffscreenCanvas | null | undefined, colX: number, py: number, pillW: number, enabled: boolean,
+  ): void {
+    const tx = colX + pillW - RPAD - THUMB_W
+    const ty = py + (PH_CTRL - THUMB_H) / 2
+    if (thumb && enabled) {
       ctx.save()
       ctx.beginPath()
-      ctx.roundRect(srcPrevX, srcSlotY, PREV_W, SLT_H, 3)
+      ctx.roundRect(tx, ty, THUMB_W, THUMB_H, 3)
       ctx.clip()
-      ctx.drawImage(this._srcPreview as CanvasImageSource, srcPrevX, srcSlotY, PREV_W, SLT_H)
+      ctx.drawImage(thumb as CanvasImageSource, tx, ty, THUMB_W, THUMB_H)
       ctx.restore()
-      ctx.strokeStyle = ACCENT + '55'
-      ctx.lineWidth   = 1
-      ctx.beginPath()
-      ctx.roundRect(srcPrevX + 0.5, srcSlotY + 0.5, PREV_W - 1, SLT_H - 1, 3)
-      ctx.stroke()
-    }
-
-    // Per-filter intermediate thumbnails — one per enabled row, right of its column.
-    for (let i = 0; i < N; i++) {
-      const row  = this._rows[i]!
-      if (!row.enabled || this._dragRow === i) continue
-      const prev = this._rowPreviews.get(row)
-      if (!prev) continue
-
-      const colX  = this._pillX(i)
-      const py    = this._pillY(i)
-      const prevX = colX + PW + 10
-
-      ctx.save()
-      ctx.beginPath()
-      ctx.roundRect(prevX, py, PREV_W, PREV_H, 3)
-      ctx.clip()
-      ctx.drawImage(prev as CanvasImageSource, prevX, py, PREV_W, PREV_H)
-      ctx.restore()
-
       ctx.strokeStyle = 'rgba(255,255,255,0.28)'
-      ctx.lineWidth   = 1
+    } else {
+      ctx.fillStyle = 'rgba(255,255,255,0.04)'
       ctx.beginPath()
-      ctx.roundRect(prevX + 0.5, py + 0.5, PREV_W - 1, PREV_H - 1, 3)
-      ctx.stroke()
+      ctx.roundRect(tx, ty, THUMB_W, THUMB_H, 3)
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)'
     }
+    ctx.lineWidth = 1
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.roundRect(tx + 0.5, ty + 0.5, THUMB_W - 1, THUMB_H - 1, 3)
+    ctx.stroke()
   }
 
   private _drawPill(
-    ctx: Ctx2D, row: FilterRow, colX: number, py: number,
+    ctx: Ctx2D, row: FilterRow, colX: number, py: number, pillW: number,
     registerSlots: boolean,
   ): void {
     const ctrlMidY = py + PH_CTRL / 2
@@ -888,7 +904,7 @@ export class FilterLayer extends Layer implements ImageSource {
     // Full pill background (covers control row + slot rows)
     ctx.fillStyle = enabled ? 'rgba(0,0,0,0.50)' : 'rgba(0,0,0,0.28)'
     ctx.beginPath()
-    ctx.roundRect(colX, py, PW, PH, 6)
+    ctx.roundRect(colX, py, pillW, PH, 6)
     ctx.fill()
 
     // Accent stripe
@@ -901,7 +917,7 @@ export class FilterLayer extends Layer implements ImageSource {
     const slotAreaY = py + PH_CTRL
     ctx.fillStyle = 'rgba(0,0,0,0.22)'
     ctx.beginPath()
-    ctx.roundRect(colX + STRIPE, slotAreaY, PW - STRIPE, PH - PH_CTRL, [0, 0, 6, 0])
+    ctx.roundRect(colX + STRIPE, slotAreaY, pillW - STRIPE, PH - PH_CTRL, [0, 0, 6, 0])
     ctx.fill()
 
     // Drag handle (three horizontal bars)
@@ -923,18 +939,21 @@ export class FilterLayer extends Layer implements ImageSource {
     ctx.fillText(row.def.label, colX + NAME_OX, ctrlMidY)
 
     // Intensity slider
-    this._drawSlider(ctx, row, colX, ctrlMidY)
+    this._drawSlider(ctx, row, colX, ctrlMidY, pillW)
+
+    // Intermediate-result preview thumbnail
+    this._drawThumb(ctx, this._rowPreviews.get(row), colX, py, pillW, enabled)
 
     // Slot rows
     const evY = slotAreaY + SLT_GAP
     const amY = evY + SLT_H + SLT_GAP
-    this._drawSlotRow(ctx, row.enableSlot, 'toggle', colX, evY, EV_COL)
-    this._drawSlotRow(ctx, row.amountSlot, 'amount', colX, amY, AM_COL)
+    this._drawSlotRow(ctx, row.enableSlot, 'toggle', colX, evY, pillW, EV_COL)
+    this._drawSlotRow(ctx, row.amountSlot, 'amount', colX, amY, pillW, AM_COL)
 
     // Register slot hit zones
     if (registerSlots) {
-      this._filterSlotBounds.set(row.enableSlot, { x: colX, y: evY, width: PW, height: SLT_H })
-      this._filterSlotBounds.set(row.amountSlot, { x: colX, y: amY, width: PW, height: SLT_H })
+      this._filterSlotBounds.set(row.enableSlot, { x: colX, y: evY, width: pillW, height: SLT_H })
+      this._filterSlotBounds.set(row.amountSlot, { x: colX, y: amY, width: pillW, height: SLT_H })
     }
   }
 
@@ -983,12 +1002,14 @@ export class FilterLayer extends Layer implements ImageSource {
     ctx.fill()
   }
 
-  private _drawSlider(ctx: Ctx2D, row: FilterRow, colX: number, midY: number): void {
-    if (SLD_W <= 0) return
+  private _drawSlider(ctx: Ctx2D, row: FilterRow, colX: number, midY: number, pillW: number): void {
+    const sldOR = colX + pillW - RPAD - THUMB_W - THUMB_GAP
+    const sldW  = sldOR - (colX + SLD_OX)
+    if (sldW <= 0) return
     const v      = row.intensity
     const thumbR = 5
     const x1     = colX + SLD_OX + thumbR
-    const x2     = colX + SLD_OR - thumbR
+    const x2     = sldOR - thumbR
     const range  = Math.max(0, x2 - x1)
     const thumbX = x1 + v * range
 
@@ -1026,12 +1047,40 @@ export class FilterLayer extends Layer implements ImageSource {
     label: string,
     colX: number,
     y: number,
+    pillW: number,
     typeCol: string,
+    preview?: OffscreenCanvas | null,
   ): void {
+    const hasPreview = preview !== undefined
     const vx = colX + SLT_LW
-    const vw = PW - SLT_LW - 2
+    const vw = pillW - SLT_LW - 2 - (hasPreview ? THUMB_W + THUMB_GAP : 0)
     const by = y + 3
     const bh = SLT_H - 6
+
+    if (hasPreview) {
+      const tx = vx + vw + THUMB_GAP
+      const ty = y + (SLT_H - THUMB_H) / 2
+      if (preview) {
+        ctx.save()
+        ctx.beginPath()
+        ctx.roundRect(tx, ty, THUMB_W, THUMB_H, 3)
+        ctx.clip()
+        ctx.drawImage(preview as CanvasImageSource, tx, ty, THUMB_W, THUMB_H)
+        ctx.restore()
+        ctx.strokeStyle = ACCENT + '55'
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.04)'
+        ctx.beginPath()
+        ctx.roundRect(tx, ty, THUMB_W, THUMB_H, 3)
+        ctx.fill()
+        ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+      }
+      ctx.lineWidth = 1
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.roundRect(tx + 0.5, ty + 0.5, THUMB_W - 1, THUMB_H - 1, 3)
+      ctx.stroke()
+    }
 
     const isCompat = Node.bindDrag.active
                   && Node.bindDrag.source !== null
