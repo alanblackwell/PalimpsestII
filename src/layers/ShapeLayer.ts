@@ -24,8 +24,9 @@ import { BindingLayer } from './BindingLayer.js'
 //   • Four input slots: positionSlot (Point), colourSlot (Colour),
 //     opacitySlot (Amount), phaseSlot (Amount)
 //   • Ten interactive handles: center (move), four edge midpoints
-//     (symmetric resize), four corners (symmetric resize), one
-//     rotation handle (upper-right of bounding box)
+//     (anchored resize — the opposite edge/corner stays fixed in canvas
+//     space, so the centre shifts as the box is resized), four corners
+//     (anchored resize), one rotation handle (upper-right of bounding box)
 //   • renderSelf  — draws shape content via abstract drawShape()
 //   • renderPanel — strip pill + canvas panel pill + handle overlays
 //   • PointSource output — current point at phase along perimeter
@@ -52,6 +53,16 @@ const H_BR     = 8
 const H_ROTATE = 9
 
 type BBox = { x: number; y: number; width: number; height: number }
+
+// Resize one axis (width or height) by `delta` in local (unrotated) space,
+// returning the new size and the signed shift — along that axis's unit
+// vector — needed to keep the *opposite* edge/corner fixed in canvas space.
+// sign = +1 for the positive-side handle (right/bottom), -1 for the
+// negative-side handle (left/top).
+function resizeAxis(startSize: number, delta: number, sign: 1 | -1): { size: number; shift: number } {
+  const size = Math.max(MIN_SIZE, startSize + sign * delta)
+  return { size, shift: sign * (size - startSize) / 2 }
+}
 
 export abstract class ShapeLayer extends Layer implements PointSource, MaskSource, ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Mask, ValueType.Image])
@@ -365,37 +376,47 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
                   - this._rotLocalAngle
 
     } else {
-      // Symmetric resize: project delta into local (unrotated) space
+      // Anchored resize: project delta into local (unrotated) space, then
+      // resize along the dragged edge(s) only, shifting the centre so the
+      // opposite edge/corner stays fixed in canvas space.
       const cos = Math.cos(-this._dragStartAngle)
       const sin = Math.sin(-this._dragStartAngle)
       const lx  = dx * cos - dy * sin
       const ly  = dx * sin + dy * cos
 
-      const hw = this._dragStartW / 2
-      const hh = this._dragStartH / 2
+      // Canvas-space unit vectors for the shape's local x/y axes.
+      const ac = Math.cos(this._dragStartAngle)
+      const as = Math.sin(this._dragStartAngle)
+      const ux = { x: ac,  y: as }
+      const uy = { x: -as, y: ac }
+
+      let shiftX = 0   // distance to shift the centre along ux
+      let shiftY = 0   // distance to shift the centre along uy
+
+      const applyX = (sign: 1 | -1) => {
+        const r = resizeAxis(this._dragStartW, lx, sign)
+        this._width = r.size
+        shiftX = r.shift
+      }
+      const applyY = (sign: 1 | -1) => {
+        const r = resizeAxis(this._dragStartH, ly, sign)
+        this._height = r.size
+        shiftY = r.shift
+      }
 
       switch (this._dragHandle) {
-        case H_LEFT:    this._width  = Math.max(MIN_SIZE, 2 * (hw - lx)); break
-        case H_RIGHT:   this._width  = Math.max(MIN_SIZE, 2 * (hw + lx)); break
-        case H_TOP:     this._height = Math.max(MIN_SIZE, 2 * (hh - ly)); break
-        case H_BOTTOM:  this._height = Math.max(MIN_SIZE, 2 * (hh + ly)); break
-        case H_TL:
-          this._width  = Math.max(MIN_SIZE, 2 * (hw - lx))
-          this._height = Math.max(MIN_SIZE, 2 * (hh - ly))
-          break
-        case H_TR:
-          this._width  = Math.max(MIN_SIZE, 2 * (hw + lx))
-          this._height = Math.max(MIN_SIZE, 2 * (hh - ly))
-          break
-        case H_BL:
-          this._width  = Math.max(MIN_SIZE, 2 * (hw - lx))
-          this._height = Math.max(MIN_SIZE, 2 * (hh + ly))
-          break
-        case H_BR:
-          this._width  = Math.max(MIN_SIZE, 2 * (hw + lx))
-          this._height = Math.max(MIN_SIZE, 2 * (hh + ly))
-          break
+        case H_LEFT:    applyX(-1); break
+        case H_RIGHT:   applyX(1);  break
+        case H_TOP:     applyY(-1); break
+        case H_BOTTOM:  applyY(1);  break
+        case H_TL:      applyX(-1); applyY(-1); break
+        case H_TR:      applyX(1);  applyY(-1); break
+        case H_BL:      applyX(-1); applyY(1);  break
+        case H_BR:      applyX(1);  applyY(1);  break
       }
+
+      this._cx = this._dragStartCx + shiftX * ux.x + shiftY * uy.x
+      this._cy = this._dragStartCy + shiftX * ux.y + shiftY * uy.y
     }
 
     this.markDirty()
