@@ -8,6 +8,7 @@ import {
   type Point,  type PointSource,
   type ImageValue, type ImageSource,
   type MaskValue,  type MaskSource,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
@@ -66,10 +67,11 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Image, ValueType.Mask])
 
   // Parameter slots
-  readonly widthSlot:  ParameterSlot
-  readonly colourSlot: ParameterSlot
-  readonly startSlot:  ParameterSlot
-  readonly endSlot:    ParameterSlot
+  readonly widthSlot:    ParameterSlot
+  readonly colourSlot:   ParameterSlot
+  readonly startSlot:    ParameterSlot
+  readonly endSlot:      ParameterSlot
+  readonly rotationSlot: ParameterSlot
 
   // Drawing state
   private _drawMode  = true
@@ -124,11 +126,12 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this._computedCy       = this._cy
     this._computedRotation = 0
 
-    this.widthSlot  = new ParameterSlot(ValueType.Amount, this, 'width')
-    this.colourSlot = new ParameterSlot(ValueType.Colour, this, 'colour')
-    this.startSlot  = new ParameterSlot(ValueType.Point,  this, 'start')
-    this.endSlot    = new ParameterSlot(ValueType.Point,  this, 'end')
-    this.slots.push(this.widthSlot, this.colourSlot, this.startSlot, this.endSlot)
+    this.widthSlot    = new ParameterSlot(ValueType.Amount,    this, 'width')
+    this.colourSlot   = new ParameterSlot(ValueType.Colour,    this, 'colour')
+    this.startSlot    = new ParameterSlot(ValueType.Point,     this, 'start')
+    this.endSlot      = new ParameterSlot(ValueType.Point,     this, 'end')
+    this.rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
+    this.slots.push(this.widthSlot, this.colourSlot, this.startSlot, this.endSlot, this.rotationSlot)
 
     graph.register(this)
   }
@@ -190,6 +193,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     }
     if (this.colourSlot.isActive) {
       this._colour = (this.colourSlot.source as ColourSource).getColour()
+    }
+    if (this.rotationSlot.isActive) {
+      this._rotation = (this.rotationSlot.source as DirectionSource).getDirection().angle
     }
 
     // Compute effective transform from slot bindings.
@@ -458,6 +464,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
       this._suspendEndpointSlots()
+      if (this.rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.rotationSlot)?.toggle()
+      }
       this._drag = {
         type: 'rotate',
         center:     hp.move,
@@ -769,8 +778,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       (startActive || endActive) ? '#446688' : '#81d4fa')
 
-    // Rotate handle — circle, orange
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+    // Rotate handle — circle, orange (dimmed if rotationSlot is bound)
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
+      this.rotationSlot.isActive ? '#446688' : '#ffb74d')
 
     // Move handle — circle+crosshair (dimmed if endpoints are bound)
     const moveColour = (startActive || endActive) ? '#446688' : '#ffffff'

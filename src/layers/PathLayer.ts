@@ -1,10 +1,13 @@
 import { ShapeLayer } from './ShapeLayer.js'
 import {
   ValueType,
+  SlotState,
   type Colour,
   type Point,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // PathLayer — a closed Catmull-Rom spline shape layer
@@ -47,6 +50,12 @@ function samplePath(points: Point[], t: number): Point {
   )
 }
 
+function rotatePoint(p: Point, c: Point, angle: number): Point {
+  const cos = Math.cos(angle), sin = Math.sin(angle)
+  const dx = p.x - c.x, dy = p.y - c.y
+  return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos }
+}
+
 function defaultPoints(cx: number, cy: number): Point[] {
   const rx = 130, ry = 85, n = 6
   return Array.from({ length: n }, (_, i) => {
@@ -59,10 +68,12 @@ function defaultPoints(cx: number, cy: number): Point[] {
 // Constants
 // ------------------------------------------------------------------
 
-const ACCENT  = '#e8a04a'
-const CP_R    = 6
-const HIT_R   = 14
-const SAMPLES = 200
+const ACCENT     = '#e8a04a'
+const DIR_ACCENT = '#7ecfcf'
+const CP_R       = 6
+const HIT_R      = 14
+const ROT_OFF    = 24
+const SAMPLES    = 200
 
 // ------------------------------------------------------------------
 // PathLayer
@@ -73,15 +84,34 @@ export class PathLayer extends ShapeLayer {
 
   private _points:          Point[]
   private _dragIndex:       number = -1
-  private _specialDrag:     'center' | 'size' | null = null
+  private _specialDrag:     'center' | 'size' | 'rotate' | null = null
   private _dragStartPtr:    Point = { x: 0, y: 0 }
   private _dragStartPts:    Point[] = []
   private _dragStartCenter: Point = { x: 0, y: 0 }
+  private _dragStartAngle:  number = 0
 
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
     super(cx, cy, 1, 1, colour)
     this._points = points ?? defaultPoints(cx, cy)
+  }
+
+  // ----------------------------------------------------------
+  // Node — slot-driven rotation is applied to the control points
+  // directly (PathLayer has no separate width/height/angle render
+  // transform), then super.recompute() resolves `_angle` to match.
+  // ----------------------------------------------------------
+
+  protected override recompute(): void {
+    if (this.rotationSlot.isActive) {
+      const newAngle = (this.rotationSlot.source as DirectionSource).getDirection().angle
+      const delta = newAngle - this._angle
+      if (delta !== 0) {
+        const c = this._centroid()
+        this._points = this._points.map(p => rotatePoint(p, c, delta))
+      }
+    }
+    super.recompute()
   }
 
   // ----------------------------------------------------------
@@ -153,6 +183,8 @@ export class PathLayer extends ShapeLayer {
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) return this
     const sh = this._sizeHandlePos()
     if ((point.x - sh.x) ** 2 + (point.y - sh.y) ** 2 <= r2) return this
+    const rh = this._rotateHandlePos()
+    if ((point.x - rh.x) ** 2 + (point.y - rh.y) ** 2 <= r2) return this
     return this._nearest(point) >= 0 ? this : null
   }
 
@@ -184,6 +216,19 @@ export class PathLayer extends ShapeLayer {
       this.markDirty()
       return true
     }
+    const rh = this._rotateHandlePos()
+    if ((point.x - rh.x) ** 2 + (point.y - rh.y) ** 2 <= r2) {
+      if (this.rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.rotationSlot)?.toggle()
+      }
+      this._specialDrag     = 'rotate'
+      this._dragStartPtr    = { ...point }
+      this._dragStartPts    = this._points.map(p => ({ ...p }))
+      this._dragStartCenter = c
+      this._dragStartAngle  = this._angle
+      this.markDirty()
+      return true
+    }
     const idx = this._nearest(point)
     if (idx < 0) return false
     this._dragIndex = idx
@@ -208,6 +253,16 @@ export class PathLayer extends ShapeLayer {
         x: c0.x + (p.x - c0.x) * scale,
         y: c0.y + (p.y - c0.y) * scale,
       }))
+      this.markDirty()
+      return
+    }
+    if (this._specialDrag === 'rotate') {
+      const c0 = this._dragStartCenter
+      const a0 = Math.atan2(this._dragStartPtr.y - c0.y, this._dragStartPtr.x - c0.x)
+      const a1 = Math.atan2(point.y - c0.y, point.x - c0.x)
+      const delta = a1 - a0
+      this._points = this._dragStartPts.map(p => rotatePoint(p, c0, delta))
+      this._angle  = this._dragStartAngle + delta
       this.markDirty()
       return
     }
@@ -238,6 +293,14 @@ export class PathLayer extends ShapeLayer {
     const c    = this._centroid()
     const maxR = this._points.reduce((r, p) => Math.max(r, Math.hypot(p.x - c.x, p.y - c.y)), 0)
     return { x: c.x + maxR + 24, y: c.y }
+  }
+
+  /** Rotate handle — orbits the centroid, tracking `_angle`. */
+  private _rotateHandlePos(): Point {
+    const c    = this._centroid()
+    const maxR = this._points.reduce((r, p) => Math.max(r, Math.hypot(p.x - c.x, p.y - c.y)), 0)
+    const a    = this._angle - Math.PI / 2
+    return { x: c.x + (maxR + ROT_OFF) * Math.cos(a), y: c.y + (maxR + ROT_OFF) * Math.sin(a) }
   }
 
   private _nearest(p: Point): number {
@@ -283,11 +346,16 @@ export class PathLayer extends ShapeLayer {
     ctx.textAlign    = 'left'
     ctx.fillText(`${this._points.length} pts`, x + 28, midY)
 
-    const px = Math.round(this.getPoint().x)
-    const py = Math.round(this.getPoint().y)
-    ctx.fillStyle = 'rgba(255,255,255,0.50)'
+    // Angle (right side), with rotation-slot indicator dot
+    const deg = ((this._angle * 180 / Math.PI) % 360 + 360) % 360
+    const rotActive = this.rotationSlot.isActive
+    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.50)'
     ctx.textAlign = 'right'
-    ctx.fillText(`(${px}, ${py})`, x + width - 8, midY)
+    ctx.fillText(`∠ ${deg.toFixed(0)}°`, x + width - 8, midY)
+    const angleW = ctx.measureText(`∠ ${deg.toFixed(0)}°`).width
+    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.22)'
+    ctx.font = '9px monospace'
+    ctx.fillText(rotActive ? '●' : '○', x + width - 12 - angleW, midY)
 
     ctx.restore()
   }
@@ -296,6 +364,7 @@ export class PathLayer extends ShapeLayer {
     if (this._points.length < 2) return
     const c  = this._centroid()
     const sh = this._sizeHandlePos()
+    const rh = this._rotateHandlePos()
 
     ctx.save()
 
@@ -319,6 +388,12 @@ export class PathLayer extends ShapeLayer {
     ctx.beginPath()
     ctx.moveTo(c.x, c.y)
     ctx.lineTo(sh.x, sh.y)
+    ctx.stroke()
+
+    // Dashed line from centre to rotate handle
+    ctx.beginPath()
+    ctx.moveTo(c.x, c.y)
+    ctx.lineTo(rh.x, rh.y)
     ctx.stroke()
     ctx.setLineDash([])
 
@@ -353,6 +428,17 @@ export class PathLayer extends ShapeLayer {
     ctx.lineWidth   = 1
     ctx.fillRect(sh.x - hs, sh.y - hs, hs * 2, hs * 2)
     ctx.strokeRect(sh.x - hs, sh.y - hs, hs * 2, hs * 2)
+
+    // Rotate handle (circle, dimmed when rotationSlot is active)
+    const litR = this._specialDrag === 'rotate'
+    ctx.fillStyle = litR ? '#ffffff'
+      : this.rotationSlot.isActive ? 'rgba(102,102,136,0.85)' : 'rgba(232,160,74,0.85)'
+    ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.arc(rh.x, rh.y, CP_R, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.stroke()
 
     ctx.restore()
   }

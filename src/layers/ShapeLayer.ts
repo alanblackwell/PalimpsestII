@@ -9,9 +9,11 @@ import {
   type EventValue, type EventSource,
   type MaskValue,  type MaskSource,
   type ImageValue, type ImageSource,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -30,7 +32,8 @@ import { graph } from '../dataflow/Graph.js'
 //
 // Subclasses implement drawShape() and samplePerimeter().
 
-const ACCENT    = '#e8a04a'   // warm amber — shape type colour
+const ACCENT     = '#e8a04a'   // warm amber — shape type colour
+const DIR_ACCENT = '#7ecfcf'   // Direction type colour
 const HANDLE_R  = 5           // handle square/circle half-size (px)
 const HIT_R     = 12          // pointer hit radius (px)
 const MIN_SIZE  = 20          // minimum width / height (px)
@@ -70,6 +73,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   readonly opacitySlot:   ParameterSlot
   readonly phaseSlot:     ParameterSlot
   readonly fillModeSlot:  ParameterSlot
+  readonly rotationSlot:  ParameterSlot
 
   protected _filled = true
 
@@ -96,12 +100,13 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._height = height
     if (colour !== undefined) this._colour = colour
 
-    this.positionSlot  = new ParameterSlot(ValueType.Point,  this, 'position')
-    this.colourSlot    = new ParameterSlot(ValueType.Colour, this, 'colour')
-    this.opacitySlot   = new ParameterSlot(ValueType.Amount, this, 'opacity')
-    this.phaseSlot     = new ParameterSlot(ValueType.Amount, this, 'phase')
-    this.fillModeSlot  = new ParameterSlot(ValueType.Event,  this, 'fill mode')
-    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot, this.fillModeSlot)
+    this.positionSlot  = new ParameterSlot(ValueType.Point,     this, 'position')
+    this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
+    this.opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this.phaseSlot     = new ParameterSlot(ValueType.Amount,    this, 'phase')
+    this.fillModeSlot  = new ParameterSlot(ValueType.Event,     this, 'fill mode')
+    this.rotationSlot  = new ParameterSlot(ValueType.Direction, this, 'rotation')
+    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot, this.fillModeSlot, this.rotationSlot)
     this._currentPoint = { x: cx, y: cy }
     graph.register(this)
   }
@@ -154,6 +159,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
         this._lastEventTime = t
         this._filled = !this._filled
       }
+    }
+    if (this.rotationSlot.isActive) {
+      this._angle = (this.rotationSlot.source as DirectionSource).getDirection().angle
     }
     this._currentPoint = this.samplePerimeter(this._phase)
     this._updateOffscreens()
@@ -330,6 +338,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     // Pre-compute the local angle of the rotation handle for smooth rotation
     if (best === H_ROTATE) {
+      if (this.rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.rotationSlot)?.toggle()
+      }
       const hw = this._width / 2, hh = this._height / 2
       this._rotLocalAngle = Math.atan2(-(hh + ROT_OFF), hw + ROT_OFF)
     }
@@ -466,7 +477,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       ctx.lineWidth   = 1
 
       if (i === H_ROTATE) {
-        ctx.fillStyle = lit ? '#ffffff' : 'rgba(232,160,74,0.85)'
+        ctx.fillStyle = lit ? '#ffffff'
+          : this.rotationSlot.isActive ? 'rgba(102,102,136,0.85)' : 'rgba(232,160,74,0.85)'
         ctx.beginPath()
         ctx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2)
         ctx.fill()
@@ -543,11 +555,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       x + 28, midY,
     )
 
-    // Angle (right side)
+    // Angle (right side), with rotation-slot indicator dot
     const deg = ((this._angle * 180 / Math.PI) % 360 + 360) % 360
-    ctx.fillStyle = 'rgba(255,255,255,0.50)'
+    const rotActive = this.rotationSlot.isActive
+    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.50)'
     ctx.textAlign = 'right'
     ctx.fillText(`∠ ${deg.toFixed(0)}°`, x + width - 8, midY)
+    const angleW = ctx.measureText(`∠ ${deg.toFixed(0)}°`).width
+    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.22)'
+    ctx.font = '9px monospace'
+    ctx.fillText(rotActive ? '●' : '○', x + width - 12 - angleW, midY)
 
     ctx.restore()
   }

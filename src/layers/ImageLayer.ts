@@ -3,13 +3,16 @@ import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
+  SlotState,
   boundingBoxContains,
-  type ImageValue, type ImageSource,
-  type Point,      type PointSource,
-  type Amount,     type AmountSource,
+  type ImageValue,     type ImageSource,
+  type Point,          type PointSource,
+  type Amount,         type AmountSource,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -33,6 +36,7 @@ import { graph } from '../dataflow/Graph.js'
 //   Handles glow brightly (shadowBlur) for visibility over any content.
 
 const ACCENT     = '#7ecf7e'
+const DIR_ACCENT = '#7ecfcf'
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
@@ -63,6 +67,7 @@ export class ImageLayer extends Layer implements ImageSource {
   private readonly _positionSlot: ParameterSlot
   private readonly _opacitySlot:  ParameterSlot
   private readonly _scaleSlot:    ParameterSlot
+  private readonly _rotationSlot: ParameterSlot
 
   private _bitmap:     ImageValue      = null
   private _offscreen:  OffscreenCanvas = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
@@ -84,10 +89,11 @@ export class ImageLayer extends Layer implements ImageSource {
 
   constructor() {
     super()
-    this._positionSlot = new ParameterSlot(ValueType.Point,  this)
-    this._opacitySlot  = new ParameterSlot(ValueType.Amount, this)
-    this._scaleSlot    = new ParameterSlot(ValueType.Amount, this)
-    this.slots.push(this._positionSlot, this._opacitySlot, this._scaleSlot)
+    this._positionSlot = new ParameterSlot(ValueType.Point,     this)
+    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this)
+    this._scaleSlot    = new ParameterSlot(ValueType.Amount,    this)
+    this._rotationSlot = new ParameterSlot(ValueType.Direction, this)
+    this.slots.push(this._positionSlot, this._opacitySlot, this._scaleSlot, this._rotationSlot)
     this.debugName = 'ImageLayer'
     graph.register(this)
   }
@@ -105,6 +111,7 @@ export class ImageLayer extends Layer implements ImageSource {
   get positionSlot(): ParameterSlot { return this._positionSlot }
   get opacitySlot():  ParameterSlot { return this._opacitySlot  }
   get scaleSlot():    ParameterSlot { return this._scaleSlot    }
+  get rotationSlot(): ParameterSlot { return this._rotationSlot }
 
   // ----------------------------------------------------------
   // Image loading
@@ -165,6 +172,10 @@ export class ImageLayer extends Layer implements ImageSource {
       this._scale = this._manualScale ?? 1.0
     }
 
+    if (this._rotationSlot.isActive) {
+      this._rotation = (this._rotationSlot.source as DirectionSource).getDirection().angle
+    }
+
     this._updateOffscreen()
   }
 
@@ -200,8 +211,11 @@ export class ImageLayer extends Layer implements ImageSource {
 
     const hp = this._handlePos()
 
-    // Rotate handle — always draggable (no slot controls rotation)
+    // Rotate handle — suspends rotationSlot binding (if any) and takes manual control
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+      if (this._rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._rotationSlot)?.toggle()
+      }
       this._drag = {
         type: 'rotate',
         center:     { ...this._position },
@@ -328,18 +342,19 @@ export class ImageLayer extends Layer implements ImageSource {
       ctx.fillText(`${this._natW} × ${this._natH}`, textL, midY + 6)
     }
 
-    // Slot indicators — pos / α / sc
+    // Slot indicators — pos / α / sc / rot
     const slots = [
-      { slot: this._positionSlot, label: 'pos' },
-      { slot: this._opacitySlot,  label: 'α'   },
-      { slot: this._scaleSlot,    label: 'sc'  },
+      { slot: this._positionSlot, label: 'pos', accent: ACCENT },
+      { slot: this._opacitySlot,  label: 'α',   accent: ACCENT },
+      { slot: this._scaleSlot,    label: 'sc',  accent: ACCENT },
+      { slot: this._rotationSlot, label: 'rot', accent: DIR_ACCENT },
     ]
     let dx = loadB.x - 6
     ctx.font = '9px monospace'
     for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label } = slots[i]!
+      const { slot, label, accent } = slots[i]!
       const active = slot.isActive
-      ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
+      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
       ctx.fillText(active ? '●' : '○', dx, midY)
@@ -454,8 +469,9 @@ export class ImageLayer extends Layer implements ImageSource {
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       this._scaleSlot.isActive ? '#666688' : '#81d4fa')
 
-    // Rotate handle — circle, orange glow
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+    // Rotate handle — circle, orange glow (dimmed when slot bound)
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
+      this._rotationSlot.isActive ? '#666688' : '#ffb74d')
 
     // Move handle — circle + crosshair, white glow (dimmed when slot bound)
     this._drawGlowCircle(ctx, hp.move, HANDLE_R,

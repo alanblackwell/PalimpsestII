@@ -3,14 +3,17 @@ import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
+  SlotState,
   boundingBoxContains,
-  type Amount,     type AmountSource,
-  type ImageValue, type ImageSource,
+  type Amount,         type AmountSource,
+  type ImageValue,     type ImageSource,
   type MaskSource,
-  type Point,      type PointSource,
+  type Point,          type PointSource,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // ClipLayer — clip an image to a mask region, with transform handles
@@ -31,6 +34,7 @@ import { graph } from '../dataflow/Graph.js'
 // translated, scaled, and rotated to the target location.
 
 const ACCENT     = '#7ecf7e'
+const DIR_ACCENT = '#7ecfcf'
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
@@ -58,6 +62,7 @@ export class ClipLayer extends Layer implements ImageSource {
   private readonly _maskSlot:     ParameterSlot
   private readonly _positionSlot: ParameterSlot
   private readonly _scaleSlot:    ParameterSlot
+  private readonly _rotationSlot: ParameterSlot
 
   private _offscreen: OffscreenCanvas
 
@@ -78,12 +83,13 @@ export class ClipLayer extends Layer implements ImageSource {
     this._offscreen  = new OffscreenCanvas(w, h)
     this._position   = { x: w / 2, y: h / 2 }
 
-    this._imageSlot    = new ParameterSlot(ValueType.Image,  this, 'image')
-    this._maskSlot     = new ParameterSlot(ValueType.Mask,   this, 'mask')
-    this._positionSlot = new ParameterSlot(ValueType.Point,  this, 'position')
-    this._scaleSlot    = new ParameterSlot(ValueType.Amount, this, 'scale')
+    this._imageSlot    = new ParameterSlot(ValueType.Image,     this, 'image')
+    this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
+    this._positionSlot = new ParameterSlot(ValueType.Point,     this, 'position')
+    this._scaleSlot    = new ParameterSlot(ValueType.Amount,    this, 'scale')
+    this._rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
 
-    this.slots.push(this._imageSlot, this._maskSlot, this._positionSlot, this._scaleSlot)
+    this.slots.push(this._imageSlot, this._maskSlot, this._positionSlot, this._scaleSlot, this._rotationSlot)
     this.debugName = 'ClipLayer'
     graph.register(this)
   }
@@ -140,6 +146,10 @@ export class ClipLayer extends Layer implements ImageSource {
     } else {
       this._scale = this._manualScale ?? 1.0
     }
+
+    if (this._rotationSlot.isActive) {
+      this._rotation = (this._rotationSlot.source as DirectionSource).getDirection().angle
+    }
   }
 
   override autoBindRules() {
@@ -191,17 +201,18 @@ export class ClipLayer extends Layer implements ImageSource {
     ctx.fillText('Clip', x + 12, midY)
 
     const slots = [
-      { slot: this._imageSlot,    label: 'img'  },
-      { slot: this._maskSlot,     label: 'mask' },
-      { slot: this._positionSlot, label: 'pos'  },
-      { slot: this._scaleSlot,    label: 'sc'   },
+      { slot: this._imageSlot,    label: 'img',  accent: ACCENT },
+      { slot: this._maskSlot,     label: 'mask', accent: ACCENT },
+      { slot: this._positionSlot, label: 'pos',  accent: ACCENT },
+      { slot: this._scaleSlot,    label: 'sc',   accent: ACCENT },
+      { slot: this._rotationSlot, label: 'rot',  accent: DIR_ACCENT },
     ]
     let dx = x + width - 8
     ctx.font = '9px monospace'
     for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label } = slots[i]!
+      const { slot, label, accent } = slots[i]!
       const active = slot.isActive
-      ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
+      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
       ctx.fillText(active ? '●' : '○', dx, midY)
@@ -232,6 +243,9 @@ export class ClipLayer extends Layer implements ImageSource {
     const hp = this._handlePos()
 
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+      if (this._rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._rotationSlot)?.toggle()
+      }
       this._drag = {
         type:       'rotate',
         center:     { ...this._position },
@@ -332,7 +346,8 @@ export class ClipLayer extends Layer implements ImageSource {
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       this._scaleSlot.isActive ? '#666688' : '#81d4fa')
 
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
+      this._rotationSlot.isActive ? '#666688' : '#ffb74d')
 
     this._drawGlowCircle(ctx, hp.move, HANDLE_R,
       this._positionSlot.isActive ? '#666688' : '#ffffff')

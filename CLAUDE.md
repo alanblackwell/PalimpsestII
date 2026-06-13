@@ -659,6 +659,71 @@ own *unrotated* frame, then the whole render is wrapped in a rotation transform:
 `_renderUnmasked` rotates about `_position` directly (`translate → rotate`,
 lines drawn relative to local origin).
 
+## Direction rotationSlot — manual rotate handles (added June 2026)
+
+`ImageLayer`, `ClipLayer`, `TextLayer`, and `StrokeLayer` each have a manual
+rotate handle (`_rotation`, in radians) and now also have a `rotationSlot`
+(`ValueType.Direction`), pushed onto `this.slots[]`. This follows the same
+slider-override pattern as `AmountLayer`'s `_suspendActiveSlots()`:
+
+- **`recompute()`** — when `rotationSlot.isActive`, `_rotation` is overwritten
+  from `(rotationSlot.source as DirectionSource).getDirection().angle`
+  (magnitude is unused). For `StrokeLayer` this sets the *base* `_rotation`,
+  which then flows through the existing `_computedRotation` rubber-banding
+  (start/end Point slots) exactly as a manual drag would.
+- **Rotate handle drag start** — if `rotationSlot.state === SlotState.Bound`,
+  `BindingLayer.findForSlot(this.rotationSlot)?.toggle()` suspends the binding
+  before the drag begins, handing manual control back to the user at the
+  current angle. `StrokeLayer` calls this alongside its existing
+  `_suspendEndpointSlots()`.
+- **Rotate handle glow** — dims to `#666688` (`#446688` for StrokeLayer, to
+  match its existing dimmed-handle colour) when `rotationSlot.isActive`.
+- **Panel indicator** — `ImageLayer`/`ClipLayer`/`TextLayer` add a `rot`
+  ●/○ indicator (accent `#7ecfcf`, the `Direction` type colour) to their
+  existing slot-indicator row. `StrokeLayer`'s panel has no per-slot
+  indicators; the new slot only gets the automatic bind-target row from the
+  base `Layer.renderSlots`.
+
+### ShapeLayer (Rect/Ellipse/Path)
+
+The same pattern is implemented once in `ShapeLayer`, the abstract base for
+`RectLayer`, `EllipseLayer`, and `PathLayer`, since all three share `_angle`
+and the `H_ROTATE` bounding-box handle:
+
+- **`recompute()`** — when `rotationSlot.isActive`, `_angle` is overwritten
+  from the bound `DirectionSource`.
+- **H_ROTATE drag start** — suspends `rotationSlot` via
+  `BindingLayer.findForSlot(...)?.toggle()`, same as the other layers.
+- **H_ROTATE marker** — dims to `rgba(102,102,136,0.85)` when
+  `rotationSlot.isActive`.
+- **`_drawPill`** — the existing `∠ <deg>°` angle readout gets a ●/○
+  indicator (`DIR_ACCENT = '#7ecfcf'`) to its left.
+
+`RectLayer` and `EllipseLayer` get all of this for free (no overrides).
+`PathLayer` overrides `renderPanel`/`hitTestSelf`/`handlePointerDown`/
+`handlePointerMove` with its own spline control-point UI and has no
+bbox/`H_ROTATE` handle, so it needed its own implementation of the same
+pattern:
+
+- `PathLayer` has no separate width/height/angle render transform — its
+  geometry **is** `_points` (canvas-space control points). Rotation is
+  therefore applied directly to `_points` (rotated about the centroid),
+  with `_angle` kept only as a running total for the indicator and for
+  computing the next delta.
+- **`recompute()` override** — when `rotationSlot.isActive`, computes
+  `delta = newAngle - this._angle`, rotates `_points` by `delta` about
+  `_centroid()`, then calls `super.recompute()` (which sets `_angle =
+  newAngle` and rebuilds the mask/image offscreens from the rotated points).
+- **New rotate handle** (`_rotateHandlePos()`) — orbits the centroid at
+  `_angle - 90°`, distance `maxR + ROT_OFF` (mirrors `_sizeHandlePos()`,
+  offset by a quarter turn so the two handles don't collide). Dragging it
+  rotates `_dragStartPts` by the pointer's angle delta about the centroid
+  (same `'center'`/`'size'`-drag style as the existing handles) and updates
+  `_angle` to match. Drag start suspends `rotationSlot` if bound.
+- **`_drawPill`** — the previous `(x, y)` current-point readout was replaced
+  with the same `∠ <deg>°` + ●/○ indicator as the other shapes (panel width
+  is too narrow for both).
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase

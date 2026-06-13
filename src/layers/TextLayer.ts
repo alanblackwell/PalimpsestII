@@ -3,14 +3,17 @@ import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
+  SlotState,
   boundingBoxContains,
-  type Colour,      type ColourSource,
-  type Point,       type PointSource,
-  type Amount,      type AmountSource,
+  type Colour,          type ColourSource,
+  type Point,           type PointSource,
+  type Amount,          type AmountSource,
   type MaskSource,
+  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
 // TextLayer — renders a string onto the canvas
@@ -30,6 +33,7 @@ import { graph } from '../dataflow/Graph.js'
 //   [✎] opens a multiline overlay dialog with a Paste button.
 
 const ACCENT       = '#c8c8e8'
+const DIR_ACCENT   = '#7ecfcf'
 const MIN_SIZE     = 12
 const MAX_SIZE     = 120
 const DEFAULT_SIZE = 48
@@ -121,6 +125,7 @@ export class TextLayer extends Layer {
   private readonly _colourSlot:   ParameterSlot
   private readonly _sizeSlot:     ParameterSlot
   private readonly _maskSlot:     ParameterSlot
+  private readonly _rotationSlot: ParameterSlot
 
   // Persisted text content
   private _text: string = 'Hello'
@@ -147,11 +152,12 @@ export class TextLayer extends Layer {
   constructor(text = 'Hello') {
     super()
     this._text         = text
-    this._positionSlot = new ParameterSlot(ValueType.Point,  this)
-    this._colourSlot   = new ParameterSlot(ValueType.Colour, this)
-    this._sizeSlot     = new ParameterSlot(ValueType.Amount, this)
-    this._maskSlot     = new ParameterSlot(ValueType.Mask,   this, 'mask')
-    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot)
+    this._positionSlot = new ParameterSlot(ValueType.Point,     this)
+    this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
+    this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
+    this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
+    this._rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
+    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot)
     this.debugName = 'TextLayer'
     graph.register(this)
   }
@@ -164,6 +170,7 @@ export class TextLayer extends Layer {
   get colourSlot():   ParameterSlot { return this._colourSlot   }
   get sizeSlot():     ParameterSlot { return this._sizeSlot     }
   get maskSlot():     ParameterSlot { return this._maskSlot     }
+  get rotationSlot(): ParameterSlot { return this._rotationSlot }
 
   // ----------------------------------------------------------
   // Text content
@@ -387,6 +394,10 @@ export class TextLayer extends Layer {
       this._size = this._manualSize
     }
 
+    if (this._rotationSlot.isActive) {
+      this._rotation = (this._rotationSlot.source as DirectionSource).getDirection().angle
+    }
+
     if (this._maskSlot.isActive) {
       const mask = (this._maskSlot.source as MaskSource).getMask()
       if (mask !== null) {
@@ -481,9 +492,13 @@ export class TextLayer extends Layer {
     // Transform handles
     const hp = this._handlePos()
 
-    // Rotate handle — always draggable; rotates the text (and, when masked,
-    // re-derives the scanline wrap from the counter-rotated mask).
+    // Rotate handle — suspends rotationSlot binding (if any), then rotates
+    // the text (and, when masked, re-derives the scanline wrap from the
+    // counter-rotated mask).
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+      if (this._rotationSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._rotationSlot)?.toggle()
+      }
       this._drag = {
         type:       'rotate',
         center:     { ...hp.center },
@@ -607,19 +622,20 @@ export class TextLayer extends Layer {
     ctx.fillStyle = 'rgba(255,255,255,0.80)'
     ctx.fillText(this._truncate(ctx, `"${this._text}"`, prevR - prevL - 72), prevL, midY)
 
-    // Slot indicators (right-to-left: mask, sz, col, pos)
+    // Slot indicators (right-to-left: rot, mask, sz, col, pos)
     const slots = [
-      { slot: this._positionSlot, label: 'pos'  },
-      { slot: this._colourSlot,   label: 'col'  },
-      { slot: this._sizeSlot,     label: 'sz'   },
-      { slot: this._maskSlot,     label: 'mask' },
+      { slot: this._positionSlot, label: 'pos',  accent: ACCENT },
+      { slot: this._colourSlot,   label: 'col',  accent: ACCENT },
+      { slot: this._sizeSlot,     label: 'sz',   accent: ACCENT },
+      { slot: this._maskSlot,     label: 'mask', accent: ACCENT },
+      { slot: this._rotationSlot, label: 'rot',  accent: DIR_ACCENT },
     ]
     let dx = editB.x - 6
     ctx.font = '9px monospace'
     for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label } = slots[i]!
+      const { slot, label, accent } = slots[i]!
       const active = slot.isActive
-      ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
+      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
       ctx.textAlign    = 'right'
       ctx.textBaseline = 'middle'
       ctx.fillText(active ? '●' : '○', dx, midY)
@@ -918,8 +934,10 @@ export class TextLayer extends Layer {
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       this._sizeSlot.isActive ? '#666688' : '#81d4fa')
 
-    // Rotate handle — circle, orange glow. Always draggable, including when masked.
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, '#ffb74d')
+    // Rotate handle — circle, orange glow (dimmed when slot bound). Always
+    // draggable, including when masked.
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
+      this._rotationSlot.isActive ? '#666688' : '#ffb74d')
 
     // Move handle — circle + crosshair, white glow. Hidden entirely when a
     // mask is applied, since masked text ignores _position.
