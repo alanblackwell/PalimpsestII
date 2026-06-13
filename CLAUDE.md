@@ -332,6 +332,44 @@ Also fixed: `renderPanel` on both `ColourLayer` and `AmountLayer` was calling
 `_drawPill` twice (once for `this.bounds`, once for the canvas-space panel) —
 the duplicate call against `this.bounds` was removed.
 
+## ColourLayer image-sample pill (added June 2026)
+
+`ColourLayer` gained a second canvas-space pill, drawn directly below the
+main picker pill (`_samplePillBounds()`: same x/width as `canvasBounds`,
+`y = canvasBounds.y + canvasBounds.height + 8`, `height = 84`). It lets the
+colour be derived by averaging pixels from another image around a point.
+
+Three new slots (pushed onto `this.slots[]`, so they get standard bind rows
+below `panelBottom`):
+
+- **`_sampleImageSlot`** (Image) — source to sample from
+- **`_samplePointSlot`** (Point) — canvas-space location to sample around
+- **`_sampleEnableSlot`** (Event) — rising edge toggles `_sampleEnabled`,
+  same rising-edge pattern as `RootLayer.toggleSlot`
+
+The pill's row 1 has a `sample` label, ●/◐/○ indicators for the point and
+image slots, and an enable/disable toggle button (`_sampleToggleBounds`,
+`_handleSampleToggle()` — Bound→suspend, SuspendedBound→resume, Unbound→flip
+`_sampleEnabled`, identical to `RootLayer._handleToggle`). Row 2 is a
+FillLayer-style slider for `_sampleRadius` (`[2,100]` px, manual only — no
+slot binding).
+
+`recompute()`: after computing `_colour` via the existing slot/picker logic,
+a rising edge on `_sampleEnableSlot` flips `_sampleEnabled`; if enabled,
+`_sampleFromImage()` is called and — if it returns non-null — overrides
+`_colour` and sets `_picker.interactive = false`. `_sampleFromImage()` reads
+the sample image's pixels (via `getImageData`, `ImageBitmap` first drawn to a
+temporary `OffscreenCanvas` as in `TileLayer._contentBbox`), and returns the
+alpha-weighted average colour of pixels within `_sampleRadius` of the sample
+point, or `null` if either slot is unbound, the image is unavailable, or the
+sampled area is fully transparent — in which case the colour computed above
+(bound Colour slot, or interactive picker) is used unchanged.
+
+`hitTestSelf`/`handlePointerDown/Move/Up` check the toggle button and slider
+before falling back to `_picker.hitTest(point)`; the picker's own bounds stay
+confined to the main pill, so there's no overlap. `panelBottom` is overridden
+to sit below the new pill.
+
 ## Edit-mode drop shadow and depth fade (fixed June 2026)
 
 In `Evaluator.render()`, the current (selected/top) layer's drop shadow now
