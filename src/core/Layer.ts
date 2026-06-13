@@ -41,7 +41,12 @@ export abstract class Layer extends Node {
 
   // When true, the thumbnail card is only rendered while this layer is
   // the currently selected layer; otherwise the card body is left blank.
-  readonly thumbnailOnlyWhenSelected: boolean = false
+  get thumbnailOnlyWhenSelected(): boolean { return false }
+
+  // Called by LayerStackWidget when this layer becomes the selected layer.
+  // Override to react to being navigated to (e.g. DeletionLayer defaults
+  // its toggle to Background when it has no archived layers).
+  onSelected(): void {}
 
   // Hidden helper layers remain part of the stack (evaluated in stack
   // order via renderStack) but have no thumbnail in the LayerStackWidget

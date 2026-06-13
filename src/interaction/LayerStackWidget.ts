@@ -91,12 +91,20 @@ export class LayerStackWidget {
     // Default selection: second-from-top, so the gap is visible immediately.
     if (this._selected === null || !this._layers.includes(this._selected)) {
       const n = this._layers.length
-      this._selected = this._layers[Math.max(0, n - 2)] ?? null
+      this._select(this._layers[Math.max(0, n - 2)] ?? null)
     }
   }
 
   get selected(): Layer | null { return this._selected }
-  set selected(l: Layer | null) { this._selected = l }
+  set selected(l: Layer | null) { this._select(l) }
+
+  // Routes every selection change through onSelected() so a layer can react
+  // to being navigated to (e.g. DeletionLayer defaults to its Background
+  // toggle when it has no archived layers).
+  private _select(l: Layer | null): void {
+    if (l !== null && l !== this._selected) l.onSelected()
+    this._selected = l
+  }
 
   get widgetWidth(): number { return this._widgetW() }
 
@@ -123,7 +131,7 @@ export class LayerStackWidget {
   navigateUp(): void {
     const ci = this._currentIndex()
     if (ci < this._layers.length - 1) {
-      this._selected = this._layers[ci + 1] ?? this._selected
+      this._select(this._layers[ci + 1] ?? this._selected)
       Node.scheduleFrame?.()
     }
   }
@@ -132,16 +140,17 @@ export class LayerStackWidget {
   navigateDown(): void {
     const ci = this._currentIndex()
     if (ci > 0) {
-      this._selected = this._layers[ci - 1] ?? this._selected
+      this._select(this._layers[ci - 1] ?? this._selected)
       Node.scheduleFrame?.()
     }
   }
 
   // Reorder: move selected layer one position higher (Shift+ArrowUp).
-  // ci === 0 is Root, which never moves.
+  // ci === 0 is Root and ci === 1 is DeletionLayer — both permanently fixed
+  // directly above one another at the bottom of the stack, and never move.
   moveUp(): void {
     const ci = this._currentIndex()
-    if (ci <= 0 || ci >= this._layers.length - 1) return
+    if (ci <= 1 || ci >= this._layers.length - 1) return
     const layer = this._layers[ci]!
     const to    = ci + 1
     this._layers.splice(ci, 1)
@@ -151,11 +160,12 @@ export class LayerStackWidget {
   }
 
   // Reorder: move selected layer one position lower (Shift+ArrowDown).
-  // ci <= 1 is Root itself, or the layer directly above it — neither may
-  // move into Root's slot at index 0.
+  // ci <= 2 covers Root (0), DeletionLayer (1), and the layer directly above
+  // DeletionLayer — none of these may move into Root's or DeletionLayer's
+  // permanently fixed slots.
   moveDown(): void {
     const ci = this._currentIndex()
-    if (ci <= 1) return
+    if (ci <= 2) return
     const layer = this._layers[ci]!
     const to    = ci - 1
     this._layers.splice(ci, 1)
@@ -450,7 +460,7 @@ export class LayerStackWidget {
       Node.scheduleFrame?.()
     } else if (!this._dragging && this._dragLayer !== null) {
       // Click (no drag) — select the layer now.
-      this._selected = this._dragLayer
+      this._select(this._dragLayer)
       Node.scheduleFrame?.()
     }
     this._dragging  = false

@@ -191,7 +191,6 @@ function wireClipLayer(clipLayer: ClipLayer): void {
     }
 
     if (clipLayer.hasRestorableState()) {
-      ensureDeletionLayerInStack()
       deletionLayer.archive(clipLayer)
     } else {
       clipLayer.removeFromStack()
@@ -264,8 +263,10 @@ const W = 100
 const root = new RootLayer(canvas.width, canvas.height)
 
 const deletionLayer = new DeletionLayer()
-deletionLayer.bounds      = { x: X, y: 24, width: W, height: 36 }
-deletionLayer.outsideStack = true   // not inserted until first deletion
+deletionLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+// Permanently part of the stack, directly above Root — invisible (like
+// Root) until it holds an archived layer or the user navigates to it.
+deletionLayer.insertAbove(root)
 
 // Background collection — never part of the layer stack; the Evaluator
 // evaluates it directly every frame so its items keep recomputing while
@@ -328,28 +329,9 @@ const refreshStack = (selectLayer?: Layer) => {
   if (selectLayer !== undefined) widget.selected = selectLayer
 }
 
-// The lowest layer above which new user layers should be inserted.
-// When DeletionLayer is in the stack it is that anchor; otherwise root is.
-function lowestAnchor(): Layer { return deletionLayer.outsideStack ? root : deletionLayer }
-
-// Ensure DeletionLayer is in the stack (inserted just above root).
-// Called before any archive() so it is always visible after a deletion.
-function ensureDeletionLayerInStack(): void {
-  if (deletionLayer.outsideStack) {
-    deletionLayer.insertAbove(root)
-  }
-}
-
-// Remove DeletionLayer from the stack when the archive is empty — visibility
-// tracks deletion count only, regardless of what the Background collection
-// holds (those items keep recomputing via Evaluator.setBackground either
-// way). A future deletion will re-add it via ensureDeletionLayerInStack().
-function pruneDeletionLayerIfEmpty(): void {
-  if (deletionLayer.archivedLayers.length === 0 &&
-      !deletionLayer.outsideStack) {
-    deletionLayer.removeFromStack()
-  }
-}
+// The lowest layer above which new user layers should be inserted —
+// DeletionLayer is permanently part of the stack directly above Root.
+function lowestAnchor(): Layer { return deletionLayer }
 
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
@@ -361,10 +343,8 @@ menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
 // menuLayer is NOT inserted at startup — StartupLayer handles that.
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
-// Prune DeletionLayer itself if the archive is now empty.
 deletionLayer.setRestoreCallback((layer) => {
   layer.insertAbove(deletionLayer)
-  pruneDeletionLayerIfEmpty()
   refreshStack(layer)
 })
 
@@ -374,11 +354,10 @@ interaction.setDeleteAction(() => {
   if (layer === null || layer === deletionLayer || layer === root || layer === menuLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
-  // If this is the bottom-most layer (nothing but Root below it), focus
-  // moves up to the layer above rather than down to Root/DeletionLayer.
-  if (below === root) below = null
+  // If this is the bottom-most layer (nothing but Root/DeletionLayer below
+  // it), focus moves up to the layer above rather than down to either.
+  if (below === root || below === deletionLayer) below = null
   const above = layer.layerAbove
-  ensureDeletionLayerInStack()
   const nextSel = below ?? above ?? deletionLayer
   deletionLayer.archive(layer)
   refreshStack(nextSel)
@@ -394,9 +373,9 @@ interaction.setBackgroundAction(() => {
       layer === menuLayer || layer === backgroundLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
-  // If this is the bottom-most layer (nothing but Root below it), focus
-  // moves up to the layer above rather than down to Root.
-  if (below === root) below = null
+  // If this is the bottom-most layer (nothing but Root/DeletionLayer below
+  // it), focus moves up to the layer above rather than down to either.
+  if (below === root || below === deletionLayer) below = null
   const above = layer.layerAbove
   const nextSel = below ?? above ?? lowestAnchor()
   backgroundLayer.add(layer)
@@ -528,7 +507,6 @@ interaction.setSlotClickCallback((consumer, slot) => {
   if (source.outsideStack) {
     if (deletionLayer.removeFromArchive(source)) {
       source.insertAbove(consumer)
-      pruneDeletionLayerIfEmpty()
     } else if (backgroundLayer.removeItem(source)) {
       source.insertBelow(consumer)
     }
@@ -544,7 +522,6 @@ interaction.setRefreshCallback(() => refreshStack())
 deletionLayer.setPurgeCallback((layer) => {
   const bls = [...layer.dependents].filter(d => d instanceof BindingLayer)
   for (const bl of bls) (bl as BindingLayer).remove()
-  pruneDeletionLayerIfEmpty()
   refreshStack()
 })
 
@@ -557,14 +534,14 @@ const startupLayer = new StartupLayer(
   () => {
     widget.setVisible(true)
     startupLayer.removeFromStack()
-    menuLayer.insertAbove(root)
+    menuLayer.insertAbove(deletionLayer)
     refreshStack(menuLayer)
   },
   // "Tutorial" button: show widget, insert MenuLayer + TutorialLayer, refresh.
   () => {
     widget.setVisible(true)
     startupLayer.removeFromStack()
-    menuLayer.insertAbove(root)
+    menuLayer.insertAbove(deletionLayer)
     const tl = new TutorialLayer()
     Layer.assignDebugName(tl)
     tl.bounds = { x: X, y: 24, width: W, height: 36 }
@@ -574,7 +551,7 @@ const startupLayer = new StartupLayer(
   },
 )
 startupLayer.bounds = { x: X, y: 24, width: W, height: 36 }
-startupLayer.insertAbove(root)
+startupLayer.insertAbove(deletionLayer)
 
 refreshStack(startupLayer)
 

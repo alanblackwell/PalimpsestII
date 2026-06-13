@@ -64,6 +64,20 @@ export class DeletionLayer extends Layer {
     this.debugName = 'Deleted'
   }
 
+  // DeletionLayer is permanently part of the stack (directly above Root),
+  // but stays invisible — like RootLayer — until either it holds an
+  // archived layer or the user navigates to it directly.
+  override get thumbnailOnlyWhenSelected(): boolean {
+    return this._archived.length === 0
+  }
+
+  // On entry, show whichever collection is relevant: Deleted if there are
+  // archived layers, otherwise Background (an empty Deleted grid would be
+  // pointless when that's the only reason this layer is reachable at all).
+  override onSelected(): void {
+    this._showBackground = this._archived.length === 0
+  }
+
   // ----------------------------------------------------------
   // Public API
   // ----------------------------------------------------------
