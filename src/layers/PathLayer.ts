@@ -58,9 +58,18 @@ function rotatePoint(p: Point, c: Point, angle: number): Point {
 
 function defaultPoints(cx: number, cy: number): Point[] {
   const rx = 130, ry = 85, n = 6
+  const avgR = (rx + ry) / 2
+  const angleStep = (Math.PI * 2) / n
+  // Angular jitter stays well under half a step so neighbouring points
+  // can never swap order — guarantees a simple (non-self-crossing) polygon.
+  const angleJitter  = angleStep * 0.35
+  // Radius jitter stays within ~40% of the average radius — no spikes
+  // or dents far beyond the nominal outline.
+  const radiusJitter = avgR * 0.4
   return Array.from({ length: n }, (_, i) => {
-    const a = (i / n) * Math.PI * 2 - Math.PI / 2
-    return { x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) }
+    const a = (i / n) * Math.PI * 2 - Math.PI / 2 + (Math.random() * 2 - 1) * angleJitter
+    const rScale = 1 + (Math.random() * 2 - 1) * (radiusJitter / avgR)
+    return { x: cx + rx * rScale * Math.cos(a), y: cy + ry * rScale * Math.sin(a) }
   })
 }
 
@@ -74,6 +83,7 @@ const CP_R       = 6
 const HIT_R      = 14
 const ROT_OFF    = 24
 const SAMPLES    = 200
+const MIN_POINTS = 3   // smallest closed spline we allow (a triangle)
 
 // ------------------------------------------------------------------
 // PathLayer
@@ -185,7 +195,8 @@ export class PathLayer extends ShapeLayer {
     if ((point.x - sh.x) ** 2 + (point.y - sh.y) ** 2 <= r2) return this
     const rh = this._rotateHandlePos()
     if ((point.x - rh.x) ** 2 + (point.y - rh.y) ** 2 <= r2) return this
-    return this._nearest(point) >= 0 ? this : null
+    if (this._nearest(point) >= 0) return this
+    return this._curveHit(point) !== null ? this : null
   }
 
   override handlePointerDown(point: Point): boolean {
@@ -230,8 +241,31 @@ export class PathLayer extends ShapeLayer {
       return true
     }
     const idx = this._nearest(point)
+    if (idx >= 0) {
+      this._dragIndex = idx
+      this.markDirty()
+      return true
+    }
+    // Click on the spline outline itself: insert a new control point
+    // exactly on the current curve, so the shape is unchanged until the
+    // new point is dragged.
+    const hit = this._curveHit(point)
+    if (hit !== null) {
+      this._points.splice(hit.insertAt, 0, { ...hit.pos })
+      this._dragIndex = hit.insertAt
+      this.markDirty()
+      return true
+    }
+    return false
+  }
+
+  /** Right-click on a control point removes it. */
+  handleContextMenu(point: Point): boolean {
+    if (this._points.length <= MIN_POINTS) return false
+    const idx = this._nearest(point)
     if (idx < 0) return false
-    this._dragIndex = idx
+    this._points.splice(idx, 1)
+    if (this._dragIndex === idx) this._dragIndex = -1
     this.markDirty()
     return true
   }
@@ -312,6 +346,28 @@ export class PathLayer extends ShapeLayer {
       if (d2 <= r2 && d2 < bestD) { bestD = d2; best = i }
     }
     return best
+  }
+
+  /**
+   * Test whether `p` lies on the spline outline (within HIT_R) and, if so,
+   * return where a new control point should be inserted: the index to
+   * splice at, and the on-curve position to give it (so the shape is
+   * visually unchanged until that point is dragged).
+   */
+  private _curveHit(p: Point): { insertAt: number; pos: Point } | null {
+    const n = this._points.length
+    if (n < 2) return null
+    const r2 = HIT_R * HIT_R
+    let bestT = 0, bestD2 = Infinity, bestPos: Point = { x: 0, y: 0 }
+    for (let i = 0; i <= SAMPLES; i++) {
+      const t  = (i / SAMPLES) % 1
+      const pt = samplePath(this._points, t)
+      const d2 = (p.x - pt.x) ** 2 + (p.y - pt.y) ** 2
+      if (d2 < bestD2) { bestD2 = d2; bestT = t; bestPos = pt }
+    }
+    if (bestD2 > r2) return null
+    const segIndex = Math.min(n - 1, Math.floor(bestT * n))
+    return { insertAt: segIndex + 1, pos: bestPos }
   }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {

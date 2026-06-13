@@ -48,6 +48,17 @@ function isDraggable(node: unknown): node is Draggable {
   return typeof (node as Record<string, unknown>)?.handlePointerDown === 'function'
 }
 
+// A layer may handle a right-click itself (e.g. PathLayer deleting a
+// control point under the cursor) instead of the default slot-binding
+// inspector. Return true to consume the event.
+interface ContextMenuHandler {
+  handleContextMenu(point: Point): boolean
+}
+
+function hasContextMenuHandler(node: unknown): node is ContextMenuHandler {
+  return typeof (node as Record<string, unknown>)?.handleContextMenu === 'function'
+}
+
 // Nodes with an isInteractive flag (Region subclasses) advertise
 // whether they will respond to interaction in their current state.
 // Nodes that have no such flag are assumed to always be interactive.
@@ -408,6 +419,11 @@ export class InteractionSystem {
     const point = { x: e.offsetX, y: e.offsetY }
     const selected = this._widget?.selected ?? null
     if (selected === null) return
+
+    // Layers that handle their own right-click (e.g. PathLayer deleting a
+    // control point) get first refusal before the slot-binding inspector.
+    if (hasContextMenuHandler(selected) && selected.handleContextMenu(point)) return
+
     const slot = selected.hitTestSlot(point)
     if (slot === null || slot.state === SlotState.Unbound) return
     const bl = BindingLayer.findForSlot(slot)
