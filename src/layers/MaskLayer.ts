@@ -60,6 +60,11 @@ export class MaskLayer extends Layer implements MaskSource {
   private _lastPoint:   Point | null = null
   private _cursorPoint: Point | null = null
 
+  // When set (e.g. a Clip<Shape>'s hidden mask helper), the tracked layer's
+  // mask is unioned in every recompute — independent of the shape/paint
+  // slots, and persists even after this layer is exposed in the stack.
+  trackedShape: (Layer & MaskSource) | null = null
+
   constructor() {
     super()
     const w = Node.canvasWidth
@@ -100,6 +105,11 @@ export class MaskLayer extends Layer implements MaskSource {
         const mask = (slot.source as MaskSource).getMask()
         if (mask !== null) ctx.drawImage(mask, 0, 0)
       }
+    }
+
+    if (this.trackedShape !== null) {
+      const mask = this.trackedShape.getMask()
+      if (mask !== null) ctx.drawImage(mask, 0, 0)
     }
   }
 

@@ -25,6 +25,11 @@ import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 import { StrokeLayer }       from '../layers/StrokeLayer.js'
+import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
+import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
+import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
+import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
+import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 
 // All per-type setup that runs after a new layer is inserted into the stack.
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
@@ -70,10 +75,17 @@ function postInsertLayer(newLayer: Layer): void {
         clock.bounds = { ...newLayer.bounds }
         if (below !== null) clock.insertAbove(below)
 
+        // The Rate layer is created as a hidden helper directly above the
+        // new AnimPath, bound to its phase slot. It stays with this
+        // AnimPath as it moves, and has no thumbnail in the stack widget
+        // unless exposed (by clicking the phase slot it's bound to).
         const rate = new RateLayer(1.0)
         Layer.assignDebugName(rate)
         rate.bounds = { ...newLayer.bounds }
-        rate.insertAbove(clock)
+        rate.insertAbove(newLayer)
+        rate.isHiddenHelper = true
+        rate.helperHost = newLayer
+        newLayer.hiddenHelper = rate
 
         BindingLayer.create(clock, rate.timeSlot)
         phaseSource = rate
@@ -81,6 +93,41 @@ function postInsertLayer(newLayer: Layer): void {
 
       BindingLayer.create(phaseSource, newLayer.phaseSlot)
     }
+  }
+
+  if (newLayer instanceof ClipRectLayer || newLayer instanceof ClipEllipseLayer || newLayer instanceof ClipPathLayer || newLayer instanceof ClipDrawingLayer) {
+    // The hidden helper is a plain MaskLayer directly below the Clip layer,
+    // with no handles of its own — its content tracks the Clip layer's own
+    // shape mask (setMaskTracker) and is bound to maskSlot so it can be
+    // exposed by clicking that (bound) slot.
+    const maskHelper = new MaskLayer()
+    Layer.assignDebugName(maskHelper)
+    maskHelper.bounds = { ...newLayer.bounds }
+    maskHelper.insertBelow(newLayer)
+    maskHelper.isHiddenHelper = true
+    maskHelper.helperHost = newLayer
+    newLayer.hiddenHelper = maskHelper
+    newLayer.helperBelow = true
+    newLayer.setMaskTracker(maskHelper)
+
+    BindingLayer.create(maskHelper, newLayer.maskSlot)
+  }
+
+  if (newLayer instanceof ClipTextLayer) {
+    // Same hidden-helper pattern as the other Clip<Shape> layers, but bound
+    // to clipMaskSlot — TextLayer's own (pre-existing) maskSlot is a
+    // different feature (flows the glyphs inside a bound mask shape).
+    const maskHelper = new MaskLayer()
+    Layer.assignDebugName(maskHelper)
+    maskHelper.bounds = { ...newLayer.bounds }
+    maskHelper.insertBelow(newLayer)
+    maskHelper.isHiddenHelper = true
+    maskHelper.helperHost = newLayer
+    newLayer.hiddenHelper = maskHelper
+    newLayer.helperBelow = true
+    newLayer.setMaskTracker(maskHelper)
+
+    BindingLayer.create(maskHelper, newLayer.clipMaskSlot)
   }
 }
 
@@ -166,7 +213,7 @@ function applyDefaultBindings(newLayer: Layer): void {
   for (const { slot, accepts, removeAfterBind } of newLayer.autoBindRules()) {
     if (slot.isActive) continue
     for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
-      if (!l.isInfrastructure && accepts(l)) {
+      if (!l.isInfrastructure && !l.isHiddenHelper && accepts(l)) {
         BindingLayer.create(l, slot)
         if (removeAfterBind) {
           ensureDeletionLayerInStack()
@@ -326,6 +373,16 @@ interaction.setSlotClickCallback((consumer, slot) => {
 
   const source = slot.source
   if (!(source instanceof Layer)) return
+
+  // Clicking the slot a hidden helper is bound to exposes it: it becomes
+  // a normal layer with a thumbnail at its current stack position, and
+  // permanently stops moving together with its host.
+  if (source.isHiddenHelper) {
+    if (source.helperHost !== null) source.helperHost.hiddenHelper = null
+    source.helperHost = null
+    source.isHiddenHelper = false
+  }
+
   if (source.outsideStack) {
     if (deletionLayer.removeFromArchive(source)) {
       source.insertAbove(consumer)

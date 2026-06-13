@@ -85,7 +85,7 @@ export class LayerStackWidget {
     this._layers = []
     let l: Layer | null = top
     while (l !== null) {
-      if (!l.isInfrastructure) this._layers.unshift(l)   // root at [0]
+      if (!l.isInfrastructure && !l.isHiddenHelper) this._layers.unshift(l)   // root at [0]
       l = l.layerBelow
     }
     // Default selection: second-from-top, so the gap is visible immediately.
@@ -546,6 +546,15 @@ export class LayerStackWidget {
       let cursor = above
       while (cursor.layerBelow !== null) cursor = cursor.layerBelow
       layer.insertAbove(cursor.layerBelow ?? cursor)
+    }
+
+    // A hidden helper stays directly above (or, if helperBelow, directly
+    // below) its host wherever it moves.
+    if (layer.hiddenHelper !== null) {
+      const helper = layer.hiddenHelper
+      helper.removeFromStack()
+      if (layer.helperBelow) helper.insertBelow(layer)
+      else helper.insertAbove(layer)
     }
   }
 }

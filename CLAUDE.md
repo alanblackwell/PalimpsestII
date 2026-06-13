@@ -733,3 +733,160 @@ pattern:
   `ShapeLayer`, causing a TS2415 error. Pre-existing.
 - `MaskLayer.resize()` from the original implementation is gone; canvas size
   changes are handled automatically via `Node.canvasWidth/Height`.
+
+## Hidden helper layers (added June 2026)
+
+A **hidden helper** is a normal stack member — it is evaluated every frame
+via `renderStack` in stack order — but is invisible: no thumbnail in
+`LayerStackWidget`, and `renderSelf`/panel/haze are skipped in the Evaluator's
+edit-mode loop. Three `Layer` fields support this:
+
+- **`isHiddenHelper`** — set on the helper itself.
+- **`helperHost`** — set on the helper, points back to the layer it helps.
+- **`hiddenHelper`** — set on the host, points to its helper.
+
+`LayerStackWidget.setStack` excludes `isHiddenHelper` layers from `_layers`
+(no thumbnail, never selectable). `Layer.renderStack` and the Evaluator's
+edit-mode loop call `.evaluate()` on hidden helpers but skip `renderSelf`.
+`LayerStackWidget._reorderLiveStack` (shared by `moveUp`/`moveDown`/drag-drop)
+re-inserts `layer.hiddenHelper` directly above `layer` after every reorder, so
+the pair always travels together.
+
+**First application**: when `postInsertLayer` (`main.ts`) auto-creates a
+`RateLayer` for a new `AnimPathLayer`'s `phaseSlot` (no existing Rate/Clock
+found), the `RateLayer` is inserted directly **above** the AnimPath as a
+hidden helper (`rate.isHiddenHelper = true`, linked via `helperHost`/
+`hiddenHelper`) and bound to `phaseSlot`. The `ClockLayer` it derives its time
+from remains a normal, visible layer below the AnimPath.
+
+**Exposure**: clicking the AnimPath's `phaseSlot` row (a bound slot) in
+`interaction.setSlotClickCallback` checks `source.isHiddenHelper` first — if
+set, it clears `isHiddenHelper` and breaks the `helperHost`/`hiddenHelper`
+link on both sides *before* `refreshStack(source)`. The RateLayer then gets a
+thumbnail at its current position (directly above the AnimPath) and is
+selected; it no longer moves with the AnimPath on subsequent reorders. This
+exposure logic is generic — it fires for *any* hidden helper bound to a
+clicked slot, not just RateLayer.
+
+**Below-host helpers**: `helperBelow: boolean` (on the host) tells
+`_reorderLiveStack` to keep the helper directly *below* the host
+(`helper.insertBelow(layer)`) instead of above. `Layer.insertBelow(target)`
+is the mirror of `insertAbove`. See `ClipRectLayer` below for the first
+below-host application.
+
+## ClipRectLayer (added June 2026)
+
+`src/layers/ClipRectLayer.ts` is the first of a planned "Clip&lt;Shape&gt;"
+family. Unlike a typical hidden-helper consumer, `ClipRectLayer extends
+RectLayer` directly — it has its own geometry and handles (inherited
+unchanged from `ShapeLayer`/`RectLayer`), and renders the clipped image
+instead of a filled rectangle.
+
+- **Slots**: adds `imageSlot` (Image) and `maskSlot` (Mask) to the slots
+  inherited from `ShapeLayer` (position/colour/opacity/phase/fillMode/
+  rotation) — "same controls as a Rectangle layer", plus these two.
+- **`recompute()`** — calls `super.recompute()` (updates geometry and
+  `this._maskCanvas` via `ShapeLayer`), then composites `imageSlot`'s image
+  through `this.getMask()` (its own rectangle silhouette) with
+  source-over + destination-in, into `_offscreen`. `renderSelf` draws
+  `_offscreen`; `getImage()` returns it.
+- **`maskSlot` is not read by `recompute()`** — it exists purely so the slot
+  row can be bound to the hidden mask-tracker helper below (see next), so
+  that helper is exposable via the standard "click a bound slot whose source
+  is a hidden helper" gesture.
+- **Hidden helper**: `postInsertLayer` (`main.ts`) creates a plain
+  `MaskLayer`, inserts it directly **below** the new `ClipRectLayer`
+  (`maskHelper.insertBelow(newLayer)`), sets `isHiddenHelper`/`helperHost` on
+  the helper and `hiddenHelper`/`helperBelow = true` on the host, calls
+  `newLayer.setMaskTracker(maskHelper)`, and binds the helper to `maskSlot`
+  via `BindingLayer.create`. The helper has no handles of its own — it's a
+  normal `MaskLayer` (paint tools only).
+- **`setMaskTracker`/`trackedShape`**: `MaskLayer.trackedShape` (added on
+  `MaskLayer`) is unioned into its mask every `recompute()`, in addition to
+  its painted layer and bound shape slots. `ClipRectLayer.markDirty()` is
+  overridden to also call `this._maskTracker?.markDirty()`, so the helper's
+  mask is re-derived from `this.getMask()` whenever the rectangle's geometry
+  changes (one-frame lag, from the helper evaluating before its host in
+  stack order). This link is independent of `isHiddenHelper`/`helperHost`,
+  so it **persists even after the helper is exposed** — exposing it reveals
+  a plain, paintable mask that keeps tracking ClipRect's handles.
+- **Auto-bind**: `autoBindRules()` binds `imageSlot` to the nearest
+  `Image`-producing layer below (the hidden helper is excluded from this
+  search — see the `!l.isHiddenHelper` check in `applyDefaultBindings`).
+
+`ClipEllipseLayer` (`src/layers/ClipEllipseLayer.ts`) and `ClipPathLayer`
+(`src/layers/ClipPathLayer.ts`) follow the identical pattern, extending
+`EllipseLayer` and `PathLayer` respectively — same `imageSlot`/`maskSlot`,
+`setMaskTracker`/`trackedShape`/`markDirty` override, hidden plain-`MaskLayer`
+helper wiring in `postInsertLayer`, and `autoBindRules()`. `ClipPathLayer`'s
+`recompute()` calls `super.recompute()` which is `PathLayer`'s override
+(applies `rotationSlot` to `_points`, then chains to `ShapeLayer.recompute()`)
+— `getMask()`/`getImage()` are inherited unchanged from `ShapeLayer`, so the
+clip-compositing step is identical to `ClipRectLayer`'s. `ClipPathLayer`'s
+constructor passes `undefined` for `points` (uses `PathLayer`'s
+`defaultPoints(cx, cy)` hexagon).
+
+## TextLayer as a MaskSource (added June 2026)
+
+`TextLayer` now declares `ValueType.Mask` in `types` and `implements
+MaskSource`, so it can be bound into any `Mask`-typed slot — including a
+`MaskLayer`'s four shape slots (drag-drop, default-binding, and the
+slot-click-to-create/select gesture all key off `source.types.has(slot.type)`,
+so no special-casing was needed elsewhere).
+
+`getMask()` returns `_maskCanvas`, a white-on-transparent silhouette rebuilt
+in `recompute()` by `_updateMaskCanvas()`: it sets `ctx.fillStyle = '#ffffff'`
+(no shadow) and calls the same `_renderMasked`/`_renderUnmasked` layout logic
+as `renderSelf` — so the mask exactly matches whatever glyphs are currently
+drawn, whether flowing inside a bound `maskSlot` shape or centred at
+`_position`.
+
+This was the prerequisite for `ClipTextLayer`.
+
+## ClipTextLayer (added June 2026)
+
+`src/layers/ClipTextLayer.ts` follows the `ClipRectLayer` template —
+`extends TextLayer` directly (keeps TextLayer's own move/scale/rotate
+handles, typography controls, and text-editing panel unchanged), and renders
+`imageSlot`'s image clipped to `this.getMask()` (TextLayer's glyph-silhouette
+mask) instead of filled, coloured text. `recompute()`/`renderSelf`/
+`getImage()`/`autoBindRules()` are identical in structure to
+`ClipRectLayer`'s.
+
+**Slot-naming note**: TextLayer already has a `maskSlot` (Mask) — an
+*input* that flows the glyph layout inside a bound mask shape (a
+pre-existing, independent feature; it still affects the glyph layout and
+therefore the clip silhouette too). The mask-tracker-exposure slot that the
+other Clip\<Shape\> layers call `maskSlot` is therefore named **`clipMaskSlot`**
+on `ClipTextLayer` to avoid colliding with it. `postInsertLayer` (`main.ts`)
+has a separate `if (newLayer instanceof ClipTextLayer)` block (after the
+shared `ClipRectLayer | ClipEllipseLayer | ClipPathLayer` block) that is
+otherwise identical — plain hidden `MaskLayer` helper, `setMaskTracker`,
+`BindingLayer.create(maskHelper, newLayer.clipMaskSlot)`.
+
+## ClipDrawingLayer (added June 2026)
+
+`src/layers/ClipDrawingLayer.ts` extends `MaskLayer` directly — same shape
+slots, freehand paint/erase tools, brush slider and mask-overlay panel as a
+plain `MaskLayer` (all inherited unchanged), but renders `imageSlot`'s image
+clipped to `this.getMask()` (its own painted/composited mask) instead of
+just visualising the mask. `types` is widened to
+`Set([ValueType.Mask, ValueType.Image])` (`override`) since it is now also
+an `ImageSource`.
+
+- **`recompute()`** — `super.recompute()` (MaskLayer's, rebuilds
+  `this._offscreen` = the composited mask), then composites `imageSlot`'s
+  image through `this.getMask()` into `_clippedImage`. `renderSelf` draws
+  `_clippedImage`; `getImage()` returns it. (Named `_clippedImage`, not
+  `_offscreen`, to avoid shadowing `MaskLayer`'s private `_offscreen` which
+  `getMask()` still reads.)
+- **`autoBindRules()`** — `[...super.autoBindRules(), imageSlot → nearest Image]`,
+  i.e. keeps MaskLayer's own `shape 1 → nearest Mask` rule in addition to the
+  new image rule.
+- **Hidden helper** — same `maskSlot` (Mask) + plain hidden `MaskLayer` +
+  `setMaskTracker`/`trackedShape`/`markDirty` pattern as `ClipRectLayer`,
+  folded into the same `postInsertLayer` `instanceof` union (no naming
+  collision here, unlike `ClipTextLayer`). The helper is somewhat redundant
+  since this layer already has its own paint tools, but keeps the pattern —
+  and the "click bound slot to expose" gesture — consistent across all
+  Clip\<X\> layers.

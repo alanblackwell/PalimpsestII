@@ -154,6 +154,7 @@ export class Evaluator {
       const depth = topIdx - i   // 0 = current layer, 1 = one below, …
 
       layer.evaluate()
+      if (layer.isHiddenHelper) continue   // evaluated in stack order, never drawn
       this.ctx.save()
 
       if (depth === 0) {

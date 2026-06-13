@@ -43,6 +43,19 @@ export abstract class Layer extends Node {
   // the currently selected layer; otherwise the card body is left blank.
   readonly thumbnailOnlyWhenSelected: boolean = false
 
+  // Hidden helper layers remain part of the stack (evaluated in stack
+  // order via renderStack) but have no thumbnail in the LayerStackWidget
+  // and are never rendered to the canvas. They stay directly above (or,
+  // if `helperBelow` is set on the host, directly below) their host layer
+  // (`helperHost`) whenever the host is reordered. Set both
+  // `isHiddenHelper` and `helperHost` on the helper, and `hiddenHelper`
+  // (+ optionally `helperBelow`) on the host. Cleared (permanently) when
+  // the helper is "exposed".
+  isHiddenHelper: boolean = false
+  helperHost: Layer | null = null
+  hiddenHelper: Layer | null = null
+  helperBelow: boolean = false
+
   // Slot-region bounding boxes — populated by renderSlots, used by hitTestSlot.
   private _slotBounds = new Map<ParameterSlot, { x: number; y: number; width: number; height: number }>()
 
@@ -57,6 +70,16 @@ export abstract class Layer extends Node {
     target.layerAbove = this
     this.layerAbove = previousAbove
     if (previousAbove !== null) previousAbove.layerBelow = this
+    this.outsideStack = false
+  }
+
+  // Insert this layer directly below `target`.
+  insertBelow(target: Layer): void {
+    const previousBelow = target.layerBelow
+    this.layerAbove = target
+    target.layerBelow = this
+    this.layerBelow = previousBelow
+    if (previousBelow !== null) previousBelow.layerAbove = this
     this.outsideStack = false
   }
 
@@ -96,7 +119,7 @@ export abstract class Layer extends Node {
   renderStack(ctx: Ctx2D): void {
     this.layerBelow?.renderStack(ctx)
     this.evaluate()    // pull value from dirty dependencies before drawing
-    this.renderSelf(ctx)
+    if (!this.isHiddenHelper) this.renderSelf(ctx)
   }
 
   // Render just this layer's own content. Subclasses may override.

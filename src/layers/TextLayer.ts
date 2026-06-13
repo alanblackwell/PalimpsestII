@@ -8,7 +8,7 @@ import {
   type Colour,          type ColourSource,
   type Point,           type PointSource,
   type Amount,          type AmountSource,
-  type MaskSource,
+  type MaskValue, type MaskSource,
   type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
@@ -118,8 +118,8 @@ function ptDist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-export class TextLayer extends Layer {
-  readonly types: ReadonlySet<ValueType> = new Set()
+export class TextLayer extends Layer implements MaskSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
 
   private readonly _positionSlot: ParameterSlot
   private readonly _colourSlot:   ParameterSlot
@@ -144,6 +144,11 @@ export class TextLayer extends Layer {
   // Scanline data sampled from the mask (null = no mask / not yet sampled)
   private _maskRows: Scanline[] | null = null
 
+  // White-on-transparent silhouette of the rendered text, rebuilt every
+  // recompute() — used as this layer's own MaskSource output (getMask()),
+  // so a TextLayer can be dropped onto a MaskLayer shape slot.
+  private _maskCanvas: OffscreenCanvas
+
   // Direct-manipulation state (persist across recompute when slots unbound)
   private _rotation:       number       = 0
   private _manualPosition: Point | null = null
@@ -151,6 +156,7 @@ export class TextLayer extends Layer {
 
   constructor(text = 'Hello') {
     super()
+    this._maskCanvas   = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._text         = text
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
     this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
@@ -171,6 +177,12 @@ export class TextLayer extends Layer {
   get sizeSlot():     ParameterSlot { return this._sizeSlot     }
   get maskSlot():     ParameterSlot { return this._maskSlot     }
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
+
+  // ----------------------------------------------------------
+  // MaskSource
+  // ----------------------------------------------------------
+
+  getMask(): MaskValue { return this._maskCanvas }
 
   // ----------------------------------------------------------
   // Text content
@@ -408,6 +420,35 @@ export class TextLayer extends Layer {
     } else {
       this._maskRows = null
     }
+
+    this._updateMaskCanvas()
+  }
+
+  // Rebuild _maskCanvas: a white-on-transparent silhouette of the rendered
+  // text, in the same layout (masked word-wrap or unmasked centred lines)
+  // as renderSelf — so this layer's own mask output tracks what's drawn.
+  private _updateMaskCanvas(): void {
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    if (this._maskCanvas.width !== w || this._maskCanvas.height !== h) {
+      this._maskCanvas = new OffscreenCanvas(w, h)
+    }
+
+    const ctx = this._maskCanvas.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    if (!this._text) return
+
+    ctx.save()
+    ctx.font      = this._fontString()
+    ctx.fillStyle = '#ffffff'
+
+    if (this._maskRows !== null) {
+      this._renderMasked(ctx)
+    } else {
+      this._renderUnmasked(ctx)
+    }
+
+    ctx.restore()
   }
 
   // Sample the mask OffscreenCanvas into per-row x-extents for text flow.
