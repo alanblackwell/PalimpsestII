@@ -26,7 +26,7 @@ import { CompositeLayer }  from './CompositeLayer.js'
 import { FilterLayer }     from './FilterLayer.js'
 import { CollectionLayer } from './CollectionLayer.js'
 import { NoiseLayer }      from './NoiseLayer.js'
-import { GradientLayer }   from './GradientLayer.js'
+import { FillLayer }       from './FillLayer.js'
 import { TransformLayer }  from './TransformLayer.js'
 import { SequencerLayer }  from './SequencerLayer.js'
 import { AnimPathLayer }   from './AnimPathLayer.js'
@@ -117,7 +117,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Composite',  colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
   { label: 'Filter',     colour: '#7ecf7e', factory: () => new FilterLayer() },
   { label: 'Noise',      colour: '#4a8fe8', height: 161, factory: ()        => new NoiseLayer() },
-  { label: 'Gradient',   colour: '#7ecf7e', factory: (_,__,w,h) => new GradientLayer(w, h) },
+  { label: 'Fill',       colour: '#7ecf7e', factory: (_,__,w,h) => new FillLayer(w, h) },
   { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
   { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },

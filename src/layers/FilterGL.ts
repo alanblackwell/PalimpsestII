@@ -131,7 +131,7 @@ varying vec2 vUv;
 void main() {
   vec4 c = texture2D(uTex, vUv);
   float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-  gl_FragColor = vec4(c.rgb, lum > uT ? 0.0 : c.a);
+  gl_FragColor = vec4(c.rgb, lum < uT ? 0.0 : c.a);
 }`,
 
   solarise: /* glsl */`

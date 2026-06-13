@@ -161,12 +161,12 @@ function _boxV(d: Uint8ClampedArray, w: number, h: number, r: number): void {
   }
 }
 
-// ── Threshold: transparent where brighter than amount ────────────
+// ── Threshold: transparent where darker than amount ────────────
 function _threshold(d: Uint8ClampedArray, t: number): void {
   const thresh = t * 255
   for (let i = 0; i < d.length; i += 4) {
     const lum = 0.2126 * d[i]! + 0.7152 * d[i+1]! + 0.0722 * d[i+2]!
-    if (lum > thresh) d[i+3] = 0
+    if (lum < thresh) d[i+3] = 0
   }
 }
 
@@ -932,8 +932,8 @@ export class FilterLayer extends Layer implements ImageSource {
     this._drawToggle(ctx, colX + TOG_OX, py + (PH_CTRL - TOG_SZ) / 2, TOG_SZ, row)
 
     // Filter name
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = enabled ? 'rgba(255,255,255,0.88)' : 'rgba(255,255,255,0.32)'
+    ctx.font         = 'bold 10px monospace'
+    ctx.fillStyle    = enabled ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.7)'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText(row.def.label, colX + NAME_OX, ctrlMidY)
@@ -976,7 +976,7 @@ export class FilterLayer extends Layer implements ImageSource {
       ctx.lineWidth   = 1.5
       ctx.setLineDash([])
     } else if (susp) {
-      ctx.strokeStyle = EV_COL + '80'
+      ctx.strokeStyle = EV_COL + 'cc'
       ctx.lineWidth   = 1
       ctx.setLineDash([2, 2])
     } else if (enabled) {
@@ -984,7 +984,7 @@ export class FilterLayer extends Layer implements ImageSource {
       ctx.lineWidth   = 1.5
       ctx.setLineDash([])
     } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+      ctx.strokeStyle = 'rgba(255,255,255,0.7)'
       ctx.lineWidth   = 1
       ctx.setLineDash([])
     }

@@ -1025,3 +1025,32 @@ and the selected thumbnail in the grid gets a thicker `#a0a0a0` (Count accent)
 border. `panelBottom` is now overridden to sit below the thumbnail grid
 (previously the default `50 + bounds.height + 8` coincided with the grid's
 top edge, so the new slot row would have overlapped it).
+
+## FillLayer (renamed from GradientLayer, June 2026)
+
+`src/layers/FillLayer.ts` (formerly `GradientLayer.ts`) is a procedural
+fill/gradient `ImageSource`. The mode cycler (`[◀] <type> [▶]`) now has three
+entries — `'fill' | 'linear' | 'radial'` — with `'fill'` as the default
+(conic mode was removed):
+
+- **fill** — the whole canvas is filled with `colourASlot`'s colour (and its
+  own alpha). `colourBSlot`/`positionSlot`/`directionSlot` are ignored.
+- **linear** / **radial** — unchanged geometry (linear spans the canvas
+  diagonal at `directionSlot.angle`, centred on `positionSlot`; radial is
+  concentric circles with radius `direction.magnitude × diagonal`). Stop
+  colours now come from `_resolveStops()`:
+  - both colour slots active → use them as-is (previous behaviour)
+  - only one active → that colour at its own stop, fading to **fully
+    transparent** (`a: 0`) at the other stop, instead of mixing in the
+    unbound side's black/white default
+  - neither active → falls back to `DEFAULT_COL_A` (black) /
+    `DEFAULT_COL_B` (white)
+
+**New `opacitySlot`** (`ValueType.Amount`, label "opacity") — overall
+multiplier applied via `ctx.globalAlpha` in `_draw()`. Manual fallback
+`_opacity` (default 1) with the same suspend-on-touch slider pattern as
+`AmountLayer`/`NoiseLayer` (`BindingLayer.findForSlot(slot)?.toggle()` on
+first touch). Rendered in its own pill directly below the main controls pill
+(`_opacityPillBounds()`, `OPACITY_H = 36`), FilterLayer/NoiseLayer-style
+track+thumb slider with a ●/○ bind indicator. `panelBottom` is overridden to
+sit below this second pill.

@@ -1,22 +1,26 @@
 import { Layer } from '../core/Layer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   boundingBoxContains,
   type ImageValue,    type ImageSource,
   type Colour,        type ColourSource,
   type Point,         type PointSource,
   type Direction,     type DirectionSource,
+  type Amount,        type AmountSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 
 // ------------------------------------------------------------
-// GradientLayer — procedural gradient image generator
+// FillLayer — procedural fill / gradient image generator
 // ------------------------------------------------------------
 //
-// Renders a two-stop gradient into a full-canvas OffscreenCanvas
-// and exposes it as an ImageSource.  Three gradient types:
+// Renders a flat fill or two-stop gradient into a full-canvas
+// OffscreenCanvas and exposes it as an ImageSource. Three modes:
+//
+//   fill   — (default) the whole canvas filled with colourA.
 //
 //   linear — angle from directionSlot (or 0° = left→right).
 //            The gradient spans the canvas diagonal at the given
@@ -25,25 +29,32 @@ import { graph } from '../dataflow/Graph.js'
 //   radial — concentric circles centred on positionSlot.
 //            Radius = direction.magnitude × half canvas diagonal.
 //
-//   conic  — sweeps 360° around positionSlot, starting at
-//            direction.angle.
-//
 // Input slots:
-//   colourASlot   (Colour)    — start / inner / start-angle colour.
-//                              Unbound default: black.
-//   colourBSlot   (Colour)    — end / outer / end-angle colour.
-//                              Unbound default: white.
+//   colourASlot   (Colour)    — start / inner colour (fill: the
+//                              colour). Unbound default: black.
+//   colourBSlot   (Colour)    — end / outer colour. Unbound default:
+//                              white.
 //   positionSlot  (Point)     — gradient centre / origin.
 //                              Unbound default: canvas centre.
-//   directionSlot (Direction) — angle controls gradient axis / start
-//                              angle; magnitude controls reach for
-//                              radial.  Unbound defaults: angle=0,
-//                              magnitude=0.5.
+//   directionSlot (Direction) — angle controls gradient axis;
+//                              magnitude controls reach for radial.
+//                              Unbound defaults: angle=0, magnitude=0.5.
+//   opacitySlot   (Amount)    — overall opacity multiplier, applied to
+//                              the whole result. Manual slider, [0,1],
+//                              default 1 (fully opaque).
 //
-// Visual layout (height ≈ 36 px):
+// linear/radial: if exactly one of colourA/colourB is bound, the
+// gradient uses just that colour, ranging from opaque (at that
+// colour's own stop) to fully transparent at the other stop — instead
+// of mixing in the unbound side's default colour.
+//
+// Visual layout:
 //
 //   ┌──────────────────────────────────────────────────────────┐
-//   │ ▌  [◀] radial [▶]   colA ●  colB ●  pos ●  dir ○       │
+//   │ ▌  [◀] linear [▶]   colA ●  colB ●  pos ●  dir ○        │
+//   └──────────────────────────────────────────────────────────┘
+//   ┌──────────────────────────────────────────────────────────┐
+//   │ ▌  opacity  ──────────●────────────────────  0.80    ○   │
 //   └──────────────────────────────────────────────────────────┘
 //
 // Call resize(w, h) when the canvas dimensions change.
@@ -53,13 +64,18 @@ import { graph } from '../dataflow/Graph.js'
 // ------------------------------------------------------------------
 
 const ACCENT   = '#c890e8'   // lavender — distinct, fits "gradient/colour"
+const AM_COL   = '#4a8fe8'   // Amount type accent (opacity slot)
 const BTN_W    = 18
 const BTN_H    = 22
 const LABEL_W  = 52
 const BTN_M    = 6
 
-type GradType = 'linear' | 'radial' | 'conic'
-const GRAD_TYPES: GradType[] = ['linear', 'radial', 'conic']
+const OPACITY_H = 36   // separate pill below the main controls
+const OP_LABEL_W = 50
+const OP_VALUE_W = 40
+
+type GradType = 'fill' | 'linear' | 'radial'
+const GRAD_TYPES: GradType[] = ['fill', 'linear', 'radial']
 
 const DEFAULT_COL_A: Colour = { r: 0,   g: 0,   b: 0,   a: 1 }
 const DEFAULT_COL_B: Colour = { r: 1,   g: 1,   b: 1,   a: 1 }
@@ -74,19 +90,24 @@ function colCss(c: Colour): string {
 }
 
 // ------------------------------------------------------------------
-// GradientLayer
+// FillLayer
 // ------------------------------------------------------------------
 
-export class GradientLayer extends Layer implements ImageSource {
+export class FillLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
   private readonly _colourASlot:   ParameterSlot
   private readonly _colourBSlot:   ParameterSlot
   private readonly _positionSlot:  ParameterSlot
   private readonly _directionSlot: ParameterSlot
+  private readonly _opacitySlot:   ParameterSlot
 
-  private _gradIndex: number = 0   // default: linear
+  private _gradIndex: number = 0   // default: fill
   private _offscreen:  OffscreenCanvas
+
+  // Manual opacity, used while opacitySlot is unbound.
+  private _opacity: number = 1   // [0, 1]
+  private _opacityDrag = false
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
@@ -95,9 +116,10 @@ export class GradientLayer extends Layer implements ImageSource {
     this._colourBSlot   = new ParameterSlot(ValueType.Colour,    this)
     this._positionSlot  = new ParameterSlot(ValueType.Point,     this)
     this._directionSlot = new ParameterSlot(ValueType.Direction, this)
+    this._opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this.slots.push(this._colourASlot, this._colourBSlot,
-                    this._positionSlot, this._directionSlot)
-    this.debugName = 'GradientLayer'
+                    this._positionSlot, this._directionSlot, this._opacitySlot)
+    this.debugName = 'FillLayer'
     graph.register(this)
   }
 
@@ -115,6 +137,7 @@ export class GradientLayer extends Layer implements ImageSource {
   get colourBSlot():   ParameterSlot { return this._colourBSlot   }
   get positionSlot():  ParameterSlot { return this._positionSlot  }
   get directionSlot(): ParameterSlot { return this._directionSlot }
+  get opacitySlot():   ParameterSlot { return this._opacitySlot   }
 
   // ----------------------------------------------------------
   // Type cycling
@@ -122,6 +145,19 @@ export class GradientLayer extends Layer implements ImageSource {
 
   cycleNext(): void { this._gradIndex = (this._gradIndex + 1) % GRAD_TYPES.length; this.markDirty() }
   cyclePrev(): void { this._gradIndex = (this._gradIndex - 1 + GRAD_TYPES.length) % GRAD_TYPES.length; this.markDirty() }
+
+  // ----------------------------------------------------------
+  // Opacity
+  // ----------------------------------------------------------
+
+  // Touching the slider while opacitySlot is bound suspends the binding
+  // first, handing control back to the user at the current value (same
+  // pattern as AmountLayer/NoiseLayer's slider overrides).
+  setOpacity(v: number): void {
+    if (this._opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+    this._opacity = Math.max(0, Math.min(1, v))
+    this.markDirty()
+  }
 
   // ----------------------------------------------------------
   // Resize
@@ -140,10 +176,13 @@ export class GradientLayer extends Layer implements ImageSource {
     const w = this._offscreen.width
     const h = this._offscreen.height
 
-    const colA = this._colourASlot.isActive
+    const aActive = this._colourASlot.isActive
+    const bActive = this._colourBSlot.isActive
+
+    const colA = aActive
       ? (this._colourASlot.source   as ColourSource).getColour()
       : DEFAULT_COL_A
-    const colB = this._colourBSlot.isActive
+    const colB = bActive
       ? (this._colourBSlot.source   as ColourSource).getColour()
       : DEFAULT_COL_B
     const pos  = this._positionSlot.isActive
@@ -152,8 +191,11 @@ export class GradientLayer extends Layer implements ImageSource {
     const dir  = this._directionSlot.isActive
       ? (this._directionSlot.source as DirectionSource).getDirection()
       : DEFAULT_DIR
+    const opacity = this._opacitySlot.isActive
+      ? (this._opacitySlot.source   as AmountSource).getAmount() as Amount
+      : this._opacity
 
-    this._drawGradient(colA, colB, pos, dir, w, h)
+    this._draw(colA, colB, aActive, bActive, pos, dir, opacity, w, h)
   }
 
   // ----------------------------------------------------------
@@ -164,11 +206,47 @@ export class GradientLayer extends Layer implements ImageSource {
     if (boundingBoxContains(this._prevBtnBounds(), point)) { this.cyclePrev(); return true }
     if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._labelBounds(),   point)) { this.cycleNext(); return true }
+
+    const g = this._opacitySliderGeom()
+    if (point.x >= g.sld0 - 6 && point.x <= g.sldR + 6 &&
+        point.y >= g.b.y    && point.y <= g.b.y + g.b.height) {
+      this._opacityDrag = true
+      this._setOpacityFromPointer(point.x)
+      return true
+    }
+
     return false
   }
 
+  handlePointerMove(point: Point): void {
+    if (!this._opacityDrag) return
+    this._setOpacityFromPointer(point.x)
+  }
+
+  handlePointerUp(): void {
+    this._opacityDrag = false
+  }
+
+  private _setOpacityFromPointer(px: number): void {
+    const g      = this._opacitySliderGeom()
+    const thumbR = 5
+    const lo     = g.sld0 + thumbR
+    const hi     = g.sldR - thumbR
+    const range  = Math.max(1e-6, hi - lo)
+    this.setOpacity((px - lo) / range)
+  }
+
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.canvasBounds, point) ? this : null
+    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (boundingBoxContains(this._opacityPillBounds(), point)) return this
+    return null
+  }
+
+  // Slot rows are drawn below the opacity pill, not directly below the
+  // main controls pill.
+  override get panelBottom(): number {
+    const ob = this._opacityPillBounds()
+    return ob.y + ob.height + 8
   }
 
   // ----------------------------------------------------------
@@ -176,7 +254,7 @@ export class GradientLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    // Blit gradient to main canvas
+    // Blit fill/gradient to main canvas
     ctx.save()
     ctx.drawImage(this._offscreen as CanvasImageSource, 0, 0)
     ctx.restore()
@@ -253,23 +331,114 @@ export class GradientLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
+
+    this._drawOpacityPill(ctx)
+  }
+
+  private _drawOpacityPill(ctx: Ctx2D): void {
+    const g = this._opacitySliderGeom()
+    const { x, y, width, height } = g.b
+
+    const active = this._opacitySlot.isActive
+    const value  = active
+      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      : this._opacity
+    const colour = active ? AM_COL : ACCENT
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // Label
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('opacity', g.labelX, g.midY)
+
+    // Slider
+    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, value, colour)
+
+    // Value text
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(value.toFixed(2), g.valueRight, g.midY)
+
+    // Bind indicator
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+
+    ctx.restore()
+  }
+
+  // Track + filled portion + thumb, FilterLayer/NoiseLayer slider style.
+  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
+    const thumbR = 5
+    const lo     = x0 + thumbR
+    const hi     = x1 - thumbR
+    const range  = Math.max(0, hi - lo)
+    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
+
+    ctx.lineCap = 'round'
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth   = 3
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(hi, midY)
+    ctx.stroke()
+
+    ctx.strokeStyle = colour
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(thumbX, midY)
+    ctx.stroke()
+
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
+    ctx.fill()
   }
 
   // ----------------------------------------------------------
-  // Gradient drawing
+  // Fill / gradient drawing
   // ----------------------------------------------------------
 
-  private _drawGradient(
-    colA: Colour, colB: Colour,
-    pos: Point, dir: Direction,
+  private _draw(
+    colA: Colour, colB: Colour, aActive: boolean, bActive: boolean,
+    pos: Point, dir: Direction, opacity: number,
     w: number, h: number,
   ): void {
     const ctx  = this._offscreen.getContext('2d')! as CanvasRenderingContext2D
-    const cssA = colCss(colA)
-    const cssB = colCss(colB)
     const type = GRAD_TYPES[this._gradIndex]
 
     ctx.clearRect(0, 0, w, h)
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, opacity))
+
+    if (type === 'fill') {
+      ctx.fillStyle = colCss(colA)
+      ctx.fillRect(0, 0, w, h)
+      ctx.restore()
+      return
+    }
+
+    const [stopA, stopB] = this._resolveStops(colA, colB, aActive, bActive)
+    const cssA = colCss(stopA)
+    const cssB = colCss(stopB)
 
     let grad: CanvasGradient
 
@@ -284,15 +453,11 @@ export class GradientLayer extends Layer implements ImageSource {
       const y2    = pos.y + sin * diag
       grad = ctx.createLinearGradient(x1, y1, x2, y2)
 
-    } else if (type === 'radial') {
+    } else {
+      // radial
       const diag  = Math.sqrt(w * w + h * h)
       const r     = Math.max(1, dir.magnitude * diag)
       grad = ctx.createRadialGradient(pos.x, pos.y, 0, pos.x, pos.y, r)
-
-    } else {
-      // conic — createConicGradient(startAngle, cx, cy)
-      grad = (ctx as unknown as { createConicGradient(a: number, x: number, y: number): CanvasGradient })
-               .createConicGradient(dir.angle, pos.x, pos.y)
     }
 
     grad.addColorStop(0, cssA)
@@ -300,6 +465,17 @@ export class GradientLayer extends Layer implements ImageSource {
 
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, w, h)
+    ctx.restore()
+  }
+
+  // If both colours are bound, use them as-is. If only one is bound, use
+  // that colour at both stops — opaque at its own end, transparent at the
+  // other. If neither is bound, fall back to the black→white defaults.
+  private _resolveStops(colA: Colour, colB: Colour, aActive: boolean, bActive: boolean): [Colour, Colour] {
+    if (aActive && bActive) return [colA, colB]
+    if (aActive) return [colA, { ...colA, a: 0 }]
+    if (bActive) return [{ ...colB, a: 0 }, colB]
+    return [DEFAULT_COL_A, DEFAULT_COL_B]
   }
 
   // ----------------------------------------------------------
@@ -364,5 +540,22 @@ export class GradientLayer extends Layer implements ImageSource {
   private _colourBSwatchBounds() {
     const ab = this._colourASwatchBounds()
     return { x: ab.x + 26, y: ab.y, width: 22, height: ab.height }
+  }
+
+  // Opacity pill — directly below the main controls pill.
+  private _opacityPillBounds() {
+    const cb = this.canvasBounds
+    return { x: cb.x, y: cb.y + cb.height + 8, width: cb.width, height: OPACITY_H }
+  }
+
+  private _opacitySliderGeom() {
+    const b      = this._opacityPillBounds()
+    const midY   = b.y + b.height / 2
+    const labelX = b.x + 12
+    const indX   = b.x + b.width - 8
+    const valueRight = indX - 14
+    const sld0   = labelX + OP_LABEL_W
+    const sldR   = valueRight - OP_VALUE_W - 6
+    return { b, midY, labelX, sld0, sldR, valueRight, indX }
   }
 }
