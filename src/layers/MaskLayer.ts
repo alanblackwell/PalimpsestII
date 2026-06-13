@@ -113,9 +113,13 @@ export class MaskLayer extends Layer implements MaskSource {
     }
   }
 
-  override autoBindRules() {
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
     return [
-      { slot: this._shapeSlots[0]!, accepts: (l: Layer) => l.types.has(ValueType.Mask) },
+      // A shape bound straight into a freshly-created MaskLayer's first
+      // slot is unlikely to be used for anything else — move it to the
+      // Background collection (still evaluated, recoverable via
+      // DeletionLayer's toggle) rather than leaving it cluttering the stack.
+      { slot: this._shapeSlots[0]!, accepts: (l: Layer) => l.types.has(ValueType.Mask), sendToBackgroundAfterBind: true },
     ]
   }
 

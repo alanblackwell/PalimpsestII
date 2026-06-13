@@ -157,18 +157,36 @@ hit-test returns nothing.
 
 ## Default binding rules (`autoBindRules`) (added June 2026)
 
-`Layer.autoBindRules()` returns an array of `{ slot, accepts, removeAfterBind? }`
-descriptors. `applyDefaultBindings(layer)` in `main.ts` walks down the stack
-from the newly-added layer and binds the first non-infrastructure layer that
-satisfies each `accepts` predicate.
+`Layer.autoBindRules()` returns an array of `{ slot, accepts, removeAfterBind?,
+sendToBackgroundAfterBind? }` descriptors. `applyDefaultBindings(layer)` in
+`main.ts` walks down the stack from the newly-added layer and binds the first
+non-infrastructure, non-hidden-helper layer that satisfies each `accepts`
+predicate.
 
 Layers currently declaring rules:
-- **MaskLayer** — binds first shape slot to nearest `Mask`-producing layer below
+- **MaskLayer** — binds first shape slot to nearest `Mask`-producing layer below,
+  with `sendToBackgroundAfterBind: true` (see below). `ClipDrawingLayer` inherits
+  this rule via `...super.autoBindRules()`.
 - **ClipLayer** — binds image slot to nearest `Image`; mask slot to nearest `Mask`;
   both with `removeAfterBind: true` (sources are archived after binding)
 - **AnimPathLayer** — special-cased in `main.ts` (creates Clock/Rate if absent)
 
 To add rules to a new layer, override `autoBindRules()` in the layer class.
+
+### `sendToBackgroundAfterBind` (added June 2026)
+
+A shape bound straight into a freshly-created `MaskLayer`'s (or
+`ClipDrawingLayer`'s) first shape slot is unlikely to be needed for anything
+else — once a shape defines a mask, its role is fixed. `applyDefaultBindings`
+moves that source layer into the `BackgroundLayer` collection (via
+`backgroundLayer.add(l)`) instead of leaving it in the main stack: it keeps
+recomputing (so the mask stays live) but no longer clutters the stack, and
+remains recoverable via `DeletionLayer`'s Background toggle (once
+`DeletionLayer` is in the stack — see `pruneDeletionLayerIfEmpty()` below,
+which keys its visibility on deletion count alone, not on Background
+contents). This is the same outcome as `removeAfterBind`'s archiving, but to
+the Background collection rather than the Deleted archive, since the shape
+is still "in use" rather than discarded.
 
 ## DeletionLayer (updated June 2026)
 
@@ -922,8 +940,14 @@ restore — between `_archived` and `bg.items` via `_activeItems()` /
 callbacks for both lists.
 
 **`'b'` key** (`InteractionSystem.setBackgroundAction`) moves the selected
-layer into `backgroundLayer`, mirroring the Delete-key archive flow
-(`ensureDeletionLayerInStack()` first, select the layer below afterwards).
-`pruneDeletionLayerIfEmpty()` now checks both `deletionLayer.archivedLayers`
-and `backgroundLayer.items` before removing `DeletionLayer` from the stack,
-so its toggle stays reachable while either collection is non-empty.
+layer into `backgroundLayer`. Unlike the Delete-key archive flow, it does
+**not** call `ensureDeletionLayerInStack()` — sending a layer to Background
+must not by itself make `DeletionLayer` appear (see below). The layer to
+select afterwards is `below ?? lowestAnchor()`.
+
+`pruneDeletionLayerIfEmpty()` only checks `deletionLayer.archivedLayers` —
+`DeletionLayer`'s presence in the stack (and thus its Background toggle)
+tracks deletion count alone, regardless of what `backgroundLayer.items`
+holds. Items in `BackgroundLayer` keep recomputing via
+`Evaluator.setBackground()` either way; they're just not browsable via the
+toggle while the archive is empty.

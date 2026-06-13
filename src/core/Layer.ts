@@ -295,7 +295,12 @@ export abstract class Layer extends Node {
   // Each rule names a slot and a predicate that selects a compatible source layer.
   // main.ts walks down from this layer and binds the first match for each rule.
   // Override in subclasses to declare wiring that makes sense on first drop.
-  autoBindRules(): Array<{ slot: ParameterSlot; accepts: (layer: Layer) => boolean; removeAfterBind?: boolean }> {
+  autoBindRules(): Array<{
+    slot: ParameterSlot
+    accepts: (layer: Layer) => boolean
+    removeAfterBind?: boolean
+    sendToBackgroundAfterBind?: boolean
+  }> {
     return []
   }
 }

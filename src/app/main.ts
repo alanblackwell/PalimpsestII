@@ -218,7 +218,7 @@ interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
 // Each rule names a slot and a predicate; we walk down the stack and bind
 // the first non-infrastructure layer that satisfies the predicate.
 function applyDefaultBindings(newLayer: Layer): void {
-  for (const { slot, accepts, removeAfterBind } of newLayer.autoBindRules()) {
+  for (const { slot, accepts, removeAfterBind, sendToBackgroundAfterBind } of newLayer.autoBindRules()) {
     if (slot.isActive) continue
     for (let l: Layer | null = newLayer.layerBelow; l !== null; l = l.layerBelow) {
       if (!l.isInfrastructure && !l.isHiddenHelper && accepts(l)) {
@@ -226,6 +226,8 @@ function applyDefaultBindings(newLayer: Layer): void {
         if (removeAfterBind) {
           ensureDeletionLayerInStack()
           deletionLayer.archive(l)
+        } else if (sendToBackgroundAfterBind) {
+          backgroundLayer.add(l)
         }
         break
       }
@@ -264,12 +266,12 @@ function ensureDeletionLayerInStack(): void {
   }
 }
 
-// Remove DeletionLayer from the stack when both the archive and the
-// Background collection are empty. A future deletion or background-send
-// will re-add it via ensureDeletionLayerInStack().
+// Remove DeletionLayer from the stack when the archive is empty — visibility
+// tracks deletion count only, regardless of what the Background collection
+// holds (those items keep recomputing via Evaluator.setBackground either
+// way). A future deletion will re-add it via ensureDeletionLayerInStack().
 function pruneDeletionLayerIfEmpty(): void {
   if (deletionLayer.archivedLayers.length === 0 &&
-      backgroundLayer.items.length === 0 &&
       !deletionLayer.outsideStack) {
     deletionLayer.removeFromStack()
   }
@@ -314,8 +316,7 @@ interaction.setBackgroundAction(() => {
       layer === menuLayer || layer === backgroundLayer) return
   let below: Layer | null = layer.layerBelow
   while (below !== null && below.isInfrastructure) below = below.layerBelow
-  ensureDeletionLayerInStack()
-  const nextSel = below ?? deletionLayer
+  const nextSel = below ?? lowestAnchor()
   backgroundLayer.add(layer)
   refreshStack(nextSel)
 })
