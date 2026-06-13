@@ -889,6 +889,25 @@ drawn, whether flowing inside a bound `maskSlot` shape or centred at
 
 This was the prerequisite for `ClipTextLayer`.
 
+## TextLayer as an ImageSource (added June 2026)
+
+`TextLayer` now also declares `ValueType.Image` in `types` and `implements
+ImageSource`, so it can be bound into any `Image`-typed slot — `FilterLayer`'s
+source slot, `CompositeLayer`'s left/right slots, `TileLayer`, `ClipRectLayer`
+etc. — the same way `RectLayer`/`EllipseLayer`/`PathLayer` already do via
+`ShapeLayer`.
+
+`getImage()` returns `_imageCanvas`, rebuilt in `recompute()` by
+`_updateImageCanvas()`: clears the canvas and calls `_renderCanvas(ctx)` —
+the same method `renderSelf` uses — so the image is the glyphs at their
+actual colour/typography/drop-shadow, in whatever layout (masked word-wrap or
+unmasked centred lines) is currently active.
+
+Since `ValueType.Image` is checked before `ValueType.Mask` in both
+`thumbnail.ts` and `typeColor()`, `TextLayer`'s thumbnail and accent colour
+now show the rendered text (green `#7ecf7e`, the Image accent) rather than
+the glyph-silhouette mask — matching `StrokeLayer`'s precedent.
+
 ## ClipTextLayer (added June 2026)
 
 `src/layers/ClipTextLayer.ts` follows the `ClipRectLayer` template —
