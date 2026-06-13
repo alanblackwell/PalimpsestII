@@ -36,10 +36,35 @@ import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
 import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
+import { NoiseLayer }        from '../layers/NoiseLayer.js'
 
-// Auto-bind a phase slot to a Rate or Clock layer, creating both (a hidden
-// helper RateLayer above `host`, plus a background ClockLayer) if neither
-// is found nearby. Shared by AnimPathLayer and RotateLayer.
+// Find the shared Clock — in the stack, or (if previously auto-created) in
+// the Background collection — creating one in the Background collection if
+// none exists anywhere yet. Clock is effectively a singleton: refreshStack
+// only ever wires one ClockLayer to the Evaluator's tick, so every layer
+// that needs a time source must share this same instance.
+function findOrCreateClock(): ClockLayer {
+  let top: Layer = root
+  while (top.layerAbove !== null) top = top.layerAbove
+  for (let l: Layer | null = top; l !== null; l = l.layerBelow) {
+    if (l instanceof ClockLayer) return l
+  }
+  for (const item of backgroundLayer.items) {
+    if (item instanceof ClockLayer) return item
+  }
+  // Unlikely to need its own controls — send it straight to the Background
+  // collection (still ticked by the Evaluator every frame, recoverable via
+  // DeletionLayer's toggle) rather than adding it to the visible stack.
+  const clock = new ClockLayer()
+  Layer.assignDebugName(clock)
+  clock.bounds = { x: X, y: 24, width: W, height: 36 }
+  backgroundLayer.add(clock)
+  return clock
+}
+
+// Auto-bind a phase slot to a Rate or Clock layer, creating a hidden helper
+// RateLayer above `host` (fed by the shared Clock) if neither is found
+// nearby. Shared by AnimPathLayer and RotateLayer.
 function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   if (phaseSlot.isActive) return
 
@@ -54,14 +79,7 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   }
 
   if (phaseSource === null) {
-    // The auto-created Clock is unlikely to need its own controls —
-    // send it straight to the Background collection (still ticked by
-    // the Evaluator every frame, recoverable via DeletionLayer's toggle)
-    // rather than adding it to the visible stack.
-    const clock = new ClockLayer()
-    Layer.assignDebugName(clock)
-    clock.bounds = { ...host.bounds }
-    backgroundLayer.add(clock)
+    const clock = findOrCreateClock()
 
     // The Rate layer is created as a hidden helper directly above the
     // host, bound to its phase slot. It stays with the host as it moves,
@@ -117,6 +135,15 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof RotateLayer) {
     // Same phase auto-binding as AnimPathLayer.
     ensurePhaseSource(newLayer, newLayer.phaseSlot)
+  }
+
+  if (newLayer instanceof NoiseLayer) {
+    // "time" is the shared Clock's raw, unbounded elapsed time — no
+    // modulo wrap, so there is no periodic "pop". The noise's own "speed"
+    // parameter scales how fast it actually evolves.
+    if (!newLayer.timeSlot.isActive) {
+      BindingLayer.create(findOrCreateClock(), newLayer.timeSlot)
+    }
   }
 
   if (newLayer instanceof ClipRectLayer || newLayer instanceof ClipEllipseLayer || newLayer instanceof ClipPathLayer || newLayer instanceof ClipDrawingLayer) {
