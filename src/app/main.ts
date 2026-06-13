@@ -403,6 +403,17 @@ interaction.setBackgroundAction(() => {
   refreshStack(nextSel)
 })
 
+// 'm' key: bring the Menu layer to immediately above the current layer and
+// select it, so new layers can be added in context next to the current work.
+interaction.setMenuFocusAction(() => {
+  const layer = widget.selected
+  if (layer === null || layer === menuLayer) return
+  menuLayer.removeFromStack()
+  const target = (layer.hiddenHelper !== null && !layer.helperBelow) ? layer.hiddenHelper : layer
+  menuLayer.insertAbove(target)
+  refreshStack(menuLayer)
+})
+
 // 'c' key — collect the layer below into a CollectionLayer.
 //
 // First press: create a Collection above the selected layer, ingest the
