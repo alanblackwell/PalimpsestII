@@ -18,6 +18,24 @@ npm run typecheck  # TypeScript check (many pre-existing TS2352 cast warnings �
 
 The project has **no external runtime dependencies** — only TypeScript and Vite.
 
+## Deploying (GitHub Pages)
+
+GitHub Pages serves the **committed `docs/` folder** on `main`
+(`vite.config.ts` sets `outDir: 'docs'`, `base: '/PalimpsestII/'`). There is
+**no CI workflow** that rebuilds it — after merging changes that should
+appear on the live site, run:
+
+```
+npm run build       # regenerates docs/
+git add docs
+git commit -m "Rebuild docs/ for GitHub Pages"
+git push
+```
+
+If a feature works locally but "isn't showing up" on the deployed site,
+check whether `docs/` is stale before debugging the feature itself
+(`git log -1 -- docs` vs `git log -1`).
+
 ## Architecture
 
 ### Value types (`src/core/types.ts`)
