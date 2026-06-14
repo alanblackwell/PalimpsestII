@@ -62,7 +62,9 @@ export abstract class Layer extends Node {
   helperBelow: boolean = false
 
   // Slot-region bounding boxes — populated by renderSlots, used by hitTestSlot.
-  private _slotBounds = new Map<ParameterSlot, { x: number; y: number; width: number; height: number }>()
+  // Protected so subclasses with a custom renderSlots (e.g. PointLayer's
+  // consolidated wander pill) can register their own row bounds.
+  protected _slotBounds = new Map<ParameterSlot, { x: number; y: number; width: number; height: number }>()
 
   // ----------------------------------------------------------
   // Stack operations

@@ -1199,3 +1199,118 @@ Immediately afterwards, both the resulting `BindingLayer` and the `MaskLayer`
 are moved to `backgroundLayer` (`BindingLayer` first, then `MaskLayer` — this
 order unwinds the temporary two-layer chain cleanly, restoring the original
 stack links with neither layer left dangling).
+
+## PointLayer wander mode (added June 2026)
+
+`PointLayer` (`src/layers/PointLayer.ts`) gained a self-perpetuating "wander"
+simulation. Below the coordinate-readout pill, `renderSlots` draws two more
+pills: a single-row pill for the main `slot` (Point) binding, then one
+consolidated wander pill containing all wander-related controls and their
+slot bindings together. `panelBottom` sits below this stack. The standard
+per-slot grid from `Layer.renderSlots` is not used here — `PointLayer`
+reimplements row rendering itself (`_renderSlotRow`, `_renderSliderRow`),
+registering `_slotBounds` (now `protected` on `Layer`, was `private`) so
+`hitTestSlot`/bind-drop still work for each row.
+
+**Wander pill layout** (7 fixed-height rows):
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ ▌ wander ────────────────────────────────────  ○    [⏸]  │  ← row 1
+│   mode   [◀] drift [▶]                                    │  ← row 2
+│   amount ──────●─────────────────────────────────  0.40  │  ← row 3
+│   amount ──────────────────────────────────  unbound     │  ← row 4
+│   speed  ───●────────────────────────────────────  0.30  │  ← row 5
+│   speed  ──────────────────────────────────  unbound     │  ← row 6
+│   mask   ──────────────────────────────────  unbound     │  ← row 7
+└──────────────────────────────────────────────────────────┘
+```
+
+- **Row 1 — `wanderToggleSlot` (Event) binding + `[⏺]/[⏸]` toggle**. Rising-edge
+  detection in `recompute()` flips `_wanderEnabled` (same pattern as
+  `RootLayer.toggleSlot`/`VideoLayer.enableSlot`), but only while the slot
+  is `Bound` (`isActive`). The manual button (`_handleWanderToggle`,
+  `_renderWanderToggleButton`), drawn at the right edge of this row
+  (`_toggleBounds`, `BTN_SZ = row.height - 6 = 20`), departs from the usual
+  Bound→suspend / SuspendedBound→resume / Unbound→flip convention: operating
+  it manually hands *permanent* control to the user — `Bound` suspends the
+  binding and flips `_wanderEnabled`; `SuspendedBound` and `Unbound` just
+  flip `_wanderEnabled`. The button never resumes a suspended binding (that
+  is the binding-inspector's enable toggle), so once the user has touched it
+  the event source is permanently bypassed and the button behaves as a plain
+  on/off switch.
+- **Row 2 — `[◀] <algorithm> [▶]`** — cycles `WANDER_TYPES = ['drift',
+  'brownian', 'orbit', 'wave']` via `cyclePrev`/`cycleNext`. No slot binding.
+  - **drift** — forward motion with the heading perturbed smoothly left/right
+    (`_heading += rand(-1,1) * amount * DRIFT_TURN_RATE * dt`).
+  - **brownian** — sharp independent random turns each tick
+    (`_heading += rand(-1,1) * amount * BROWNIAN_TURN_RATE`, no `dt` scaling
+    — drunken-walk character).
+  - **orbit** — constant-direction turning, producing circular/spiral paths
+    (`_heading += _orbitSpin * (ORBIT_BASE_RATE + amount * ORBIT_AMOUNT_RATE) * dt`).
+    `_orbitSpin` (±1, randomised at construction) flips sign on every bounce —
+    like a spinning ball reversing spin off a paddle — so the orbit direction
+    alternates each time the point hits the mask/canvas edge.
+  - **wave** — heading oscillates sinusoidally over time, producing an
+    S-curve path (`_wavePhase += WAVE_FREQ * dt; _heading += cos(_wavePhase)
+    * amount * WAVE_TURN_RATE * dt`). `amount` scales the turning-rate
+    amplitude (how tight the wiggle is), not the phase frequency.
+- **Row 3 — amount slider** (`_renderSliderRow`): randomisation strength
+  `[0,1]`, fed into whichever algorithm is selected above. Shows the
+  resolved value (manual `_amount`, default 0.4, or the bound
+  `amountSlot`'s value), tinted with the Amount accent when `amountSlot` is
+  bound. Dragging the slider suspends a bound `amountSlot` via
+  `BindingLayer.findForSlot(slot)?.toggle()` (suspend-on-touch, as in
+  `AmountLayer`/`NoiseLayer`/`FillLayer`).
+- **Row 4 — `amountSlot`** (Amount) binding row (`_renderSlotRow`, standard
+  label + drop-target box), directly beneath the amount slider — a normal
+  drop target for any `Amount`-producing layer.
+- **Row 5 — speed slider** (`_renderSliderRow`), same treatment as row 3.
+  Manual slider `[0,1]` maps to `[MIN_SPEED_PX, MAX_SPEED_PX]` px/s
+  (20–400); a bound Rate is read directly in Hz and scaled by
+  `SPEED_RATE_SCALE` (200) to px/s. The slider bar for a bound Rate is
+  normalised against `RATE_DISPLAY_MAX = 8`, matching `RateLayer.MAX_RATE`.
+- **Row 6 — `speedSlot`** (Rate) binding row, directly beneath the speed
+  slider, same standard drop-target treatment as row 4.
+- **Row 7 — `maskSlot`** (Mask) binding row (`_renderSlotRow`, standard
+  label + drop-target box, showing the bound source's name like any other
+  slot row). When bound, the point is constrained to the mask's opaque
+  region; when unbound, it bounces off the canvas edges instead.
+
+**Simulation** (`_wanderTick`, called from `recompute()` when
+`_wanderEnabled && !_slot.isActive`): advances `_point` by `speed * dt` along
+`_heading` (dt from `performance.now()`, capped at `MAX_DT = 0.1`s), perturbs
+`_heading` per the selected algorithm, then checks `_boundaryNormal()` for the
+resulting position. If outside the permitted area, velocity is reflected
+(`v' = v - 2(v·n)n`) and `_heading` recomputed via `atan2`, retried once more;
+if still outside, the point doesn't move this tick.
+
+**Mask added/moved while outside it**: at the start of each tick, if a mask is
+bound and the point's *current* position is outside it (`_boundaryNormal`
+returns non-null for the current `_point`, before any movement), the point is
+relocated via `_nearestInsideMask()` to the closest interior point — heading
+and speed are left unchanged, so the bounce logic below may fire immediately
+if the relocated position sits right at the mask edge. `_nearestInsideMask`
+reads a `SNAP_MAX_RADIUS` (150px) square around the point with one
+`getImageData` call and scans it for the nearest alpha ≥ `MASK_THRESHOLD`
+pixel; if none is found within that radius, the point is left where it is.
+
+**`_boundaryNormal(p, mask)`** — returns the inward unit normal at `p` if `p`
+is outside the permitted area, or `null` if inside:
+- **mask bound** — samples alpha at `p` via `getImageData` (1×1 read on the
+  mask `OffscreenCanvas`); `null` if alpha ≥ `MASK_THRESHOLD` (0.5). Otherwise
+  estimates the normal from a 4-point finite-difference alpha gradient at
+  `±EDGE_SAMPLE_EPS` (3px). If the gradient is ~flat (deep outside / degenerate
+  mask), falls back to bouncing straight back toward the previous point.
+- **no mask** — `null` unless `p` is outside `[0, canvasWidth] × [0,
+  canvasHeight]` (`Node.canvasWidth/Height`), in which case the normal points
+  back toward the corresponding edge (handles corners by combining both axes).
+
+**Self-perpetuation**: identical to `VideoLayer`'s frame loop —
+`queueMicrotask(() => forceDirty())` at the end of `recompute()`, guarded by
+`_wanderEnabled && !_slot.isActive && !this.outsideStack` (checked again
+inside the microtask in case state changed before it runs).
+
+While wandering, `_region.interactive = false` (the draggable handle is
+driven by the simulation, not the pointer) — same as when the main Point
+`slot` is bound.
