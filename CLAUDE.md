@@ -1314,3 +1314,53 @@ inside the microtask in case state changed before it runs).
 While wandering, `_region.interactive = false` (the draggable handle is
 driven by the simulation, not the pointer) — same as when the main Point
 `slot` is bound.
+
+## Layer.renderSlotGroup (added June 2026)
+
+`Layer.renderSlots` no longer draws its backdrop pill and per-slot rows
+directly — that logic is now `protected renderSlotGroup(ctx, slots, y):
+number`, which draws one backdrop pill of standard binding rows (label +
+drop-target box, Bound/SuspendedBound/Unbound/compat states) for the given
+`slots` array starting at `y`, registers each slot's row bounds in
+`_slotBounds`, and returns the y-coordinate of the pill's bottom — for
+stacking a further pill beneath it. `renderSlots(ctx)` itself is now just:
+
+```ts
+renderSlots(ctx: Ctx2D): void {
+  if (this.slots.length === 0) return
+  this._slotBounds.clear()
+  this.renderSlotGroup(ctx, this.slots, this.panelBottom)
+}
+```
+
+Subclasses that render more than one pill of slot rows (see MaskLayer's
+invert pill below) override `renderSlots`, call `_slotBounds.clear()` once
+themselves, then call `renderSlotGroup` once per pill.
+
+## MaskLayer invert toggle (added June 2026)
+
+A second pill, directly below the 4-shape-slot pill (`PILL_GAP = 8px`),
+holds a single `_invertSlot` (`ValueType.Event`, label "invert") and a
+manual `[⏺/⏸]` toggle button drawn at the right edge of its row
+(`_renderInvertToggleButton`, same geometry/colour convention as
+PointLayer's `_renderWanderToggleButton`: `BTN_SZ = row.height - 6`,
+positioned at `row.x + row.width - BTN_SZ - 3`, coloured with
+`EV_ACCENT = '#e0e060'`). `MaskLayer.renderSlots` is overridden to draw both
+pills via two `renderSlotGroup` calls (see above).
+
+**`recompute()`** — after compositing the painted layer, shape slots, and
+`trackedShape` into `_offscreen` as before, a rising edge on `_invertSlot`
+(`getEventTime()` change) flips `_inverted`. If `_inverted` is true, the
+composited mask is inverted in place: copy `_offscreen` to a scratch canvas
+(`_scratch`, sized alongside the other canvases in `_ensureCanvases`), clear
+`_offscreen` and fill it white, then `globalCompositeOperation =
+'destination-out'` + `drawImage(_scratch)` punches out the previously
+included region — leaving white where the mask was previously transparent
+and vice versa.
+
+**`_handleInvertToggle`** — same permanent-manual-override convention as
+PointLayer's `_handleWanderToggle`: if `_invertSlot.state === Bound`, the
+binding is suspended (`_invertSlot.suspend()`, never auto-resumed by this
+button); either way `_inverted` is flipped. Checked in `hitTestSelf` (before
+the `hitTestSlot` early-return that hands slot-row clicks to the
+slot-click/binding-inspector logic) and in `handlePointerDown`.

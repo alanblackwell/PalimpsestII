@@ -190,6 +190,20 @@ export abstract class Layer extends Node {
   // Called by the Evaluator after renderPanel so it is always present.
   renderSlots(ctx: Ctx2D): void {
     if (this.slots.length === 0) return
+    this._slotBounds.clear()
+    this.renderSlotGroup(ctx, this.slots, this.panelBottom)
+  }
+
+  // Renders `slots` as a single backdrop pill of standard binding rows
+  // (label + drop-target box, Bound/SuspendedBound/Unbound/compat states),
+  // starting at `y`. Registers each slot's row bounds in `_slotBounds` for
+  // hitTestSlot / bind-drag-drop. Subclasses that render more than one
+  // group (e.g. MaskLayer's invert pill below its shape-slot pill) should
+  // call `_slotBounds.clear()` once themselves, then call this once per
+  // group. Returns the y-coordinate of the bottom of the pill, for stacking
+  // further groups beneath it.
+  protected renderSlotGroup(ctx: Ctx2D, slots: ParameterSlot[], y: number): number {
+    if (slots.length === 0) return y
 
     const SLOT_H  = 26
     const SLOT_GAP = 4
@@ -198,22 +212,19 @@ export abstract class Layer extends Node {
     const PANEL_W  = 260
     const drag     = Node.bindDrag
 
-    this._slotBounds.clear()
-    let y = this.panelBottom
-
     ctx.save()
     ctx.font         = '10px monospace'
     ctx.textBaseline = 'middle'
 
-    // Dark backdrop behind all slot rows
-    const _n = this.slots.length
-    const _totalH = _n * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    // Dark backdrop behind all rows in this group
+    const n = slots.length
+    const totalH = n * (SLOT_H + SLOT_GAP) - SLOT_GAP
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, y, PANEL_W, _totalH, 6)
+    ctx.roundRect(PANEL_X, y, PANEL_W, totalH, 6)
     ctx.fill()
 
-    for (const slot of this.slots) {
+    for (const slot of slots) {
       const isCompat = (drag.active
                     && drag.source !== null
                     && slot.type !== null
@@ -275,6 +286,7 @@ export abstract class Layer extends Node {
     }
 
     ctx.restore()
+    return y - SLOT_GAP
   }
 
   // Return the ParameterSlot whose drop-target region contains `point`, or null.

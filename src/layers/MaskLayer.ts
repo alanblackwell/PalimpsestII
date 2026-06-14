@@ -2,9 +2,9 @@ import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   boundingBoxContains,
-  type MaskValue, type MaskSource,
+  type MaskValue, type MaskSource, type EventSource,
   type Point,
   type Ctx2D,
 } from '../core/types.js'
@@ -30,9 +30,18 @@ import { graph } from '../dataflow/Graph.js'
 //   [✕]        — clear all freehand paint
 //   [↺]        — clear paint and unbind all shape slots
 //
+// Below the 4-shape-slot pill, a second pill holds the "invert" slot
+// (Event) and its manual [⏺/⏸] toggle button. Either the rising edge of
+// a bound event, or a click on the toggle, flips `_inverted`, which swaps
+// white <-> transparent across the whole composited mask. Operating the
+// toggle manually while a binding is active suspends that binding (see
+// `_handleInvertToggle`) — same permanent-override convention as
+// PointLayer's wander toggle.
+//
 // Press H to hide/show the LayerStackWidget if it covers the canvas.
 
 const ACCENT        = '#cfcf7e'
+const EV_ACCENT     = '#e0e060'
 const BRUSH_MIN     =  4
 const BRUSH_MAX     = 100
 const BRUSH_DEFAULT = 20
@@ -43,13 +52,19 @@ const PANEL_X   = 300
 const TOOLS_H   = 44
 const TOOLS_GAP =  6
 
+// Invert pill — sits below the shape-slot pill
+const PILL_GAP  =  8   // vertical gap between the shape-slot pill and the invert pill
+const SLOT_H    = 26   // must match Layer.renderSlotGroup's row height
+
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
 
   private readonly _shapeSlots: ParameterSlot[]
+  private readonly _invertSlot: ParameterSlot
 
   private _painted:   OffscreenCanvas
   private _offscreen: OffscreenCanvas
+  private _scratch:   OffscreenCanvas
 
   readonly blockPixelPick = true
 
@@ -59,6 +74,11 @@ export class MaskLayer extends Layer implements MaskSource {
   private _sliderDragging = false
   private _lastPoint:   Point | null = null
   private _cursorPoint: Point | null = null
+
+  // Invert toggle
+  private _inverted = false
+  private _lastInvertToggleTime: number | null = null   // invertSlot rising-edge detection
+  private _invertToggleBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // When set (e.g. a Clip<Shape>'s hidden mask helper), the tracked layer's
   // mask is unioned in every recompute — independent of the shape/paint
@@ -71,11 +91,13 @@ export class MaskLayer extends Layer implements MaskSource {
     const h = Node.canvasHeight
     this._painted   = new OffscreenCanvas(w, h)
     this._offscreen = new OffscreenCanvas(w, h)
+    this._scratch   = new OffscreenCanvas(w, h)
 
     this._shapeSlots = Array.from({ length: N_SHAPES }, (_, i) =>
       new ParameterSlot(ValueType.Mask, this, `shape ${i + 1}`),
     )
-    this.slots.push(...this._shapeSlots)
+    this._invertSlot = new ParameterSlot(ValueType.Event, this, 'invert')
+    this.slots.push(...this._shapeSlots, this._invertSlot)
     this.debugName = 'MaskLayer'
     graph.register(this)
   }
@@ -116,6 +138,28 @@ export class MaskLayer extends Layer implements MaskSource {
       const mask = this.trackedShape.getMask()
       if (mask !== null) ctx.drawImage(mask, 0, 0)
     }
+
+    // Invert toggle — each rising edge flips _inverted.
+    if (this._invertSlot.isActive) {
+      const t = (this._invertSlot.source as EventSource).getEventTime()
+      if (t !== null && t !== this._lastInvertToggleTime) {
+        this._lastInvertToggleTime = t
+        this._inverted = !this._inverted
+      }
+    }
+
+    if (this._inverted) {
+      const sctx = this._scratch.getContext('2d')!
+      sctx.clearRect(0, 0, w, h)
+      sctx.drawImage(this._offscreen, 0, 0)
+
+      ctx.clearRect(0, 0, w, h)
+      ctx.fillStyle = 'white'
+      ctx.fillRect(0, 0, w, h)
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.drawImage(this._scratch, 0, 0)
+      ctx.globalCompositeOperation = 'source-over'
+    }
   }
 
   override autoBindRules(): ReturnType<Layer['autoBindRules']> {
@@ -153,6 +197,68 @@ export class MaskLayer extends Layer implements MaskSource {
     if ((this._activeTool !== null || this._sliderDragging) && this._cursorPoint !== null) {
       this._drawBrushCursor(ctx)
     }
+  }
+
+  // Renders the 4 shape-binding slots as their normal pill, then a second
+  // pill directly below for the invert slot + its manual toggle button.
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const shapesBottom = this.renderSlotGroup(ctx, this._shapeSlots, this.panelBottom)
+    const invertY = shapesBottom + PILL_GAP
+    this.renderSlotGroup(ctx, [this._invertSlot], invertY)
+    this._renderInvertToggleButton(ctx, this._slotBounds.get(this._invertSlot)!)
+  }
+
+  // The invert slot's manual toggle button, drawn at the right edge of its
+  // row — same convention as PointLayer's wander-toggle button.
+  private _renderInvertToggleButton(ctx: Ctx2D, row: { x: number; y: number; width: number; height: number }): void {
+    const BTN_SZ = row.height - 6
+    const btnX   = row.x + row.width - BTN_SZ - 3
+    const btnY   = row.y + 3
+    const midY   = row.y + row.height / 2
+
+    this._invertToggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+
+    const state       = this._invertSlot.state
+    const isActive    = state === SlotState.Bound
+    const isSuspended = state === SlotState.SuspendedBound
+
+    ctx.save()
+
+    if (isActive) ctx.fillStyle = EV_ACCENT + '33'
+    else if (isSuspended) ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    else ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
+    ctx.fill()
+
+    ctx.strokeStyle = isActive ? EV_ACCENT + '99' : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    if (isSuspended) ctx.setLineDash([2, 2])
+    ctx.beginPath()
+    ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = this._inverted ? EV_ACCENT : 'rgba(255,255,255,0.55)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this._inverted ? '⏺' : '⏸', btnX + BTN_SZ / 2, midY)
+
+    ctx.restore()
+  }
+
+  // Manually operating the toggle hands permanent control to the user: a
+  // bound event source is suspended (never resumed by this button — that
+  // takes the binding-inspector's enable toggle), and from then on every
+  // click simply flips `_inverted`.
+  private _handleInvertToggle(): void {
+    if (this._invertSlot.state === SlotState.Bound) {
+      this._invertSlot.suspend()
+    }
+    this._inverted = !this._inverted
+    this.markDirty()
   }
 
   private _drawMaskOverlay(ctx: Ctx2D): void {
@@ -318,6 +424,10 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    // The invert toggle button overlaps the invert slot row — claim it
+    // before the slot-row check below hands the click to the slot-click /
+    // binding-inspector logic.
+    if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) return this
     // Parameter-slot rows take priority over painting, so clicks (and
     // right-clicks) there reach the slot-click / binding-inspector logic
     // in InteractionSystem instead of starting a brush stroke. Painting
@@ -358,6 +468,9 @@ export class MaskLayer extends Layer implements MaskSource {
     }
     if (boundingBoxContains(this._resetBtnBounds(), point)) {
       this._reset(); return true
+    }
+    if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) {
+      this._handleInvertToggle(); return true
     }
 
     if (this._activeTool !== null) {
@@ -470,6 +583,9 @@ export class MaskLayer extends Layer implements MaskSource {
     }
     if (this._offscreen.width !== w || this._offscreen.height !== h) {
       this._offscreen = new OffscreenCanvas(w, h)
+    }
+    if (this._scratch.width !== w || this._scratch.height !== h) {
+      this._scratch = new OffscreenCanvas(w, h)
     }
   }
 
