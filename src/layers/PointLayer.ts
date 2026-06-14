@@ -315,12 +315,12 @@ export class PointLayer extends Layer implements PointSource {
     }
 
     // Self-perpetuate: keep wandering every frame while enabled and in the
-    // stack. forceDirty() is called AFTER evaluate() clears our dirty flag,
-    // so the next rAF finds us dirty and advances the simulation again
-    // (same pattern as VideoLayer's frame loop).
-    if (this._wanderEnabled && !this._slot.isActive && !this.outsideStack) {
+    // stack (or parked in BackgroundLayer). forceDirty() is called AFTER
+    // evaluate() clears our dirty flag, so the next rAF finds us dirty and
+    // advances the simulation again (same pattern as VideoLayer's frame loop).
+    if (this._wanderEnabled && !this._slot.isActive && (!this.outsideStack || this.inBackground)) {
       queueMicrotask(() => {
-        if (this._wanderEnabled && !this._slot.isActive && !this.outsideStack) this.forceDirty()
+        if (this._wanderEnabled && !this._slot.isActive && (!this.outsideStack || this.inBackground)) this.forceDirty()
       })
     }
   }

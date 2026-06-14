@@ -180,12 +180,13 @@ export class VideoLayer extends Layer implements ImageSource {
       ctx.drawImage(this._video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
     }
 
-    // While live and still in the stack, schedule the next frame via a
-    // microtask — forceDirty() is called AFTER evaluate() clears our dirty
-    // flag, so the next rAF finds us dirty and captures a fresh frame.
-    if (!this._frozen && this._stream !== null && !this.outsideStack) {
+    // While live and still in the stack (or parked in BackgroundLayer),
+    // schedule the next frame via a microtask — forceDirty() is called
+    // AFTER evaluate() clears our dirty flag, so the next rAF finds us
+    // dirty and captures a fresh frame.
+    if (!this._frozen && this._stream !== null && (!this.outsideStack || this.inBackground)) {
       queueMicrotask(() => {
-        if (!this._frozen && this._stream !== null && !this.outsideStack) {
+        if (!this._frozen && this._stream !== null && (!this.outsideStack || this.inBackground)) {
           this.forceDirty()
         }
       })

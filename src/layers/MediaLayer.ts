@@ -219,12 +219,13 @@ export class MediaLayer extends Layer implements ImageSource {
       this._status = this._playing ? 'playing' : 'paused'
     }
 
-    // While playing and still in the stack, schedule the next frame via a
-    // microtask — forceDirty() is called AFTER evaluate() clears our dirty
-    // flag, so the next rAF finds us dirty and captures a fresh frame.
-    if (this._playing && this._objectUrl !== null && !this.outsideStack) {
+    // While playing and still in the stack (or parked in BackgroundLayer),
+    // schedule the next frame via a microtask — forceDirty() is called
+    // AFTER evaluate() clears our dirty flag, so the next rAF finds us
+    // dirty and captures a fresh frame.
+    if (this._playing && this._objectUrl !== null && (!this.outsideStack || this.inBackground)) {
       queueMicrotask(() => {
-        if (this._playing && this._objectUrl !== null && !this.outsideStack) {
+        if (this._playing && this._objectUrl !== null && (!this.outsideStack || this.inBackground)) {
           this.forceDirty()
         }
       })

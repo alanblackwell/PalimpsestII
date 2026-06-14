@@ -371,8 +371,13 @@ menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
 // menuLayer is NOT inserted at startup — StartupLayer handles that.
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
+// forceDirty() restarts any self-perpetuating frame loop (VideoLayer,
+// MediaLayer, PointLayer wander, etc.) that died when outsideStack became
+// true on archive/background — its queueMicrotask guard checks
+// !outsideStack, which was false the whole time it sat parked.
 deletionLayer.setRestoreCallback((layer) => {
   layer.insertAbove(deletionLayer)
+  layer.forceDirty()
   refreshStack(layer)
 })
 
@@ -598,6 +603,9 @@ interaction.setSlotClickCallback((consumer, slot) => {
       // since startup. Insert it at the consumer's position.
       source.insertAbove(consumer)
     }
+    // Restart any self-perpetuating frame loop that died while outsideStack
+    // was true (see the DeletionLayer restore callback above).
+    source.forceDirty()
   }
   refreshStack(source)
 })

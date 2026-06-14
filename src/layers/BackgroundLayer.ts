@@ -39,8 +39,12 @@ export class BackgroundLayer extends Layer {
   /** Remove a layer from the stack and move it into this collection. */
   add(layer: Layer): void {
     layer.removeFromStack()
+    layer.inBackground = true
     this._items.push(layer)
     this.markDirty()
+    // Kick the layer in case its own self-perpetuation loop (VideoLayer,
+    // MediaLayer, PointLayer wander) had already gone idle before this call.
+    layer.forceDirty()
   }
 
   /** Remove a layer from this collection (without re-inserting it) so the
@@ -49,6 +53,7 @@ export class BackgroundLayer extends Layer {
     const idx = this._items.indexOf(layer)
     if (idx < 0) return false
     this._items.splice(idx, 1)
+    layer.inBackground = false
     return true
   }
 

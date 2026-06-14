@@ -32,6 +32,14 @@ export abstract class Layer extends Node {
   // True when this layer has been removed from the stack but not destroyed.
   outsideStack: boolean = false
 
+  // True while this layer is held in BackgroundLayer's items (implies
+  // outsideStack). Self-perpetuating frame loops (VideoLayer, MediaLayer,
+  // PointLayer wander mode) check `!outsideStack || inBackground` so they
+  // keep running while backgrounded — BackgroundLayer.recompute() calls
+  // evaluate() on its items every frame, but evaluate() is a no-op unless
+  // the item is already dirty, so the loop must keep re-marking itself.
+  inBackground: boolean = false
+
   // Whether this layer is currently selected by the user.
   selected: boolean = false
 
