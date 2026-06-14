@@ -43,33 +43,15 @@ import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 
-// Find the shared Clock — in the stack, or (if previously auto-created) in
-// the Background collection — creating one in the Background collection if
-// none exists anywhere yet. Clock is effectively a singleton: refreshStack
-// only ever wires one ClockLayer to the Evaluator's tick, so every layer
-// that needs a time source must share this same instance.
-function findOrCreateClock(): ClockLayer {
-  let top: Layer = root
-  while (top.layerAbove !== null) top = top.layerAbove
-  for (let l: Layer | null = top; l !== null; l = l.layerBelow) {
-    if (l instanceof ClockLayer) return l
-  }
-  for (const item of backgroundLayer.items) {
-    if (item instanceof ClockLayer) return item
-  }
-  // Unlikely to need its own controls — send it straight to the Background
-  // collection (still ticked by the Evaluator every frame, recoverable via
-  // DeletionLayer's toggle) rather than adding it to the visible stack.
-  const clock = new ClockLayer()
-  Layer.assignDebugName(clock)
-  clock.bounds = { x: X, y: 24, width: W, height: 36 }
-  backgroundLayer.add(clock)
-  return clock
+// Bind a RateLayer's timeSlot to the shared singleton Clock, if not already
+// bound, so its phase starts advancing immediately.
+function bindRateClock(rate: RateLayer): void {
+  if (!rate.timeSlot.isActive) BindingLayer.create(clock, rate.timeSlot)
 }
 
 // Auto-bind a phase slot to a Rate or Clock layer, creating a hidden helper
-// RateLayer above `host` (fed by the shared Clock) if neither is found
-// nearby. Shared by AnimPathLayer and RotateLayer.
+// RateLayer above `host` (fed by the shared singleton Clock) if neither is
+// found nearby. Shared by AnimPathLayer and RotateLayer.
 function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   if (phaseSlot.isActive) return
 
@@ -84,8 +66,6 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   }
 
   if (phaseSource === null) {
-    const clock = findOrCreateClock()
-
     // The Rate layer is created as a hidden helper directly above the
     // host, bound to its phase slot. It stays with the host as it moves,
     // and has no thumbnail in the stack widget unless exposed (by clicking
@@ -98,7 +78,7 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
     rate.helperHost = host
     host.hiddenHelper = rate
 
-    BindingLayer.create(clock, rate.timeSlot)
+    bindRateClock(rate)
     phaseSource = rate
   }
 
@@ -109,6 +89,11 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
 // that every creation path (menu, tutorial buttons) gets identical behaviour.
 function postInsertLayer(newLayer: Layer): void {
+  if (newLayer instanceof RateLayer) {
+    // Bind to the shared singleton Clock immediately, so the rate's phase
+    // starts advancing as soon as the layer appears.
+    bindRateClock(newLayer)
+  }
   if (newLayer instanceof CollectionLayer) {
     newLayer.setEjectCallback(() => refreshStack())
   }
@@ -156,11 +141,11 @@ function postInsertLayer(newLayer: Layer): void {
   }
 
   if (newLayer instanceof NoiseLayer) {
-    // "time" is the shared Clock's raw, unbounded elapsed time — no
-    // modulo wrap, so there is no periodic "pop". The noise's own "speed"
-    // parameter scales how fast it actually evolves.
+    // "time" is the shared singleton Clock's raw, unbounded elapsed time —
+    // no modulo wrap, so there is no periodic "pop". The noise's own
+    // "speed" parameter scales how fast it actually evolves.
     if (!newLayer.timeSlot.isActive) {
-      BindingLayer.create(findOrCreateClock(), newLayer.timeSlot)
+      BindingLayer.create(clock, newLayer.timeSlot)
     }
   }
 
@@ -307,6 +292,17 @@ const W = 100
 
 const root = new RootLayer(canvas.width, canvas.height)
 
+// Singleton Clock — created once at startup, hidden (outsideStack) until
+// the user clicks Root's clockSlot to expose it. Every RateLayer shares
+// this same instance via ensurePhaseSource; Evaluator ticks it directly
+// every frame regardless of stack membership.
+const clock = new ClockLayer()
+Layer.assignDebugName(clock)
+clock.bounds = { x: X, y: 24, width: W, height: 36 }
+clock.outsideStack = true
+root.setClock(clock)
+evaluator.setClock(clock)
+
 const deletionLayer = new DeletionLayer()
 deletionLayer.bounds = { x: X, y: 24, width: W, height: 36 }
 // Permanently part of the stack, directly above Root — invisible (like
@@ -353,20 +349,6 @@ function applyDefaultBindings(newLayer: Layer): void {
 const refreshStack = (selectLayer?: Layer) => {
   let top: Layer = root
   while (top.layerAbove !== null) top = top.layerAbove
-
-  // Wire the first ClockLayer found — in the stack, or (failing that) in
-  // the Background collection, where auto-created Clocks live — to the
-  // evaluator so the render loop runs continuously while a clock is present.
-  let clock: ClockLayer | null = null
-  for (let l: Layer | null = top; l !== null; l = l.layerBelow) {
-    if (l instanceof ClockLayer) { clock = l; break }
-  }
-  if (clock === null) {
-    for (const item of backgroundLayer.items) {
-      if (item instanceof ClockLayer) { clock = item; break }
-    }
-  }
-  evaluator.setClock(clock)
 
   evaluator.setStack(top)
   widget.setStack(top)
@@ -587,6 +569,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
     newLayer.insertAbove(consumer)
     BindingLayer.create(newLayer, slot)
+    if (newLayer instanceof RateLayer) bindRateClock(newLayer)
     refreshStack(newLayer)
     return
   }
@@ -608,6 +591,11 @@ interaction.setSlotClickCallback((consumer, slot) => {
       source.insertAbove(consumer)
     } else if (backgroundLayer.removeItem(source)) {
       source.insertBelow(consumer)
+    } else {
+      // Never archived or backgrounded — e.g. the singleton ClockLayer,
+      // nominally bound to Root's clockSlot but otherwise outsideStack
+      // since startup. Insert it at the consumer's position.
+      source.insertAbove(consumer)
     }
   }
   refreshStack(source)

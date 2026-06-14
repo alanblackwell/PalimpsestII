@@ -8,7 +8,6 @@ import { rndColour }       from '../core/colour.js'
 import { AmountLayer }     from './AmountLayer.js'
 import { ColourLayer }     from './ColourLayer.js'
 import { PointLayer }      from './PointLayer.js'
-import { ClockLayer }      from './ClockLayer.js'
 import { RateLayer }       from './RateLayer.js'
 import { PathLayer }       from './PathLayer.js'
 import { RectLayer }       from './RectLayer.js'
@@ -95,7 +94,6 @@ const BUTTONS: BtnDef[] = [
   { label: 'Amount',     colour: '#4a8fe8', factory: ()         => new AmountLayer(rnd()) },
   { label: 'Colour',     colour: '#e8944a', height: 170, factory: () => new ColourLayer(rndColour()) },
   { label: 'Point',      colour: '#cf7ecf', factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
-  { label: 'Clock',      colour: '#e87e7e', factory: ()         => new ClockLayer() },
   { label: 'Rate',       colour: '#e87e7e', factory: ()         => new RateLayer(rndR(0.1, 2.0)) },
   { label: 'Event',      colour: '#e0e060', factory: ()         => new EventLayer() },
   { label: 'Flash',      colour: '#e0e060', factory: ()         => new FlashLayer() },

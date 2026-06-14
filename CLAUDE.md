@@ -1412,3 +1412,93 @@ heading/velocity model entirely:
 mouse-outside-mask and drift-clipping cases: marches from `from` (assumed
 inside the mask) toward `to`, returning the last in-mask point before the
 line would cross outside (or `to` itself if the whole segment stays inside).
+
+## ClockLayer singleton (added June 2026)
+
+There is now exactly one `ClockLayer` instance for the whole app, created in
+`main.ts` at startup:
+
+```ts
+const clock = new ClockLayer()
+Layer.assignDebugName(clock)
+clock.bounds = { x: X, y: 24, width: W, height: 36 }
+clock.outsideStack = true
+root.setClock(clock)
+evaluator.setClock(clock)
+```
+
+- `clock.outsideStack = true` from construction — like `DeletionLayer`
+  before its first archive, it has no stack position but is still ticked
+  every frame by `Evaluator.frame()` (independent of stack membership) and
+  is registered in the `Graph` via the `Clock` constructor. It is **not**
+  added to `BackgroundLayer` — unlike the old per-`AnimPathLayer`
+  auto-created Clock, there's only ever one of these and it doesn't need the
+  Background browse/recompute mechanism.
+- `evaluator.setClock(clock)` is called once, here, instead of being
+  re-derived in `refreshStack()` on every stack mutation — `_continuous` is
+  now permanently `true` from startup.
+- `ensurePhaseSource()` (used by `AnimPathLayer`/`RotateLayer`) and the
+  `NoiseLayer` `timeSlot` auto-binding both reference this `clock` directly
+  via closure; the old `findOrCreateClock()` (which lazily created and
+  background-parked a `ClockLayer`) is gone.
+- The "Clock" button has been removed from `MenuLayer.BUTTONS` — the
+  singleton is the only `ClockLayer` that should ever exist, so it isn't
+  user-creatable.
+
+### RootLayer.clockSlot
+
+`RootLayer` gained a third slot, `clockSlot` (`ValueType.Amount`, label
+"clock"), **nominally bound** to the singleton via `root.setClock(clock)` —
+a raw `ParameterSlot.bind()` call, not a `BindingLayer`. There is no binding
+inspector or remove button for this slot (`BindingLayer.findForSlot` returns
+null for it); it exists purely to surface the singleton's special status and
+give it a click target.
+
+Clicking this (bound) slot row while Root is selected falls through
+`interaction.setSlotClickCallback`'s "Bound slot" branch: `source.isHiddenHelper`
+is false and `source.outsideStack` is true, but the source is in neither
+`DeletionLayer`'s archive nor `BackgroundLayer` — a new final `else` branch
+(`source.insertAbove(consumer)`) handles this case generically, inserting the
+singleton directly above Root and selecting it. From then on it behaves like
+any other layer (movable, deletable/archivable — re-clicking the slot after
+archiving falls back to the existing `deletionLayer.removeFromArchive` path).
+
+### Clock readout — dial (updated June 2026)
+
+`RootLayer.renderPanel` calls `_renderClockReadout(ctx)`, which draws a
+clock dial (radius `CLOCK_R = 70`) centred on the canvas, with the elapsed
+time printed below it. Since `renderPanel` runs only for the selected/top
+layer and only in edit mode, this appears only while Root is selected — a
+way to check the singleton's elapsed time without exposing it in the stack.
+
+- **Dial face** — white (`CLOCK_BG`), so it blends with the default Root
+  background. Boundary, minute ticks (every 5 minutes), the second hand, its
+  trail, and the numeric readout are all light grey (`CLOCK_GREY =
+  '128,128,128'`) so they read clearly against that white face (and against
+  the default white canvas background generally).
+- **Hour sweep** — a filled pie slice from 12 o'clock, growing in discrete
+  one-minute steps (`Math.floor(elapsed / 60) % 60` minutes filled in the
+  current lap) — i.e. it ticks forward each time the second hand completes a
+  minute, not continuously. Coloured gold (`CLOCK_FILL`) for the first lap
+  (0–60 min); once elapsed passes an hour it starts a second lap, coloured
+  red (`CLOCK_OVERTIME`) — `lap = Math.floor(totalMinutes / 60)`, alternating
+  gold/red on `lap % 2`.
+- **Second hand** — continuous sweep, one revolution per minute
+  (`(elapsed % 60) / 60`), with a 12-step fading trail (60° span,
+  decreasing alpha) behind it.
+- **Numeric readout** — `hh:mm:ss.cs` below the dial, using the same
+  formatting as the ClockLayer thumbnail (`hh` omitted when zero).
+
+### RateLayer auto-binds to the singleton Clock (added June 2026)
+
+Every newly-created `RateLayer` has its `timeSlot` bound to the singleton
+`clock` immediately, via the shared `bindRateClock(rate)` helper in
+`main.ts` (`if (!rate.timeSlot.isActive) BindingLayer.create(clock,
+rate.timeSlot)`), so its phase starts advancing as soon as it appears
+instead of sitting at `φ 0` until manually bound. Called from:
+
+- `postInsertLayer` — covers the Menu/Tutorial "Rate" button.
+- The empty-slot click-to-create path (`DEFAULT_VALUE_LAYER[ValueType.Rate]`)
+  in `interaction.setSlotClickCallback`.
+- `ensurePhaseSource`'s hidden-helper `RateLayer` (replaces the previous
+  direct `BindingLayer.create(clock, rate.timeSlot)` call).
