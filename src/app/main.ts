@@ -11,6 +11,7 @@ import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
+import { MediaLayer }        from '../layers/MediaLayer.js'
 import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer }         from '../layers/MenuLayer.js'
@@ -643,13 +644,14 @@ startupLayer.insertAbove(deletionLayer)
 refreshStack(startupLayer)
 
 // ------------------------------------------------------------------
-// Drag-and-drop image loading — always creates a new ImageLayer
+// Drag-and-drop media loading — always creates a new ImageLayer (for
+// image files) or MediaLayer (for video files)
 // ------------------------------------------------------------------
 //
 // Placement rules:
 //   • Dragged over the LayerStackWidget → a placeholder card opens a gap
 //     at the pointer position and follows it, exactly like reordering an
-//     existing layer's thumbnail; dropping inserts the new ImageLayer at
+//     existing layer's thumbnail; dropping inserts the new layer at
 //     that position in the stack and selects it.
 //   • MenuLayer selected      → new layer inserted below MenuLayer
 //   • Drop on Image slot, or
@@ -659,9 +661,16 @@ refreshStack(startupLayer)
 //   • Otherwise                → new layer inserted above current layer,
 //                                new layer becomes selected
 
-// Placeholder ImageLayer for a drag currently hovering the stack widget —
-// not yet linked into the live stack (outsideStack) until the drop commits.
-let fileDragGhost: ImageLayer | null = null
+// Placeholder layer for a drag currently hovering the stack widget — not
+// yet linked into the live stack (outsideStack) until the drop commits.
+let fileDragGhost: ImageLayer | MediaLayer | null = null
+
+// During dragover, DataTransferItem.type carries the file's MIME type
+// (the File object itself is only available on drop).
+function isVideoDrag(e: DragEvent): boolean {
+  const item = e.dataTransfer?.items[0]
+  return item !== undefined && item.kind === 'file' && item.type.startsWith('video/')
+}
 
 canvas.addEventListener('dragover', (e) => {
   if (!e.dataTransfer?.types.includes('Files')) return
@@ -676,7 +685,7 @@ canvas.addEventListener('dragover', (e) => {
       Node.scheduleFrame?.()
     }
     if (fileDragGhost === null) {
-      fileDragGhost = new ImageLayer()
+      fileDragGhost = isVideoDrag(e) ? new MediaLayer() : new ImageLayer()
       Layer.assignDebugName(fileDragGhost)
       fileDragGhost.bounds = { ...menuLayer.bounds }
       widget.beginExternalDrag(fileDragGhost, pt)
@@ -735,7 +744,9 @@ canvas.addEventListener('drop', (e) => {
   const dropPoint  = { x: e.offsetX, y: e.offsetY }
   const selected   = widget.selected
 
-  const newLayer = new ImageLayer()
+  const newLayer: ImageLayer | MediaLayer = file.type.startsWith('video/')
+    ? new MediaLayer()
+    : new ImageLayer()
   Layer.assignDebugName(newLayer)
   newLayer.bounds    = { ...menuLayer.bounds }
 

@@ -33,6 +33,7 @@ import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
 import { FlashLayer }      from './FlashLayer.js'
 import { VideoLayer }      from './VideoLayer.js'
+import { MediaLayer }      from './MediaLayer.js'
 import { TutorialLayer }   from './TutorialLayer.js'
 import { StrokeLayer }    from './StrokeLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
@@ -121,6 +122,7 @@ const BUTTONS: BtnDef[] = [
   { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
   { label: 'Rotate',     colour: '#7ecf7e', factory: () => new RotateLayer() },
   { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
+  { label: 'Media',      colour: '#7ecf7e', factory: () => new MediaLayer() },
   { label: 'Tutorial',   colour: '#a0a4b8', factory: () => new TutorialLayer() },
 ]
 
