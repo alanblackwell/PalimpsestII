@@ -20,6 +20,19 @@ import { ClipEllipseLayer } from './ClipEllipseLayer.js'
 import { ClipPathLayer }    from './ClipPathLayer.js'
 import { ClipTextLayer }    from './ClipTextLayer.js'
 import { ClipDrawingLayer } from './ClipDrawingLayer.js'
+import { ImageLayer }       from './ImageLayer.js'
+import { FillLayer }        from './FillLayer.js'
+import { NoiseLayer }       from './NoiseLayer.js'
+import { VideoLayer }       from './VideoLayer.js'
+
+// Layer types eligible for the "drag a Mask layer onto me" shortcut
+// (see main.ts's mask-drop callback): a plain ImageSource with no mask
+// input of its own, simple enough that wrapping it in a generic ClipLayer
+// is unambiguous.
+export function isClippableImageLayer(layer: Layer): boolean {
+  return layer instanceof ImageLayer || layer instanceof FillLayer ||
+    layer instanceof NoiseLayer || layer instanceof VideoLayer
+}
 
 // ------------------------------------------------------------
 // ClipLayer — clip an image to a mask region, with transform handles
@@ -134,6 +147,10 @@ export class ClipLayer extends Layer implements ImageSource {
   // The image input slot — exposed so main.ts can carry over its binding
   // (if any) when replacing this layer with a specialised Clip<Shape>.
   get imageSlot(): ParameterSlot { return this._imageSlot }
+
+  // The mask input slot — exposed so main.ts can bind it directly (e.g. the
+  // mask-drop shortcut that wraps an Image/Fill/Noise/Video layer in a Clip).
+  get maskSlot(): ParameterSlot { return this._maskSlot }
 
   setOnReplace(fn: (factory: () => ClipShapeLayer) => void): void {
     this._onReplace = fn

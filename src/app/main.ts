@@ -28,7 +28,11 @@ import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 import { StrokeLayer }       from '../layers/StrokeLayer.js'
-import { ClipLayer }         from '../layers/ClipLayer.js'
+import { RectLayer }         from '../layers/RectLayer.js'
+import { EllipseLayer }      from '../layers/EllipseLayer.js'
+import { PathLayer }         from '../layers/PathLayer.js'
+import { TextLayer }         from '../layers/TextLayer.js'
+import { ClipLayer, isClippableImageLayer } from '../layers/ClipLayer.js'
 import type { ClipShapeLayer } from '../layers/ClipLayer.js'
 import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
 import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
@@ -455,6 +459,60 @@ interaction.setCollectionAction(() => {
 interaction.setBoundCallback((source, slot) => {
   BindingLayer.create(source, slot)
   refreshStack()
+})
+
+// Dragging a Mask-producing layer's card from the stack onto an Image/Fill/
+// Noise/Video layer wraps that layer in a ClipLayer, bound to the dropped
+// mask. The ClipLayer takes the target's stack position; both the original
+// image-producing layer and the mask layer move to the Background
+// collection (still recomputing, recoverable via DeletionLayer's toggle).
+//
+// If the dropped layer is a shape (Rect/Ellipse/Path/Text) rather than a
+// dedicated mask source, it doesn't have a usable mask output on its own in
+// this context — so a new MaskLayer is created, the shape is bound into its
+// first shape slot, and that MaskLayer (not the shape) feeds clip.maskSlot.
+// Both the shape and the new MaskLayer move to Background, never appearing
+// in the stack.
+interaction.setMaskDropCallback((source, target) => {
+  if (!source.types.has(ValueType.Mask)) return
+  if (!isClippableImageLayer(target)) return
+
+  const below = target.layerBelow
+  if (below === null) return
+
+  const isShape = source instanceof RectLayer || source instanceof EllipseLayer ||
+    source instanceof PathLayer || source instanceof TextLayer
+
+  let maskSource: Node = source
+  if (isShape) {
+    const maskLayer = new MaskLayer()
+    Layer.assignDebugName(maskLayer)
+    // Insert temporarily so BindingLayer.create has a live stack position to
+    // attach to; both it and the resulting BindingLayer move to Background
+    // immediately afterwards (in the order that unwinds the stack cleanly),
+    // leaving the visible stack untouched.
+    maskLayer.insertAbove(target)
+    const bl = BindingLayer.create(source, maskLayer.firstShapeSlot)
+    if (bl !== null) backgroundLayer.add(bl)
+    backgroundLayer.add(maskLayer)
+    maskSource = maskLayer
+  }
+
+  const clip = new ClipLayer()
+  Layer.assignDebugName(clip)
+  clip.bounds = { ...target.bounds }
+
+  target.removeFromStack()
+  clip.insertAbove(below)
+
+  BindingLayer.create(target, clip.imageSlot)
+  BindingLayer.create(maskSource, clip.maskSlot)
+
+  backgroundLayer.add(target)
+  if (source instanceof Layer) backgroundLayer.add(source)
+
+  postInsertLayer(clip)
+  refreshStack(clip)
 })
 
 // Click on a parameter-slot row:

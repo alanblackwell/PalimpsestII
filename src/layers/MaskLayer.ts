@@ -86,6 +86,11 @@ export class MaskLayer extends Layer implements MaskSource {
 
   getMask(): MaskValue { return this._offscreen }
 
+  // The conventional "first shape" binding target — exposed so main.ts can
+  // bind a dropped shape directly (e.g. the mask-drop-on-image shortcut's
+  // shape branch, which wraps a Rect/Ellipse/Path/Text in a new MaskLayer).
+  get firstShapeSlot(): ParameterSlot { return this._shapeSlots[0]! }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

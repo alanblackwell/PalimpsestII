@@ -1122,3 +1122,54 @@ first touch). Rendered in its own pill directly below the main controls pill
 (`_opacityPillBounds()`, `OPACITY_H = 36`), FilterLayer/NoiseLayer-style
 track+thumb slider with a ●/○ bind indicator. `panelBottom` is overridden to
 sit below this second pill.
+
+## Mask-drop-on-image clipping shortcut (added June 2026)
+
+Dragging a Mask-producing layer's card out of the `LayerStackWidget` and
+dropping it onto a selected `ImageLayer`, `FillLayer`, `NoiseLayer`, or
+`VideoLayer` (the set returned by `isClippableImageLayer()` in
+`ClipLayer.ts`) wraps that layer in a `ClipLayer`:
+
+- A new `ClipLayer` takes the target layer's stack position
+  (`clip.bounds = {...target.bounds}`).
+- `clip.imageSlot` is bound to the target layer, `clip.maskSlot` to the
+  dropped mask layer (both via `BindingLayer.create`).
+- Both the target layer and the dropped mask layer are moved to
+  `backgroundLayer` — they keep recomputing (so the Clip's bindings stay
+  live) but no longer clutter the stack, and remain recoverable via
+  `DeletionLayer`'s Background toggle.
+- `postInsertLayer(clip)` wires the new Clip's "replace with
+  ClipRect/ClipEllipse/..." buttons (`wireClipLayer`) and runs
+  `applyDefaultBindings` (a no-op here, since both slots are already bound).
+
+This is implemented as a new bind-drag drop path in `InteractionSystem`:
+`_handleUp`'s widget-capture branch now tries, in order, a slot hit
+(`_onBound`), `_tryIngest` (CollectionLayer-style, now returns `boolean`),
+then — if neither consumed the drop — `_onMaskDrop` (`setMaskDropCallback`,
+wired in `main.ts`). The callback no-ops unless the dragged source's `types`
+includes `ValueType.Mask` and the drop target is `isClippableImageLayer`.
+
+### Dropping a shape (Rect/Ellipse/Path/Text)
+
+`RectLayer`, `EllipseLayer`, `PathLayer`, and `TextLayer` all declare
+`ValueType.Mask` in `types`, so they pass the same `source.types.has(Mask)`
+check as a dedicated `MaskLayer` — but their mask output (a silhouette of the
+shape itself) isn't normally what you'd want as a clip region directly, and
+they have no stack-position-independent way to be "the mask".
+
+So when the dropped `source` is one of these four shape types, the callback
+first creates a plain `new MaskLayer()`, binds the shape into
+`maskLayer.firstShapeSlot` (a new public getter for `_shapeSlots[0]`, the
+conventional first-shape binding target — same slot `MaskLayer.autoBindRules`
+uses), and uses that `MaskLayer` — not the shape — as the source for
+`clip.maskSlot`. Both the shape and the new `MaskLayer` are sent to
+`backgroundLayer`; the `MaskLayer` is never inserted into the visible stack.
+
+To create the shape→`firstShapeSlot` binding via the normal
+`BindingLayer.create` (which inserts the `BindingLayer` above its consumer in
+the *live* stack), the new `MaskLayer` is first inserted above `target`
+(`maskLayer.insertAbove(target)`) so it has a stack position to attach above.
+Immediately afterwards, both the resulting `BindingLayer` and the `MaskLayer`
+are moved to `backgroundLayer` (`BindingLayer` first, then `MaskLayer` — this
+order unwinds the temporary two-layer chain cleanly, restoring the original
+stack links with neither layer left dangling).

@@ -101,6 +101,7 @@ export class InteractionSystem {
   private _backgroundAction: (() => void) | null = null
   private _menuFocusAction:  (() => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
+  private _onMaskDrop:     ((source: Node, target: Layer) => void) | null = null
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
 
@@ -168,6 +169,14 @@ export class InteractionSystem {
   // Register a callback invoked when a bind-drag drop creates a binding.
   setBoundCallback(fn: (source: Node, slot: ParameterSlot) => void): void {
     this._onBound = fn
+  }
+
+  // Register a callback invoked when a bind-drag drop lands on the selected
+  // layer but doesn't hit a slot or an ingest drop zone — e.g. dropping a
+  // Mask-producing layer onto an Image/Fill/Noise/Video layer to wrap it in
+  // a ClipLayer.
+  setMaskDropCallback(fn: (source: Node, target: Layer) => void): void {
+    this._onMaskDrop = fn
   }
 
   // Register a callback invoked when the user clicks a parameter-slot row
@@ -350,8 +359,8 @@ export class InteractionSystem {
           const slot = selected.hitTestSlot(point)
           if (slot !== null) {
             this._onBound?.(src, slot)
-          } else {
-            this._tryIngest(src, selected, point)
+          } else if (!this._tryIngest(src, selected, point)) {
+            this._onMaskDrop?.(src, selected)
           }
         }
       } else {
@@ -369,15 +378,17 @@ export class InteractionSystem {
     this._updateHoverCursor(e)
   }
 
-  private _tryIngest(src: Node, selected: Layer, point: Point): void {
+  // Returns true if `selected` ingested `src` (consuming the drop).
+  private _tryIngest(src: Node, selected: Layer, point: Point): boolean {
     const s = selected as unknown as Record<string, unknown>
-    if (typeof s['ingest'] !== 'function') return
+    if (typeof s['ingest'] !== 'function') return false
     const zone = s['dropZoneBounds'] as { x: number; y: number; width: number; height: number } | undefined | null
-    if (!zone) return
+    if (!zone) return false
     if (point.x < zone.x || point.x > zone.x + zone.width ||
-        point.y < zone.y || point.y > zone.y + zone.height) return
+        point.y < zone.y || point.y > zone.y + zone.height) return false
     ;(s['ingest'] as (l: Node) => void)(src)
     this._refreshCallback?.()
+    return true
   }
 
   private _handleKey(e: KeyboardEvent): void {
