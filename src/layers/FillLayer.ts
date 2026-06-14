@@ -144,6 +144,14 @@ export class FillLayer extends Layer implements ImageSource {
   get directionSlot(): ParameterSlot { return this._directionSlot }
   get opacitySlot():   ParameterSlot { return this._opacitySlot   }
 
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual control, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._opacitySlot) return this._opacity
+    return null
+  }
+
   // ----------------------------------------------------------
   // Type cycling
   // ----------------------------------------------------------

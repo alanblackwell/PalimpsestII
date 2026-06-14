@@ -4,6 +4,7 @@ import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { Node }              from '../core/Node.js'
 import { ValueType, SlotState } from '../core/types.js'
+import type { Point, Direction } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { rndColour }         from '../core/colour.js'
 import { graph }             from '../dataflow/Graph.js'
@@ -558,6 +559,31 @@ interaction.setSlotClickCallback((consumer, slot) => {
           : null
       if (pos !== null) {
         const newLayer = new PointLayer(pos)
+        Layer.assignDebugName(newLayer)
+        newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+        newLayer.insertAbove(consumer)
+        BindingLayer.create(newLayer, slot)
+        refreshStack(newLayer)
+        return
+      }
+    }
+
+    // Generic: if the consumer's manual control already has a value for
+    // this slot (handle position, slider value, dial angle, ...), seed the
+    // new layer with that value so the binding is a no-op until the user
+    // changes it.
+    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction) {
+      const def = consumer.getSlotDefault(slot)
+      if (def !== null) {
+        let newLayer: Layer
+        if (slot.type === ValueType.Point) {
+          newLayer = new PointLayer(def as Point)
+        } else if (slot.type === ValueType.Amount) {
+          newLayer = new AmountLayer(def as number)
+        } else {
+          const d = def as Direction
+          newLayer = new DirectionLayer(d.angle, d.magnitude)
+        }
         Layer.assignDebugName(newLayer)
         newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
         newLayer.insertAbove(consumer)

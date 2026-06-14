@@ -1,7 +1,7 @@
 import { Node } from './Node.js'
 import { ParameterSlot } from './ParameterSlot.js'
 import { ValueType, SlotState } from './types.js'
-import type { Ctx2D, Point }  from './types.js'
+import type { Ctx2D, Point, Direction }  from './types.js'
 
 const SLOT_TC: Partial<Record<ValueType, string>> = {
   [ValueType.Amount]:    '#4a8fe8',
@@ -327,6 +327,15 @@ export abstract class Layer extends Node {
     const n = (Layer._typeCounters.get(base) ?? 0) + 1
     Layer._typeCounters.set(base, n)
     layer.debugName = `${base} ${n}`
+  }
+
+  // For an unbound Point/Amount/Direction slot, returns the value currently
+  // shown by this layer's manual control for that slot (handle position,
+  // slider value, etc) — so a layer created via the slot-click-to-create
+  // gesture starts as a no-op binding. Return null to fall back to the
+  // slot type's canonical default (DEFAULT_VALUE_LAYER in main.ts).
+  getSlotDefault(_slot: ParameterSlot): Point | number | Direction | null {
+    return null
   }
 
   // Default bindings to create when this layer is first added to the stack.

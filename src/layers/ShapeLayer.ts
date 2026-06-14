@@ -9,7 +9,7 @@ import {
   type EventValue, type EventSource,
   type MaskValue,  type MaskSource,
   type ImageValue, type ImageSource,
-  type DirectionSource,
+  type Direction,  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -141,6 +141,17 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   abstract samplePerimeter(t: number): Point
 
   getPoint(): Point { return { ...this._currentPoint } }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual control, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this.positionSlot) return { x: this._cx, y: this._cy }
+    if (slot === this.opacitySlot)  return this._opacity
+    if (slot === this.phaseSlot)    return this._phase
+    if (slot === this.rotationSlot) return { angle: this._angle, magnitude: 1 }
+    return null
+  }
 
   getMask():  MaskValue  { return this._maskCanvas  }
   getImage(): ImageValue { return this._imageCanvas }

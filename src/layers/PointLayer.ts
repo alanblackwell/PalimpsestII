@@ -6,6 +6,7 @@ import {
   boundingBoxContains,
   type Point,  type PointSource,
   type Amount, type AmountSource,
+  type Direction,
   type RateSource,
   type EventSource,
   type MaskSource, type MaskValue,
@@ -248,6 +249,14 @@ export class PointLayer extends Layer implements PointSource {
   get amountSlot():       ParameterSlot { return this._amountSlot       }
   get speedSlot():        ParameterSlot { return this._speedSlot        }
   get maskSlot():         ParameterSlot { return this._maskSlot         }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the manual control, so the binding starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._slot)       return { ...this._point }
+    if (slot === this._amountSlot) return this._amount
+    return null
+  }
 
   cycleNext(): void { this._algoIndex = (this._algoIndex + 1) % WANDER_TYPES.length; this.markDirty() }
   cyclePrev(): void { this._algoIndex = (this._algoIndex - 1 + WANDER_TYPES.length) % WANDER_TYPES.length; this.markDirty() }

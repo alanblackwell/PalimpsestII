@@ -6,7 +6,7 @@ import {
   type ImageValue, type ImageSource,
   type Amount,     type AmountSource,
   type Point,      type PointSource,
-  type DirectionSource,
+  type Direction,  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -441,6 +441,17 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   get detailSlot():   ParameterSlot { return this._detailSlot   }
   get positionSlot(): ParameterSlot { return this._positionSlot }
   get driftSlot():    ParameterSlot { return this._driftSlot    }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual slider, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._scaleSlot)  return this._scale
+    if (slot === this._speedSlot)  return this._speed
+    if (slot === this._detailSlot) return this._detail
+    if (slot === this._driftSlot)  return this._drift
+    return null
+  }
 
   // ----------------------------------------------------------
   // Cycling / seed / manual parameters

@@ -490,6 +490,16 @@ export class FilterLayer extends Layer implements ImageSource {
 
   get sourceSlot(): ParameterSlot { return this._sourceSlot }
 
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding intensity slider, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | null {
+    for (const row of this._rows) {
+      if (slot === row.amountSlot) return row.intensity
+    }
+    return null
+  }
+
   override autoBindRules() {
     return [{
       slot:    this._sourceSlot,

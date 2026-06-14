@@ -126,6 +126,19 @@ export class ColourLayer extends Layer implements ColourSource {
 
   get slot(): ParameterSlot { return this._slot }
 
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the picker, so the binding starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | null {
+    if (slot === this._hueSlot) return this._picker.hue / 360
+    if (slot === this._posSlot) {
+      return {
+        x: this._picker.sat * Node.canvasWidth,
+        y: (1 - this._picker.val) * Node.canvasHeight,
+      }
+    }
+    return null
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

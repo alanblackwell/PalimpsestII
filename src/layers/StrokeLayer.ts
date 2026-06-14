@@ -8,7 +8,7 @@ import {
   type Point,  type PointSource,
   type ImageValue, type ImageSource,
   type MaskValue,  type MaskSource,
-  type DirectionSource,
+  type Direction,  type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
@@ -178,6 +178,15 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   getStrokeEnd(): Point {
     const last = this._localSegs[this._localSegs.length - 1]
     return this._localToCanvasRaw(last?.p1 ?? { x: this._localHalfW, y: 0 })
+  }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual control, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this.widthSlot)    return Math.max(0, Math.min(1, this._strokeWidth / 30))
+    if (slot === this.rotationSlot) return { angle: this._rotation, magnitude: 1 }
+    return null
   }
 
   // Suppress pixel-pick scan while the user is actively sketching.

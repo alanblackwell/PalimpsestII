@@ -115,6 +115,11 @@ export class ColourPickerRegion extends Region {
   // Current HSV-derived colour (always up to date with user drags).
   get colour(): Colour { return hsvToRgb(this._hue, this._sat, this._val) }
 
+  // Raw HSV components, for seeding hue/position slot defaults.
+  get hue(): number { return this._hue }
+  get sat(): number { return this._sat }
+  get val(): number { return this._val }
+
   // ----------------------------------------------------------
   // Interactive state
   // ----------------------------------------------------------

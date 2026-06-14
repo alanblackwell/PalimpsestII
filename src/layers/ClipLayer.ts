@@ -9,7 +9,7 @@ import {
   type ImageValue,     type ImageSource,
   type MaskSource,
   type Point,          type PointSource,
-  type DirectionSource,
+  type Direction,      type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -154,6 +154,19 @@ export class ClipLayer extends Layer implements ImageSource {
 
   setOnReplace(fn: (factory: () => ClipShapeLayer) => void): void {
     this._onReplace = fn
+  }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual control, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._positionSlot)  return this._manualPosition ?? this._position
+    if (slot === this._scaleSlot) {
+      const scale = this._manualScale ?? this._scale
+      return Math.max(0, Math.min(1, (scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)))
+    }
+    if (slot === this._rotationSlot)  return { angle: this._rotation, magnitude: 1 }
+    return null
   }
 
   // True if this layer has state beyond its image binding that the user

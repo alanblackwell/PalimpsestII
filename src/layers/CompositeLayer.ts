@@ -7,6 +7,7 @@ import {
   type ImageValue, type ImageSource,
   type MaskValue,  type MaskSource,
   type Amount,     type AmountSource,
+  type Direction,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -152,6 +153,13 @@ export class CompositeLayer extends Layer implements ImageSource {
   get rightSlot():   ParameterSlot { return this._rightSlot   }
   get maskSlot():    ParameterSlot { return this._maskSlot    }
   get opacitySlot(): ParameterSlot { return this._opacitySlot }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the manual slider, so the binding starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._opacitySlot) return this._amount
+    return null
+  }
 
   // ----------------------------------------------------------
   // Amount handle

@@ -77,6 +77,13 @@ export class AmountLayer extends Layer implements AmountSource {
 
   get slot(): ParameterSlot { return this._slot }
 
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the slider, so the binding starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | null {
+    if (slot === this._slot) return this._value
+    return null
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

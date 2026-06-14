@@ -10,7 +10,7 @@ import {
   type Amount,          type AmountSource,
   type MaskValue, type MaskSource,
   type ImageValue, type ImageSource,
-  type DirectionSource,
+  type Direction,       type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -184,6 +184,19 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get sizeSlot():     ParameterSlot { return this._sizeSlot     }
   get maskSlot():     ParameterSlot { return this._maskSlot     }
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
+
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the corresponding manual control, so the binding
+  // starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._positionSlot) return this._manualPosition ?? this._position
+    if (slot === this._sizeSlot) {
+      const size = this._manualSize
+      return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
+    }
+    if (slot === this._rotationSlot) return { angle: this._rotation, magnitude: 1 }
+    return null
+  }
 
   // ----------------------------------------------------------
   // MaskSource

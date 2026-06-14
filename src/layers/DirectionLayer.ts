@@ -106,6 +106,13 @@ export class DirectionLayer extends Layer implements DirectionSource {
   getDialPosition(): Point { return { ...this._position } }
   getHandlePosition(): Point { return this._rotateHandlePos() }
 
+  // Seed a newly-created layer (via slot-click-to-create) with the value
+  // currently shown by the manual control, so the binding starts as a no-op.
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._magnitudeSlot) return this._magnitude
+    return null
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
