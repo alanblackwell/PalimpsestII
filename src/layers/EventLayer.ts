@@ -241,16 +241,6 @@ export class EventLayer extends Layer implements EventSource {
       ctx.setLineDash([])
     }
 
-    // Fire flash — blooms from the target point.
-    if (bright > 0) {
-      const base   = this._threshold ?? 16
-      const flashR = base * (0.6 + bright * 0.6)
-      ctx.beginPath()
-      ctx.arc(tgt.x, tgt.y, flashR, 0, Math.PI * 2)
-      ctx.fillStyle = `rgba(224,224,96,${(bright * 0.40).toFixed(2)})`
-      ctx.fill()
-    }
-
     // Target crosshair.
     const r = 7
     ctx.strokeStyle = bright > 0
@@ -275,7 +265,31 @@ export class EventLayer extends Layer implements EventSource {
     this._drawPill(ctx, cp)
     if (!this._animPathSlot.isActive || !this._targetSlot.isActive) {
       this._renderBlob(ctx)
+    } else {
+      this._renderFireFlash(ctx)
     }
+  }
+
+  // Fire flash — blooms from the target point. A control indicator (shows
+  // where/when the proximity trigger fires), not part of the rendered
+  // content, so it's drawn here (selected layer + edit mode only) rather
+  // than in renderSelf.
+  private _renderFireFlash(ctx: Ctx2D): void {
+    const now    = performance.now()
+    const age    = this._eventTime !== null ? (now - this._eventTime) / 1000 : Infinity
+    const bright = Math.max(0, 1 - age)
+    if (bright <= 0) return
+
+    const tgt    = (this._targetSlot.source as PointSource).getPoint()
+    const base   = this._threshold ?? 16
+    const flashR = base * (0.6 + bright * 0.6)
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(tgt.x, tgt.y, flashR, 0, Math.PI * 2)
+    ctx.fillStyle = `rgba(224,224,96,${(bright * 0.40).toFixed(2)})`
+    ctx.fill()
+    ctx.restore()
   }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {

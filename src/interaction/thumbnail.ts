@@ -181,15 +181,17 @@ export function drawLayerThumbnail(
   }
 
   // ── Event ──────────────────────────────────────────────────
+  // A subtle pulse — enough to signal "this is firing" without being
+  // visually distracting in the stack/background thumbnail grids.
   if (t.has(ValueType.Event)) {
     const et      = l['getEventTime']?.() as number | null
     const age     = et !== null && et !== undefined ? performance.now() - et : 9999
     const pulse   = Math.max(0, 1 - age / 900)
     const tc      = typeColor(layer)
-    ctx.fillStyle = tc + Math.round(pulse * 200).toString(16).padStart(2, '0')
+    ctx.fillStyle = tc + Math.round(pulse * 90).toString(16).padStart(2, '0')
     ctx.fillRect(0, 0, w, h)
     if (pulse > 0.05) {
-      ctx.fillStyle = `rgba(255,255,200,${pulse * 0.8})`
+      ctx.fillStyle = `rgba(255,255,200,${(pulse * 0.35).toFixed(2)})`
       ctx.beginPath()
       ctx.arc(w / 2, h / 2, Math.round(h * 0.25 * pulse), 0, Math.PI * 2)
       ctx.fill()
