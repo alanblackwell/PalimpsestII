@@ -4,6 +4,7 @@ import {
   SlotState,
   type Colour,
   type Point,
+  type PointSource,
   type DirectionSource,
   type Ctx2D,
 } from '../core/types.js'
@@ -107,9 +108,10 @@ export class PathLayer extends ShapeLayer {
   }
 
   // ----------------------------------------------------------
-  // Node — slot-driven rotation is applied to the control points
-  // directly (PathLayer has no separate width/height/angle render
-  // transform), then super.recompute() resolves `_angle` to match.
+  // Node — slot-driven rotation and position are applied to the
+  // control points directly (PathLayer has no separate
+  // width/height/centre render transform), then super.recompute()
+  // resolves `_angle`/`_cx`/`_cy` to match.
   // ----------------------------------------------------------
 
   protected override recompute(): void {
@@ -119,6 +121,15 @@ export class PathLayer extends ShapeLayer {
       if (delta !== 0) {
         const c = this._centroid()
         this._points = this._points.map(p => rotatePoint(p, c, delta))
+      }
+    }
+    if (this.positionSlot.isActive) {
+      const p = (this.positionSlot.source as PointSource).getPoint()
+      const c = this._centroid()
+      const dx = p.x - c.x
+      const dy = p.y - c.y
+      if (dx !== 0 || dy !== 0) {
+        this._points = this._points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }))
       }
     }
     super.recompute()
