@@ -136,6 +136,10 @@ Provides cycle detection at bind time — `graph.canBind(source, consumer)`.
 12. Optional: add a branch to `postInsertLayer` in `main.ts` if the new layer
     needs extra creation-time wiring (hidden-helper masks, auto-bound
     Clock/Rate, eject callbacks, etc.)
+13. Add an entry to the `LAYER_CLASSES` registry in
+    `src/persistence/Persistence.ts` (factory function for save/load), and
+    override `serializeState`/`deserializeState` for any manual fields that
+    must survive a save — see "Persistence (save/load)" below.
 
 ## Layer panel conventions
 
@@ -425,8 +429,36 @@ and the mask source to `BackgroundLayer`).
 | `src/layers/BackgroundLayer.ts` | Off-stack collection for layers that must keep recomputing |
 | `src/layers/ClockLayer.ts` | Singleton time source, `outsideStack` but ticked every frame |
 | `src/layers/FilterGL.ts` | Shared WebGL pipeline singleton for `FilterLayer` |
+| `src/persistence/Persistence.ts` | Save/load — `LAYER_CLASSES` registry, serialize/deserialize |
 | `spec/architecture.md` | Detailed architecture specification |
 | `spec/feature-log.md` | Per-feature implementation notes (historical reference) |
+
+## Persistence (save/load)
+
+`src/persistence/Persistence.ts` serializes the whole session (main stack,
+hidden helpers, `BackgroundLayer` items, `DeletionLayer` archive,
+`CollectionLayer` ingested items, and every `ParameterSlot` binding) to a
+single JSON document, and reconstructs it on load via the `LAYER_CLASSES`
+registry.
+
+**Any change that adds, renames, or removes a layer class, or adds/changes a
+manually-set field that isn't fully derived from slot inputs in
+`recompute()`, must be reflected here too**:
+
+- New layer class → add it to `LAYER_CLASSES` (factory function).
+- New manual field (slider value, mode flag, geometry, painted raster, etc.)
+  → add it to that layer's `serializeState()`/`deserializeState()` (override
+  `Node.serializeState`/`deserializeState` — defaults are no-ops). Only
+  manual/fallback state needs persisting; fields fully recomputed from slot
+  sources every frame don't.
+- New cross-references that aren't plain `ParameterSlot` bindings (like
+  `CollectionLayer._layers` or mask-tracker links) need their own id-resolution
+  step in `serialize()`/`deserialize()` — see the `itemIds` /
+  `setMaskTracker` handling for the existing patterns.
+- After any such change, run `npm run typecheck` (baseline is the
+  pre-existing ~451-line warning count — new errors should be 0) and do a
+  manual save → reload → load round-trip of a stack using the new/changed
+  layer.
 
 ## Known issues / pre-existing tech debt
 
