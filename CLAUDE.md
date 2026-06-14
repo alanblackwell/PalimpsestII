@@ -332,27 +332,36 @@ Also fixed: `renderPanel` on both `ColourLayer` and `AmountLayer` was calling
 `_drawPill` twice (once for `this.bounds`, once for the canvas-space panel) —
 the duplicate call against `this.bounds` was removed.
 
-## ColourLayer image-sample pill (added June 2026)
+## ColourLayer hue/position and image-sample slot rows (added June 2026)
 
-`ColourLayer` gained a second canvas-space pill, drawn directly below the
-main picker pill (`_samplePillBounds()`: same x/width as `canvasBounds`,
-`y = canvasBounds.y + canvasBounds.height + 8`, `height = 84`). It lets the
-colour be derived by averaging pixels from another image around a point.
+`ColourLayer` derives its colour either from the bound `_slot` (Colour), from
+two slots that drive the HSV picker directly (`_hueSlot`: Amount, `_posSlot`:
+Point — see "ColourLayer hue/position slots" above), or by sampling pixels
+from another image around a point. All six slots
+(`_slot, _hueSlot, _posSlot, _sampleEnableSlot, _sampleImageSlot,
+_samplePointSlot`) are pushed onto `this.slots[]` in that order and get
+standard bind rows from `Layer.renderSlots`, starting at the default
+`panelBottom` (directly below the main picker pill) — `panelBottom` is **not**
+overridden.
 
-Three new slots (pushed onto `this.slots[]`, so they get standard bind rows
-below `panelBottom`):
+The three sample slots are:
 
-- **`_sampleImageSlot`** (Image) — source to sample from
-- **`_samplePointSlot`** (Point) — canvas-space location to sample around
 - **`_sampleEnableSlot`** (Event) — rising edge toggles `_sampleEnabled`,
   same rising-edge pattern as `RootLayer.toggleSlot`
+- **`_sampleImageSlot`** (Image) — source to sample from
+- **`_samplePointSlot`** (Point) — canvas-space location to sample around
 
-The pill's row 1 has a `sample` label, ●/◐/○ indicators for the point and
-image slots, and an enable/disable toggle button (`_sampleToggleBounds`,
-`_handleSampleToggle()` — Bound→suspend, SuspendedBound→resume, Unbound→flip
-`_sampleEnabled`, identical to `RootLayer._handleToggle`). Row 2 is a
-FillLayer-style slider for `_sampleRadius` (`[2,100]` px, manual only — no
-slot binding).
+`override renderSlots` calls `super.renderSlots(ctx)` (drawing all six
+standard rows), then draws an additive accent-bordered group (`SAMPLE_ACCENT`
+= Colour accent `#e8944a`) around the three sample-slot rows plus one extra
+row below them for a `_sampleRadius` slider (`[2,100]` px, manual only — no
+slot binding; `_sampleGroupGeom()`/`_sampleSliderGeom()` compute this
+geometry from `this.slots.indexOf(_sampleEnableSlot)` and `panelBottom`). An
+enable/disable toggle button (`_sampleToggleBounds`, `_handleSampleToggle()`
+— Bound→suspend, SuspendedBound→resume, Unbound→flip `_sampleEnabled`,
+identical to `RootLayer._handleToggle`) is overlaid on the
+`_sampleEnableSlot` row, coloured with `EV_ACCENT` (`#e0e060`, the Event
+accent).
 
 `recompute()`: after computing `_colour` via the existing slot/picker logic,
 a rising edge on `_sampleEnableSlot` flips `_sampleEnabled`; if enabled,
@@ -365,10 +374,10 @@ point, or `null` if either slot is unbound, the image is unavailable, or the
 sampled area is fully transparent — in which case the colour computed above
 (bound Colour slot, or interactive picker) is used unchanged.
 
-`hitTestSelf`/`handlePointerDown/Move/Up` check the toggle button and slider
-before falling back to `_picker.hitTest(point)`; the picker's own bounds stay
-confined to the main pill, so there's no overlap. `panelBottom` is overridden
-to sit below the new pill.
+`hitTestSelf`/`handlePointerDown/Move/Up` check the toggle button
+(`_sampleToggleBounds`) and slider (`_sliderHit`) before falling back to
+`_picker.hitTest(point)`; the picker's own bounds stay confined to the main
+pill, so there's no overlap.
 
 ## Edit-mode drop shadow and depth fade (fixed June 2026)
 
