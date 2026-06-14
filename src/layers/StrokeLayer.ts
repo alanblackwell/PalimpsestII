@@ -43,6 +43,7 @@ import { BindingLayer }  from './BindingLayer.js'
 // AnimPath provides its own phase; StrokeLayer needs no phase slot.
 
 const ACCENT     = '#e86a4a'
+const AM_COL     = '#4a8fe8'   // Amount type accent (stroke-width slot)
 const PANEL_X    = 300
 const PANEL_W    = 260
 const HANDLE_R   = 7     // circle handle radius
@@ -52,6 +53,14 @@ const ROT_ARM    = 85    // rotation arm length from centre (px)
 const ARC_STEP   = 20    // sub-samples per Bézier segment for arc table
 const RDP_EPS    = 8     // Ramer-Douglas-Peucker tolerance (px)
 const MAX_HANDLE_BOOST = 3   // cap on control-point lengthening when shrunk below drawn size
+
+// Stroke-width control pill (slider + binding row), drawn directly below
+// the standard slot pill — see ShapeLayer's stroke-control pill.
+const SLOT_H    = 26
+const SLOT_GAP  = 4
+const SW_LABEL_W = 78
+const SW_VALUE_W = 38
+const MAX_STROKE_WIDTH = 30   // Amount [0,1] -> stroke width [0.5, 30] px
 
 type DragState =
   | { type: 'move';   startMouse: Point; startCx: number; startCy: number }
@@ -114,6 +123,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   // Handle drag
   private _drag: DragState | null = null
+  private _strokeSliderDrag = false
 
   // Draw-button bounds (written during renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BBox | null = null
@@ -184,7 +194,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this.widthSlot)    return Math.max(0, Math.min(1, this._strokeWidth / 30))
+    if (slot === this.widthSlot)    return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
     if (slot === this.rotationSlot) return { angle: this._rotation, magnitude: 1 }
     return null
   }
@@ -198,7 +208,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   protected recompute(): void {
     if (this.widthSlot.isActive) {
-      this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * 30)
+      this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * MAX_STROKE_WIDTH)
     }
     if (this.colourSlot.isActive) {
       this._colour = (this.colourSlot.source as ColourSource).getColour()
@@ -433,6 +443,126 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     }
   }
 
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const standardSlots = this.slots.filter(s => s !== this.widthSlot)
+    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    this._drawStrokeWidthPill(ctx)
+  }
+
+  private _strokeWidthPillBounds(): BBox {
+    const standardSlots = this.slots.filter(s => s !== this.widthSlot)
+    const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    return { x: PANEL_X, y: this.panelBottom + standardH + 8, width: PANEL_W, height: 2 * SLOT_H + SLOT_GAP }
+  }
+
+  private _strokeSliderRowBounds(): BBox {
+    const pb = this._strokeWidthPillBounds()
+    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
+  }
+
+  private _strokeBindRowBounds(): BBox {
+    const pb = this._strokeWidthPillBounds()
+    return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
+  }
+
+  private _strokeSliderGeom() {
+    const b = this._strokeSliderRowBounds()
+    const midY = b.y + b.height / 2
+    const labelX = b.x + 12
+    const indX = b.x + b.width - 8
+    const valueRight = indX - 14
+    const sld0 = labelX + SW_LABEL_W
+    const sldR = valueRight - SW_VALUE_W - 6
+    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  }
+
+  private _drawStrokeWidthPill(ctx: Ctx2D): void {
+    this._drawStrokeWidthSlider(ctx)
+    this.renderSlotGroup(ctx, [this.widthSlot], this._strokeBindRowBounds().y)
+  }
+
+  private _drawStrokeWidthSlider(ctx: Ctx2D): void {
+    const g = this._strokeSliderGeom()
+    const { x, y, width, height } = g.b
+
+    const active = this.widthSlot.isActive
+    const colour = active ? AM_COL : ACCENT
+    const v01 = Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, 6)
+    ctx.fill()
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('stroke width', g.labelX, g.midY)
+
+    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, g.valueRight, g.midY)
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+
+    ctx.restore()
+  }
+
+  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
+    const thumbR = 5
+    const lo = x0 + thumbR
+    const hi = x1 - thumbR
+    const range = Math.max(0, hi - lo)
+    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
+
+    ctx.lineCap = 'round'
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth = 3
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(hi, midY)
+    ctx.stroke()
+
+    ctx.strokeStyle = colour
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(thumbX, midY)
+    ctx.stroke()
+
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  private _setStrokeWidthFromPointer(px: number): void {
+    if (this.widthSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.widthSlot)?.toggle()
+    }
+    const g = this._strokeSliderGeom()
+    const thumbR = 5
+    const lo = g.sld0 + thumbR
+    const hi = g.sldR - thumbR
+    const range = Math.max(1e-6, hi - lo)
+    const v = Math.max(0, Math.min(1, (px - lo) / range))
+    this._strokeWidth = Math.max(0.5, v * MAX_STROKE_WIDTH)
+    this.markDirty()
+  }
+
+  private _strokeSliderHit(point: Point): boolean {
+    return this._inBox(point, this._strokeSliderRowBounds())
+  }
+
   // ----------------------------------------------------------
   // Hit testing
   // ----------------------------------------------------------
@@ -445,6 +575,8 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     if (this._drag !== null) return this
 
     if (this._drawBtnBounds !== null && this._inBox(point, this._drawBtnBounds)) return this
+
+    if (this._strokeSliderHit(point)) return this
 
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
@@ -465,6 +597,13 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
     if (this._drawMode) {
       this._rawPoints = [{ ...point }]
+      this.markDirty()
+      return true
+    }
+
+    if (this._strokeSliderHit(point)) {
+      this._strokeSliderDrag = true
+      this._setStrokeWidthFromPointer(point.x)
       this.markDirty()
       return true
     }
@@ -514,6 +653,10 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   }
 
   handlePointerMove(point: Point): void {
+    if (this._strokeSliderDrag) {
+      this._setStrokeWidthFromPointer(point.x)
+      return
+    }
     if (this._drawMode) {
       this._rawPoints.push({ ...point })
       this.markDirty()
@@ -543,6 +686,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       this._drawMode  = false
     }
     this._drag = null
+    this._strokeSliderDrag = false
     this.markDirty()
   }
 

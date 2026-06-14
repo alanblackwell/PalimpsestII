@@ -10,6 +10,7 @@ export class EllipseLayer extends ShapeLayer {
     colour: Colour,
     opacity: number,
     filled: boolean,
+    strokeWidth: number,
   ): void {
     const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
@@ -21,7 +22,7 @@ export class EllipseLayer extends ShapeLayer {
       ctx.fill()
     } else {
       ctx.strokeStyle = css
-      ctx.lineWidth   = 2
+      ctx.lineWidth   = strokeWidth
       ctx.stroke()
     }
     ctx.restore()

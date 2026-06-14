@@ -148,6 +148,7 @@ export class PathLayer extends ShapeLayer {
     colour: Colour,
     opacity: number,
     filled: boolean,
+    strokeWidth: number,
   ): void {
     if (this._points.length < 2) return
     const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
@@ -166,7 +167,7 @@ export class PathLayer extends ShapeLayer {
       ctx.fill()
     } else {
       ctx.strokeStyle = css
-      ctx.lineWidth   = 2
+      ctx.lineWidth   = strokeWidth
       ctx.stroke()
     }
 
@@ -199,6 +200,7 @@ export class PathLayer extends ShapeLayer {
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) return this
     }
+    if (this._strokeSliderHit(point)) return this
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) return this
@@ -215,10 +217,22 @@ export class PathLayer extends ShapeLayer {
       const b = this._toggleBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) {
-        this._filled = !this._filled
+        if (this.fillModeSlot.state === SlotState.Bound) {
+          this.fillModeSlot.suspend()
+        } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
+          this.fillModeSlot.resume()
+        } else {
+          this._filled = !this._filled
+        }
         this.markDirty()
         return true
       }
+    }
+    if (this._strokeSliderHit(point)) {
+      this._strokeSliderDrag = true
+      this._setStrokeWidthFromPointer(point.x)
+      this.markDirty()
+      return true
     }
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
@@ -282,6 +296,10 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerMove(point: Point): void {
+    if (this._strokeSliderDrag) {
+      this._setStrokeWidthFromPointer(point.x)
+      return
+    }
     if (this._specialDrag === 'center') {
       const dx = point.x - this._dragStartPtr.x
       const dy = point.y - this._dragStartPtr.y
@@ -320,6 +338,7 @@ export class PathLayer extends ShapeLayer {
   override handlePointerUp(): void {
     this._specialDrag = null
     this._dragIndex   = -1
+    this._strokeSliderDrag = false
     this.markDirty()
   }
 
