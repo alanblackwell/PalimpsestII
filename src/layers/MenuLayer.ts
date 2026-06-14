@@ -74,7 +74,7 @@ const rnd  = () => Math.random()
 const rndR = (lo: number, hi: number) => lo + rnd() * (hi - lo)
 
 // Random shape geometry: position and size guaranteed to fit within the canvas.
-function rndShape(canvasW: number, canvasH: number): { cx: number; cy: number; sw: number; sh: number } {
+export function rndShape(canvasW: number, canvasH: number): { cx: number; cy: number; sw: number; sh: number } {
   const sw = rndR(0.10, 0.40) * canvasW
   const sh = rndR(0.10, 0.35) * canvasH
   const cx = rndR(sw / 2, canvasW - sw / 2)

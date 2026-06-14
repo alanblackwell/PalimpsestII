@@ -156,6 +156,15 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   getMask():  MaskValue  { return this._maskCanvas  }
   getImage(): ImageValue { return this._imageCanvas }
 
+  // Switch between filled and outline rendering — used by the random
+  // shape factory (slot-click-to-create) to start new shapes in outline
+  // mode, since their main purpose there is to define a region, not to
+  // add coloured content.
+  setFilled(filled: boolean): void {
+    this._filled = filled
+    this.markDirty()
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

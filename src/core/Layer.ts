@@ -338,6 +338,14 @@ export abstract class Layer extends Node {
     return null
   }
 
+  // True if `slot` is conventionally filled with a freshly-created closed
+  // shape (Rect/Ellipse/Path, in outline mode) via the slot-click-to-create
+  // gesture, rather than the slot type's canonical default layer — e.g. an
+  // AnimPath's shape slot or a MaskLayer's shape slots.
+  wantsShapeForSlot(_slot: ParameterSlot): boolean {
+    return false
+  }
+
   // Default bindings to create when this layer is first added to the stack.
   // Each rule names a slot and a predicate that selects a compatible source layer.
   // main.ts walks down from this layer and binds the first match for each rule.

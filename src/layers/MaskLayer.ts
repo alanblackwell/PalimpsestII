@@ -113,6 +113,12 @@ export class MaskLayer extends Layer implements MaskSource {
   // shape branch, which wraps a Rect/Ellipse/Path/Text in a new MaskLayer).
   get firstShapeSlot(): ParameterSlot { return this._shapeSlots[0]! }
 
+  // The shape slots are conventionally filled with a fresh closed shape
+  // (Rect/Ellipse/Path) in outline mode, not another MaskLayer.
+  override wantsShapeForSlot(slot: ParameterSlot): boolean {
+    return this._shapeSlots.includes(slot)
+  }
+
   // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------

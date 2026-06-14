@@ -60,6 +60,12 @@ export class AnimPathLayer extends Layer implements PointSource {
   // PointSource
   getPoint(): Point { return { ...this._currentPoint } }
 
+  // The shape slot is conventionally filled with a fresh closed shape
+  // (Rect/Ellipse/Path) for the path to follow, not a plain PointLayer.
+  override wantsShapeForSlot(slot: ParameterSlot): boolean {
+    return slot === this.shapeSlot
+  }
+
   // Current phase [0, 1) — exposed so EventLayer can detect cycle wraps.
   get phase(): number { return this._phase }
 

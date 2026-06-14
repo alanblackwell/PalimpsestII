@@ -15,7 +15,7 @@ import { ImageLayer }        from '../layers/ImageLayer.js'
 import { MediaLayer }        from '../layers/MediaLayer.js'
 import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
-import { MenuLayer }         from '../layers/MenuLayer.js'
+import { MenuLayer, rndShape } from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
 import { BackgroundLayer }   from '../layers/BackgroundLayer.js'
 import { AmountLayer }       from '../layers/AmountLayer.js'
@@ -243,6 +243,37 @@ function wireTutorialLayer(tl: TutorialLayer): void {
     postInsertLayer(newLayer)
     refreshStack(tl)   // keep TutorialLayer selected, like MenuLayer keeps itself selected
   })
+}
+
+// ------------------------------------------------------------------
+// Generic shape factory — used to populate empty slots that are
+// conventionally bound to a shape (AnimPath's shape slot, MaskLayer's
+// shape slots; see Layer.wantsShapeForSlot). Picks a closed shape type at
+// random and starts it in outline mode, since its role here is to define
+// a region/path, not to add coloured content.
+// ------------------------------------------------------------------
+function randomClosedShapeLayer(canvasW: number, canvasH: number): Layer {
+  const s = rndShape(canvasW, canvasH)
+  const pick = Math.floor(Math.random() * 3)
+  const shape =
+    pick === 0 ? new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) :
+    pick === 1 ? new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) :
+    new PathLayer(undefined, s.cx, s.cy, rndColour())
+  shape.setFilled(false)
+  return shape
+}
+
+// Search down the stack from `consumer` for an existing shape layer whose
+// silhouette could serve as a Mask's initial content — used when an empty
+// Mask-typed slot (other than MaskLayer's own shape slots, see
+// Layer.wantsShapeForSlot) is clicked.
+function findSuitableMaskShape(consumer: Layer): Layer | null {
+  for (let l: Layer | null = consumer.layerBelow; l !== null; l = l.layerBelow) {
+    if (l.isInfrastructure || l.isHiddenHelper) continue
+    if (l instanceof RectLayer || l instanceof EllipseLayer || l instanceof PathLayer ||
+        l instanceof TextLayer || l instanceof StrokeLayer) return l
+  }
+  return null
 }
 
 // ------------------------------------------------------------------
@@ -591,6 +622,49 @@ interaction.setSlotClickCallback((consumer, slot) => {
         refreshStack(newLayer)
         return
       }
+    }
+
+    // Slots conventionally bound to a shape (AnimPath's shape slot,
+    // MaskLayer's shape slots) get a fresh random closed shape in outline
+    // mode, instead of the slot type's normal canonical default.
+    if (consumer.wantsShapeForSlot(slot)) {
+      const newLayer = randomClosedShapeLayer(canvas.width, canvas.height)
+      Layer.assignDebugName(newLayer)
+      newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+      newLayer.insertAbove(consumer)
+      BindingLayer.create(newLayer, slot)
+      refreshStack(newLayer)
+      return
+    }
+
+    // Other empty Mask-typed slots (e.g. ClipLayer.maskSlot, TextLayer.maskSlot):
+    // wrap a shape's silhouette in a MaskLayer, sent to Background. Reuses a
+    // suitable existing shape from the stack below the consumer if one
+    // exists; otherwise creates a fresh random outline shape (as above),
+    // which stays in the stack and becomes the current layer.
+    if (slot.type === ValueType.Mask) {
+      let shapeLayer = findSuitableMaskShape(consumer)
+      if (shapeLayer === null) {
+        shapeLayer = randomClosedShapeLayer(canvas.width, canvas.height)
+        Layer.assignDebugName(shapeLayer)
+        shapeLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+        shapeLayer.insertAbove(consumer)
+      }
+
+      const maskLayer = new MaskLayer()
+      Layer.assignDebugName(maskLayer)
+      // Insert temporarily so BindingLayer.create has a live stack position
+      // to attach to; both it and the resulting BindingLayer move to
+      // Background immediately afterwards, leaving shapeLayer's position
+      // (and the rest of the stack) untouched.
+      maskLayer.insertAbove(shapeLayer)
+      const bl = BindingLayer.create(shapeLayer, maskLayer.firstShapeSlot)
+      if (bl !== null) backgroundLayer.add(bl)
+      backgroundLayer.add(maskLayer)
+
+      BindingLayer.create(maskLayer, slot)
+      refreshStack(shapeLayer)
+      return
     }
 
     const factory = DEFAULT_VALUE_LAYER[slot.type]
