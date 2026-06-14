@@ -143,6 +143,27 @@ export class VideoLayer extends Layer implements ImageSource {
 
   getImage(): ImageValue { return this._result }
 
+  // ── Persistence ───────────────────────────────────────────────
+  // Config only — never the live stream or captured frames. After load
+  // this layer comes back with no source; the device index is applied
+  // once enumeration completes (see _init/_startStream).
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      deviceIdx:     this._deviceIdx,
+      frozen:        this._frozen,
+      lastEventTime: this._lastEventTime,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.deviceIdx === 'number') this._deviceIdx = state.deviceIdx
+    if (typeof state.frozen === 'boolean')    this._frozen    = state.frozen
+    if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
+      this._lastEventTime = state.lastEventTime as EventValue
+    }
+  }
+
   // ── Node — evaluate & recompute ───────────────────────────────
 
   override evaluate(): void {

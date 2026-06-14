@@ -179,6 +179,33 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      painted:    this._painted,
+      brushSize:  this._brushSize,
+      inverted:   this._inverted,
+      activeTool: this._activeTool,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.brushSize === 'number') this._brushSize = state.brushSize
+    if (typeof state.inverted === 'boolean') this._inverted = state.inverted
+    if (state.activeTool === 'paint' || state.activeTool === 'erase' || state.activeTool === null) {
+      this._activeTool = state.activeTool
+    }
+    if (state.painted instanceof ImageBitmap) {
+      this._ensureCanvases()
+      const ctx = this._painted.getContext('2d')!
+      ctx.clearRect(0, 0, this._painted.width, this._painted.height)
+      ctx.drawImage(state.painted, 0, 0)
+    }
+  }
+
+  // ----------------------------------------------------------
   // Panel layout
   // ----------------------------------------------------------
 

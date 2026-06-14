@@ -131,6 +131,20 @@ export class DirectionLayer extends Layer implements DirectionSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { angle: this._angle, magnitude: this._magnitude, position: this._position }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.angle === 'number')     this._angle     = state.angle
+    if (typeof state.magnitude === 'number') this._magnitude = state.magnitude as Amount
+    if (state.position && typeof state.position === 'object') this._position = state.position as Point
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 

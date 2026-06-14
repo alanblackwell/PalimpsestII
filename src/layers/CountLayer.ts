@@ -94,6 +94,18 @@ export class CountLayer extends Layer implements CountSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { count: this._count }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.count === 'number') this._count = state.count
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

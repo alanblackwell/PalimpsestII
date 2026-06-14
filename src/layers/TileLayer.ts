@@ -97,6 +97,19 @@ export class TileLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { mode: this._mode, margin: this._margin }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.mode === 'tile' || state.mode === 'fit') this._mode = state.mode
+    if (typeof state.margin === 'number') this._margin = state.margin
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

@@ -192,6 +192,28 @@ export class ClipLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      rotation:       this._rotation,
+      manualPosition: this._manualPosition,
+      manualScale:    this._manualScale,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.rotation === 'number') this._rotation = state.rotation
+    if (state.manualPosition === null || (state.manualPosition && typeof state.manualPosition === 'object')) {
+      this._manualPosition = state.manualPosition as Point | null
+    }
+    if (typeof state.manualScale === 'number' || state.manualScale === null) {
+      this._manualScale = state.manualScale as number | null
+    }
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

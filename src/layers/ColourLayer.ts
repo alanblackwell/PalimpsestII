@@ -140,6 +140,27 @@ export class ColourLayer extends Layer implements ColourSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      colour:        this._colour,
+      sampleEnabled: this._sampleEnabled,
+      sampleRadius:  this._sampleRadius,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.colour) {
+      this._colour = state.colour as Colour
+      this._picker.setDisplayColour(this._colour)
+    }
+    if (typeof state.sampleEnabled === 'boolean') this._sampleEnabled = state.sampleEnabled
+    if (typeof state.sampleRadius === 'number')   this._sampleRadius  = state.sampleRadius
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

@@ -136,6 +136,19 @@ export class PathLayer extends ShapeLayer {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { ...super.serializeState(), points: this._points }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    super.deserializeState(state)
+    if (Array.isArray(state.points)) this._points = state.points as Point[]
+  }
+
+  // ----------------------------------------------------------
   // ShapeLayer contract
   // ----------------------------------------------------------
 

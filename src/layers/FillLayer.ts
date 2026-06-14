@@ -200,6 +200,19 @@ export class FillLayer extends Layer implements ImageSource {
   // Node
   // ----------------------------------------------------------
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { gradIndex: this._gradIndex, opacity: this._opacity }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.gradIndex === 'number') this._gradIndex = state.gradIndex
+    if (typeof state.opacity === 'number')   this._opacity   = state.opacity
+  }
+
   protected recompute(): void {
     const w = this._offscreen.width
     const h = this._offscreen.height

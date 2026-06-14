@@ -122,6 +122,18 @@ export class AmountLayer extends Layer implements AmountSource {
     this._syncSliderBounds()
   }
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { value: this._value }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.value === 'number') this._value = state.value
+  }
+
   private _syncSliderBounds(): void {
     const { x, y, width, height } = this.bounds
     const px = AmountLayer.PAD_X

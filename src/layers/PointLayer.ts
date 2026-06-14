@@ -335,6 +335,41 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      point:         this._point,
+      wanderEnabled: this._wanderEnabled,
+      algoIndex:     this._algoIndex,
+      amount:        this._amount,
+      speed:         this._speed,
+      heading:       this._heading,
+      orbitSpin:     this._orbitSpin,
+      wavePhase:     this._wavePhase,
+      trackDrift:    this._trackDrift,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.point && typeof state.point === 'object') {
+      this._point = state.point as Point
+      this._region.setPoint(this._point)
+    }
+    if (typeof state.wanderEnabled === 'boolean') this._wanderEnabled = state.wanderEnabled
+    if (typeof state.algoIndex === 'number')      this._algoIndex     = state.algoIndex
+    if (typeof state.amount === 'number')         this._amount        = state.amount
+    if (typeof state.speed === 'number')          this._speed         = state.speed
+    if (typeof state.heading === 'number')        this._heading       = state.heading
+    if (typeof state.orbitSpin === 'number')      this._orbitSpin     = state.orbitSpin
+    if (typeof state.wavePhase === 'number')      this._wavePhase     = state.wavePhase
+    if (state.trackDrift && typeof state.trackDrift === 'object') {
+      this._trackDrift = state.trackDrift as { x: number; y: number }
+    }
+  }
+
+  // ----------------------------------------------------------
   // Wander simulation
   // ----------------------------------------------------------
 

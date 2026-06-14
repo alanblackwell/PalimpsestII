@@ -176,6 +176,29 @@ export class MediaLayer extends Layer implements ImageSource {
 
   getImage(): ImageValue { return this._result }
 
+  // ── Persistence ───────────────────────────────────────────────
+  // Config only — never the loaded video file or captured frames. After
+  // load this layer comes back with no source; the filename is shown but
+  // the user must re-load that file from disk to resume playback.
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      filename:      this._filename,
+      playing:       this._playing,
+      currentTime:   this._currentTime,
+      lastEventTime: this._lastEventTime,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.filename === 'string')    this._filename    = state.filename
+    if (typeof state.playing === 'boolean')    this._playing     = state.playing
+    if (typeof state.currentTime === 'number') this._currentTime = state.currentTime
+    if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
+      this._lastEventTime = state.lastEventTime as EventValue
+    }
+  }
+
   // ── Node — evaluate & recompute ───────────────────────────────
 
   override evaluate(): void {

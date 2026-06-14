@@ -50,6 +50,14 @@ export class Clock extends Layer {
     this.forceDirty()
   }
 
+  // Directly set the elapsed value (used when restoring from a save file).
+  // _startTs is left untouched; ClockLayer.restoreState rebases it on the
+  // next tick so playback continues seamlessly from the restored value.
+  protected setElapsed(elapsed: number): void {
+    this._elapsed = elapsed
+    this.forceDirty()
+  }
+
   // ----------------------------------------------------------
   // Value access
   // ----------------------------------------------------------

@@ -44,6 +44,7 @@ import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
+import * as Persistence      from '../persistence/Persistence.js'
 
 // Bind a RateLayer's timeSlot to the shared singleton Clock, if not already
 // bound, so its phase starts advancing immediately.
@@ -401,6 +402,65 @@ const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
 // menuLayer is NOT inserted at startup — StartupLayer handles that.
+
+// ------------------------------------------------------------------
+// Save / Load — wired to MenuLayer's "Save"/"Load" buttons.
+// ------------------------------------------------------------------
+const persistenceCtx: Persistence.PersistenceContext = {
+  root, clock, deletionLayer, backgroundLayer, menuLayer, selected: null,
+}
+
+function downloadJSON(filename: string, json: string): void {
+  const blob = new Blob([json], { type: 'application/json' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href     = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
+async function handleSave(): Promise<void> {
+  persistenceCtx.selected = widget.selected
+  const saveFile = await Persistence.serialize(persistenceCtx)
+  downloadJSON('palimpsest.json', JSON.stringify(saveFile))
+}
+
+function handleLoad(): void {
+  const input = document.createElement('input')
+  input.type   = 'file'
+  input.accept = 'application/json'
+  input.style.display = 'none'
+  document.body.appendChild(input)
+  input.onchange = () => {
+    const file = input.files?.[0]
+    document.body.removeChild(input)
+    if (!file) return
+    void (async () => {
+      let json: Persistence.SaveFile
+      try {
+        json = JSON.parse(await file.text())
+      } catch {
+        console.warn('Persistence: failed to parse save file')
+        return
+      }
+      let selected: Layer | null = null
+      try {
+        selected = await Persistence.deserialize(json, persistenceCtx)
+      } catch (err) {
+        console.warn('Persistence: failed to load save file', err)
+        return
+      }
+      widget.setVisible(true)
+      refreshStack(selected ?? menuLayer)
+    })()
+  }
+  input.click()
+}
+
+menuLayer.setSaveLoadCallbacks(handleSave, handleLoad)
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
 // forceDirty() restarts any self-perpetuating frame loop (VideoLayer,

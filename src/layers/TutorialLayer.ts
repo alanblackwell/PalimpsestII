@@ -183,6 +183,18 @@ export class TutorialLayer extends Layer {
     this._onAdded = fn
   }
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { page: this._page }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.page === 'number') this._page = state.page
+  }
+
   protected recompute(): void {}
 
   renderSelf(_ctx: Ctx2D): void {}

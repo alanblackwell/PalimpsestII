@@ -94,6 +94,22 @@ export class CollectionLayer extends Layer implements ImageSource {
     this.markDirty()
   }
 
+  // The ingested layers, in render order — read by Persistence.ts to assign
+  // ids to layers not otherwise reachable via the stack/background/archive.
+  get items(): readonly Layer[] { return this._layers }
+
+  // Restore previously-ingested layers on load (Persistence.ts). The layers
+  // were never in the main stack (freshly constructed by LAYER_CLASSES), so
+  // unlike ingest() there is nothing to remove from a stack.
+  restoreItems(layers: Layer[]): void {
+    for (const layer of layers) {
+      if (this._layers.includes(layer)) continue
+      this._layers.push(layer)
+      layer.addDependent(this)
+    }
+    this.markDirty()
+  }
+
   // Eject the layer at index back into the main stack (above this layer).
   eject(idx: number): void {
     if (idx < 0 || idx >= this._layers.length) return

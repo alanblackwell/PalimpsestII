@@ -99,6 +99,16 @@ export class ClockLayer extends Clock implements AmountSource {
     this._resumePending = false
   }
 
+  // Restore elapsed time + paused state from a save file. If resuming
+  // (not paused), _resumePending rebases _startTs on the next tick so
+  // playback continues seamlessly from `elapsed`.
+  restoreState(elapsed: number, paused: boolean): void {
+    this.setElapsed(elapsed)
+    this._holdElapsed   = elapsed
+    this._paused        = paused
+    this._resumePending = !paused
+  }
+
   protected override recompute(): void {
     // Value is updated by tick(); nothing to pull from slots.
   }

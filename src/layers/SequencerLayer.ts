@@ -169,6 +169,28 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      points:        this._points,
+      interpIndex:   this._interpIndex,
+      stepIndex:     this._stepIndex,
+      lastEventTime: this._lastEventTime,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (Array.isArray(state.points)) this._points = state.points as Array<{ x: number; y: number }>
+    if (typeof state.interpIndex === 'number') this._interpIndex = state.interpIndex
+    if (typeof state.stepIndex === 'number')   this._stepIndex   = state.stepIndex
+    if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
+      this._lastEventTime = state.lastEventTime as EventValue
+    }
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

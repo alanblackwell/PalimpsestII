@@ -56,6 +56,12 @@ export class SliderRegion extends Region {
 
   get value(): Amount { return this._value }
 
+  // Set the value directly (used when restoring from a save file).
+  setValue(v: Amount): void {
+    this._value      = v
+    this.displayValue = v
+  }
+
   // Called by the parent layer to sync interactive state with its slot.
   set interactive(v: boolean) { this._interactive = v }
 

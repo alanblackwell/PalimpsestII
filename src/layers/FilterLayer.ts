@@ -480,9 +480,22 @@ export class FilterLayer extends Layer implements ImageSource {
       sliderDragging: false,
     }))
 
+    // Registered on `this.slots` (in fixed FILTER_DEFS order, independent of
+    // `_rows`'s mutable drag-to-reorder order) purely so the persistence
+    // walker (`slotList`) can save/restore their bindings — FilterLayer
+    // draws its own slot rows in renderPanel and overrides renderSlots to a
+    // no-op, so this has no rendering/hit-testing effect.
+    this.slots.push(this._sourceSlot)
+    for (const row of this._rows) this.slots.push(row.enableSlot, row.amountSlot)
+
     this.debugName = 'Filter'
     graph.register(this)
   }
+
+  // Slot rows are drawn as part of renderPanel's custom pill layout, not via
+  // the generic Layer.renderSlots pill (kept as a no-op now that `this.slots`
+  // is populated for persistence — see constructor).
+  override renderSlots(_ctx: Ctx2D): void {}
 
   // ----------------------------------------------------------
   // Accessors
@@ -512,6 +525,43 @@ export class FilterLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   getImage(): ImageValue { return this._result }
+
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  // `this.slots` (and therefore slot-binding persistence) stays in fixed
+  // FILTER_DEFS order regardless of drag-to-reorder — only the *visual*
+  // order (_rows) and each row's enabled/intensity are saved here, keyed by
+  // filter label so they can be matched back to the right ParameterSlots.
+  override serializeState(): Record<string, unknown> {
+    return {
+      rows: this._rows.map(row => ({
+        label:     row.def.label,
+        enabled:   row.enabled,
+        intensity: row.intensity,
+      })),
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (!Array.isArray(state.rows)) return
+    const byLabel = new Map(this._rows.map(row => [row.def.label, row]))
+    const reordered: FilterRow[] = []
+    for (const entry of state.rows as Array<Record<string, unknown>>) {
+      const row = typeof entry.label === 'string' ? byLabel.get(entry.label) : undefined
+      if (!row) continue
+      if (typeof entry.enabled === 'boolean')   row.enabled   = entry.enabled
+      if (typeof entry.intensity === 'number')  row.intensity = entry.intensity
+      byLabel.delete(row.def.label)
+      reordered.push(row)
+    }
+    // Any rows not mentioned (e.g. a future filter added after this save
+    // was made) keep their default state and are appended at the end.
+    for (const row of byLabel.values()) reordered.push(row)
+    this._rows.length = 0
+    this._rows.push(...reordered)
+  }
 
   // ----------------------------------------------------------
   // Node — evaluate & recompute

@@ -68,6 +68,19 @@ export class SelectLayer extends Layer implements ImageSource {
 
   getImage(): ImageValue { return this._result }
 
+  // ── Persistence ───────────────────────────────────────────────
+
+  override serializeState(): Record<string, unknown> {
+    return { selected: this._selected, lastEventTime: this._lastEventTime }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.selected === 0 || state.selected === 1) this._selected = state.selected
+    if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
+      this._lastEventTime = state.lastEventTime as EventValue
+    }
+  }
+
   // ── Node ──────────────────────────────────────────────────────
 
   protected recompute(): void {

@@ -99,6 +99,26 @@ export class RotateLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      phase:         this._phase,
+      running:       this._running,
+      lastEventTime: this._lastEventTime,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.phase === 'number')    this._phase   = state.phase
+    if (typeof state.running === 'boolean') this._running = state.running
+    if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
+      this._lastEventTime = state.lastEventTime as EventValue
+    }
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

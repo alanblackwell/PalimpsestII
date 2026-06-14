@@ -187,6 +187,27 @@ export class EdgePathLayer extends Layer implements PointSource {
 
   setValue(_v: Amount): void { this.markDirty() }
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      phase:         this._phase,
+      controlPoints: this._controlPoints,
+      numPtsValue:   this._numPtsSlider.value,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.phase === 'number') this._phase = state.phase
+    if (Array.isArray(state.controlPoints)) this._controlPoints = state.controlPoints as Point[]
+    if (typeof state.numPtsValue === 'number') {
+      this._numPtsSlider.setValue(state.numPtsValue as Amount)
+      this._lastNumPts = this._numPoints()
+    }
+  }
+
   protected recompute(): void {
     if (this.phaseSlot.isActive)
       this._phase = (this.phaseSlot.source as AmountSource).getAmount() as Amount

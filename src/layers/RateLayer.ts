@@ -98,6 +98,18 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { sliderValue: this._rateSlider.value }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.sliderValue === 'number') this._rateSlider.setValue(state.sliderValue)
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

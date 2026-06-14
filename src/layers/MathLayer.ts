@@ -126,6 +126,18 @@ export class MathLayer extends Layer implements AmountSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { opIndex: this._opIndex }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.opIndex === 'number') this._opIndex = state.opIndex
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

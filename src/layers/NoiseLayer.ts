@@ -555,6 +555,34 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      noiseIndex: this._noiseIndex,
+      seed:       this._seed,
+      scale:      this._scale,
+      speed:      this._speed,
+      detail:     this._detail,
+      driftAngle: this._driftAngle,
+      staticGrid: Array.from(this._staticGrid),
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.noiseIndex === 'number') this._noiseIndex = state.noiseIndex
+    if (typeof state.seed === 'number')        this._seed       = state.seed
+    if (typeof state.scale === 'number')       this._scale      = state.scale
+    if (typeof state.speed === 'number')       this._speed      = state.speed
+    if (typeof state.detail === 'number')      this._detail     = state.detail
+    if (typeof state.driftAngle === 'number')  this._driftAngle = state.driftAngle
+    if (Array.isArray(state.staticGrid) && state.staticGrid.length === this._staticGrid.length) {
+      this._staticGrid = Float32Array.from(state.staticGrid as number[])
+    }
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 

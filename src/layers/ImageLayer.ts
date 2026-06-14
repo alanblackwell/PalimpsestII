@@ -213,6 +213,34 @@ export class ImageLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      bitmap:         this._bitmap,
+      filename:       this._filename,
+      natW:           this._natW,
+      natH:           this._natH,
+      rotation:       this._rotation,
+      manualPosition: this._manualPosition,
+      manualScale:    this._manualScale,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.bitmap instanceof ImageBitmap) this._bitmap = state.bitmap
+    if (typeof state.filename === 'string') this._filename = state.filename
+    if (typeof state.natW === 'number') this._natW = state.natW
+    if (typeof state.natH === 'number') this._natH = state.natH
+    if (typeof state.rotation === 'number') this._rotation = state.rotation
+    if (state.manualPosition && typeof state.manualPosition === 'object') {
+      this._manualPosition = state.manualPosition as Point
+    }
+    if (typeof state.manualScale === 'number') this._manualScale = state.manualScale
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 

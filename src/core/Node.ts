@@ -30,6 +30,10 @@ export abstract class Node {
   // The parameter slots declared by this node.
   protected readonly slots: ParameterSlot[] = []
 
+  // Read-only view of `slots`, for the persistence walker (Persistence.ts),
+  // which is not a Node subclass and so cannot see the protected field.
+  get slotList(): readonly ParameterSlot[] { return this.slots }
+
   // ----------------------------------------------------------
   // Evaluator hook
   // Set by the Evaluator so that marking any node dirty triggers
@@ -143,4 +147,17 @@ export abstract class Node {
     }
     return this.cachedRender
   }
+
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+  // Subclasses override these to save/restore type-specific manual state
+  // (numeric/boolean/string fields, geometry, encoded raster content, ...).
+  // Never include bounds, debugName, stack links, hidden-helper links, or
+  // slot bindings — the persistence walker/rebuilder handles those uniformly.
+  // serializeState may return a value containing Promises (resolved by the
+  // persistence layer before JSON encoding); deserializeState receives the
+  // already-resolved plain values.
+  serializeState(): Record<string, unknown> { return {} }
+  deserializeState(_state: Record<string, unknown>): void {}
 }

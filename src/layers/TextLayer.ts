@@ -426,6 +426,34 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Node
   // ----------------------------------------------------------
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      text:           this._text,
+      fontFamily:     this._fontFamily,
+      bold:           this._bold,
+      italic:         this._italic,
+      manualSize:     this._manualSize,
+      manualPosition: this._manualPosition,
+      rotation:       this._rotation,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.text === 'string')       this._text       = state.text
+    if (typeof state.fontFamily === 'string') this._fontFamily = state.fontFamily
+    if (typeof state.bold === 'boolean')      this._bold       = state.bold
+    if (typeof state.italic === 'boolean')    this._italic     = state.italic
+    if (typeof state.manualSize === 'number') this._manualSize = state.manualSize
+    if (typeof state.rotation === 'number')   this._rotation   = state.rotation
+    if (state.manualPosition && typeof state.manualPosition === 'object') {
+      this._manualPosition = state.manualPosition as Point
+    }
+  }
+
   protected recompute(): void {
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()

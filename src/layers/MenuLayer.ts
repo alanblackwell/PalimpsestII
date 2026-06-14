@@ -88,7 +88,10 @@ type BtnDef = {
   label:   string
   colour:  string
   height?: number   // default panel height override (px); uses MenuLayer height if omitted
-  factory: (cx: number, cy: number, w: number, h: number) => Layer
+  // 'save'/'load' buttons call the callbacks from setSaveLoadCallbacks instead
+  // of creating a layer — factory is unused for these.
+  kind?:    'save' | 'load'
+  factory?: (cx: number, cy: number, w: number, h: number) => Layer
 }
 
 const BUTTONS: BtnDef[] = [
@@ -124,6 +127,8 @@ const BUTTONS: BtnDef[] = [
   { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
   { label: 'Media',      colour: '#7ecf7e', factory: () => new MediaLayer() },
   { label: 'Tutorial',   colour: '#a0a4b8', factory: () => new TutorialLayer() },
+  { label: 'Save',       colour: '#a0a4b8', kind: 'save' },
+  { label: 'Load',       colour: '#a0a4b8', kind: 'load' },
 ]
 
 // ── MenuLayer ──────────────────────────────────────────────────
@@ -137,6 +142,9 @@ export class MenuLayer extends Layer {
   private readonly _canvasH: number
   private readonly _onAdded: (layer: Layer) => void
 
+  private _onSave: (() => void) | null = null
+  private _onLoad: (() => void) | null = null
+
   // Bounding box of the entire panel (set during renderPanel, used for hit testing)
   private _cpBounds: BBox | null = null
 
@@ -146,6 +154,12 @@ export class MenuLayer extends Layer {
     this._canvasH = canvasH
     this._onAdded = onAdded
     this.debugName = 'Menu'
+  }
+
+  // Wires the Save/Load buttons to the host app's persistence logic.
+  setSaveLoadCallbacks(onSave: () => void, onLoad: () => void): void {
+    this._onSave = onSave
+    this._onLoad = onLoad
   }
 
   protected recompute(): void {}
@@ -179,10 +193,14 @@ export class MenuLayer extends Layer {
     const idx = this._btnIndexAt(point)
     if (idx < 0) return false
 
-    const btn     = BUTTONS[idx]!
+    const btn = BUTTONS[idx]!
+
+    if (btn.kind === 'save') { this._onSave?.(); return true }
+    if (btn.kind === 'load') { this._onLoad?.(); return true }
+
     const cx      = this._canvasW / 2
     const cy      = this._canvasH / 2
-    const newLayer = btn.factory(cx, cy, this._canvasW, this._canvasH)
+    const newLayer = btn.factory!(cx, cy, this._canvasW, this._canvasH)
     Layer.assignDebugName(newLayer)
     newLayer.bounds    = { ...this.bounds, height: btn.height ?? this.bounds.height }
 

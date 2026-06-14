@@ -203,6 +203,46 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   get blockPixelPick(): boolean { return this._drawMode }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      localSegs:   this._localSegs,
+      cx:          this._cx,
+      cy:          this._cy,
+      scale:       this._scale,
+      rotation:    this._rotation,
+      strokeWidth: this._strokeWidth,
+      colour:      this._colour,
+      hasStroke:   this._hasStroke,
+      drawMode:    this._drawMode,
+      localHalfW:  this._localHalfW,
+      localHalfH:  this._localHalfH,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (Array.isArray(state.localSegs))       this._localSegs   = state.localSegs as Seg[]
+    if (typeof state.cx === 'number')          this._cx          = state.cx
+    if (typeof state.cy === 'number')          this._cy          = state.cy
+    if (typeof state.scale === 'number')       this._scale       = state.scale
+    if (typeof state.rotation === 'number')    this._rotation    = state.rotation
+    if (typeof state.strokeWidth === 'number') this._strokeWidth = state.strokeWidth
+    if (state.colour)                          this._colour      = state.colour as Colour
+    if (typeof state.hasStroke === 'boolean')  this._hasStroke   = state.hasStroke
+    if (typeof state.drawMode === 'boolean')   this._drawMode    = state.drawMode
+    if (typeof state.localHalfW === 'number')  this._localHalfW  = state.localHalfW
+    if (typeof state.localHalfH === 'number')  this._localHalfH  = state.localHalfH
+
+    this._computedCx       = this._cx
+    this._computedCy       = this._cy
+    this._computedScale    = this._scale
+    this._computedRotation = this._rotation
+    this._renderSegs = this._localSegs
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

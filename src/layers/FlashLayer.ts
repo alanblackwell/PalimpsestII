@@ -91,6 +91,18 @@ export class FlashLayer extends Layer implements EventSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { durationParam: this._durationParam }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.durationParam === 'number') this._durationParam = state.durationParam
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

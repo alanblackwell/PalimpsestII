@@ -191,6 +191,28 @@ export class TransformLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      manualPosition: this._manualPosition,
+      manualScale:    this._manualScale,
+      rotation:       this._rotation,
+      opacity:        this._opacity,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (state.manualPosition && typeof state.manualPosition === 'object') {
+      this._manualPosition = state.manualPosition as Point
+    }
+    if (typeof state.manualScale === 'number') this._manualScale = state.manualScale
+    if (typeof state.rotation === 'number')    this._rotation    = state.rotation
+    if (typeof state.opacity === 'number')     this._opacity     = state.opacity
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 

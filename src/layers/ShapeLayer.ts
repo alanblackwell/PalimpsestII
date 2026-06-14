@@ -219,6 +219,31 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._updateOffscreens()
   }
 
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      cx: this._cx, cy: this._cy, width: this._width, height: this._height,
+      angle: this._angle, colour: this._colour, opacity: this._opacity,
+      filled: this._filled, strokeWidth: this._strokeWidth, phase: this._phase,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.cx === 'number')     this._cx = state.cx
+    if (typeof state.cy === 'number')     this._cy = state.cy
+    if (typeof state.width === 'number')  this._width = state.width
+    if (typeof state.height === 'number') this._height = state.height
+    if (typeof state.angle === 'number')  this._angle = state.angle
+    if (state.colour)                     this._colour = state.colour as Colour
+    if (typeof state.opacity === 'number')     this._opacity = state.opacity
+    if (typeof state.filled === 'boolean')     this._filled = state.filled
+    if (typeof state.strokeWidth === 'number') this._strokeWidth = state.strokeWidth
+    if (typeof state.phase === 'number')       this._phase = state.phase
+  }
+
   private _updateOffscreens(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight

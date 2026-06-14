@@ -133,6 +133,18 @@ export class RootLayer extends Layer {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { transparent: this._transparent }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.transparent === 'boolean') this._transparent = state.transparent
+  }
+
+  // ----------------------------------------------------------
   // Rendering
   // ----------------------------------------------------------
 

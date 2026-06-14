@@ -213,6 +213,22 @@ export class CompositeLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return { modeIndex: this._modeIndex, amount: this._amount }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.modeIndex === 'number') this._modeIndex = state.modeIndex
+    if (typeof state.amount === 'number') {
+      this._amount = state.amount as Amount
+      this._slider.setValue(this._amount)
+    }
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 
