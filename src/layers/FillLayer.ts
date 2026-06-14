@@ -69,6 +69,7 @@ const BTN_W    = 18
 const BTN_H    = 22
 const LABEL_W  = 52
 const BTN_M    = 6
+const SWAP_W   = 18   // swap-colours button, between the two swatches
 
 const OPACITY_H = 36   // separate pill below the main controls
 const OP_LABEL_W = 50
@@ -80,6 +81,10 @@ const GRAD_TYPES: GradType[] = ['fill', 'linear', 'radial']
 const DEFAULT_COL_A: Colour = { r: 0,   g: 0,   b: 0,   a: 1 }
 const DEFAULT_COL_B: Colour = { r: 1,   g: 1,   b: 1,   a: 1 }
 const DEFAULT_DIR:   Direction = { angle: 0, magnitude: 0.5 }
+
+// Swatch colour shown for an unbound colour slot — transparent rather than
+// the black/white fallback used for the actual fill/gradient defaults.
+const TRANSPARENT: Colour = { r: 0, g: 0, b: 0, a: 0 }
 
 // ------------------------------------------------------------------
 // Helper
@@ -112,8 +117,8 @@ export class FillLayer extends Layer implements ImageSource {
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
     this._offscreen     = new OffscreenCanvas(canvasWidth, canvasHeight)
-    this._colourASlot   = new ParameterSlot(ValueType.Colour,    this)
-    this._colourBSlot   = new ParameterSlot(ValueType.Colour,    this)
+    this._colourASlot   = new ParameterSlot(ValueType.Colour,    this, 'colour a')
+    this._colourBSlot   = new ParameterSlot(ValueType.Colour,    this, 'colour b')
     this._positionSlot  = new ParameterSlot(ValueType.Point,     this)
     this._directionSlot = new ParameterSlot(ValueType.Direction, this)
     this._opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
@@ -145,6 +150,21 @@ export class FillLayer extends Layer implements ImageSource {
 
   cycleNext(): void { this._gradIndex = (this._gradIndex + 1) % GRAD_TYPES.length; this.markDirty() }
   cyclePrev(): void { this._gradIndex = (this._gradIndex - 1 + GRAD_TYPES.length) % GRAD_TYPES.length; this.markDirty() }
+
+  // Swap the source layers bound to colourASlot and colourBSlot (any
+  // combination of bound/unbound is handled).
+  private _swapColours(): void {
+    const aBL = BindingLayer.findForSlot(this._colourASlot)
+    const bBL = BindingLayer.findForSlot(this._colourBSlot)
+    const aSource = aBL?.source ?? null
+    const bSource = bBL?.source ?? null
+
+    aBL?.remove()
+    bBL?.remove()
+
+    if (bSource !== null) BindingLayer.create(bSource, this._colourASlot)
+    if (aSource !== null) BindingLayer.create(aSource, this._colourBSlot)
+  }
 
   // ----------------------------------------------------------
   // Opacity
@@ -206,6 +226,7 @@ export class FillLayer extends Layer implements ImageSource {
     if (boundingBoxContains(this._prevBtnBounds(), point)) { this.cyclePrev(); return true }
     if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._labelBounds(),   point)) { this.cycleNext(); return true }
+    if (boundingBoxContains(this._swapBtnBounds(), point)) { this._swapColours(); return true }
 
     const g = this._opacitySliderGeom()
     if (point.x >= g.sld0 - 6 && point.x <= g.sldR + 6 &&
@@ -298,17 +319,20 @@ export class FillLayer extends Layer implements ImageSource {
 
     this._drawNavBtn(ctx, this._nextBtnBounds(), '▶', midY)
 
-    // ColourA swatch
+    // ColourA swatch — transparent when unbound
     const aB = this._colourASwatchBounds()
     this._drawSwatch(ctx, aB, this._colourASlot.isActive
       ? (this._colourASlot.source as ColourSource).getColour()
-      : DEFAULT_COL_A, this._colourASlot.isActive)
+      : TRANSPARENT, this._colourASlot.isActive)
 
-    // ColourB swatch
+    // Swap button
+    this._drawNavBtn(ctx, this._swapBtnBounds(), '⇄', midY)
+
+    // ColourB swatch — transparent when unbound
     const bB = this._colourBSwatchBounds()
     this._drawSwatch(ctx, bB, this._colourBSlot.isActive
       ? (this._colourBSlot.source as ColourSource).getColour()
-      : DEFAULT_COL_B, this._colourBSlot.isActive)
+      : TRANSPARENT, this._colourBSlot.isActive)
 
     // Slot indicators — pos / dir
     const slots = [
@@ -537,9 +561,14 @@ export class FillLayer extends Layer implements ImageSource {
     return { x: nb.x + BTN_W + 8, y: nb.y + 1, width: 22, height: BTN_H - 2 }
   }
 
-  private _colourBSwatchBounds() {
+  private _swapBtnBounds() {
     const ab = this._colourASwatchBounds()
-    return { x: ab.x + 26, y: ab.y, width: 22, height: ab.height }
+    return { x: ab.x + ab.width + 4, y: ab.y, width: SWAP_W, height: ab.height }
+  }
+
+  private _colourBSwatchBounds() {
+    const sb = this._swapBtnBounds()
+    return { x: sb.x + sb.width + 4, y: sb.y, width: 22, height: sb.height }
   }
 
   // Opacity pill — directly below the main controls pill.

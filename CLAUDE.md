@@ -1123,6 +1123,32 @@ first touch). Rendered in its own pill directly below the main controls pill
 track+thumb slider with a ●/○ bind indicator. `panelBottom` is overridden to
 sit below this second pill.
 
+### Auto-binding colours at creation time (added June 2026)
+
+`postInsertLayer` (`main.ts`) has a `FillLayer` branch that searches down the
+stack from the new layer for up to two `Colour`-producing layers: the first
+found is bound to `colourASlot`, the second (if any) to `colourBSlot`. Mode
+stays `'fill'` (the default), so `colourBSlot` is inert until the user
+switches to a gradient mode — this is purely "wire up nearby colours in case
+they're wanted later".
+
+The colour-A/B swatches in the main pill now show fully transparent
+(`TRANSPARENT = { r:0, g:0, b:0, a:0 }`) when their slot is unbound, instead
+of the black/white `DEFAULT_COL_A`/`DEFAULT_COL_B` fallback used for the
+actual fill/gradient rendering — so an unbound slot reads as "empty" rather
+than implying a specific colour is in effect.
+
+### Swap-colours button (added June 2026)
+
+A `⇄` button (`_swapBtnBounds()`, `SWAP_W = 18`) sits between the two
+colour swatches in the main pill. `_swapColours()` swaps the
+`colourASlot`/`colourBSlot` bindings using the same find/remove/create
+pattern as `CompositeLayer._swapLeftRight()` — any combination of
+bound/unbound is handled. `_colourASlot`/`_colourBSlot` are now labelled
+`'colour a'`/`'colour b'` (previously the default Colour-type label) so
+their auto-generated slot rows in `renderSlots` read clearly now that there
+are two of them.
+
 ## Mask-drop-on-image clipping shortcut (added June 2026)
 
 Dragging a Mask-producing layer's card out of the `LayerStackWidget` and

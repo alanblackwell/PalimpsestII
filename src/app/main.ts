@@ -41,6 +41,7 @@ import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
+import { FillLayer }         from '../layers/FillLayer.js'
 
 // Find the shared Clock — in the stack, or (if previously auto-created) in
 // the Background collection — creating one in the Background collection if
@@ -139,6 +140,19 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof RotateLayer) {
     // Same phase auto-binding as AnimPathLayer.
     ensurePhaseSource(newLayer, newLayer.phaseSlot)
+  }
+
+  if (newLayer instanceof FillLayer) {
+    // Search down the stack for up to two Colour-producing layers: the
+    // first found is bound to colourASlot, the second (if any) to
+    // colourBSlot. Mode stays 'fill' (the default) — colourBSlot is inert
+    // until the user switches to a gradient mode.
+    const cols: Layer[] = []
+    for (let l: Layer | null = newLayer.layerBelow; l !== null && cols.length < 2; l = l.layerBelow) {
+      if (!l.isInfrastructure && !l.isHiddenHelper && l.types.has(ValueType.Colour)) cols.push(l)
+    }
+    if (cols[0] && !newLayer.colourASlot.isActive) BindingLayer.create(cols[0], newLayer.colourASlot)
+    if (cols[1] && !newLayer.colourBSlot.isActive) BindingLayer.create(cols[1], newLayer.colourBSlot)
   }
 
   if (newLayer instanceof NoiseLayer) {
