@@ -1364,3 +1364,51 @@ binding is suspended (`_invertSlot.suspend()`, never auto-resumed by this
 button); either way `_inverted` is flipped. Checked in `hitTestSelf` (before
 the `hitTestSlot` early-return that hands slot-row clicks to the
 slot-click/binding-inspector logic) and in `handlePointerDown`.
+
+## Node.pointerCanvas (added June 2026)
+
+`Node.pointerCanvas: Point | null` (`src/core/Node.ts`) is the live mouse
+position in canvas coordinates, maintained by `InteractionSystem`: set on
+every `pointermove`/`pointerdown`, cleared to `null` on `pointerleave`. This
+is the first piece of global pointer state on `Node` — added so any layer's
+`recompute()`/simulation can read "where is the mouse right now" without
+plumbing it through props. First consumer: `PointLayer`'s `track` wander mode
+(below).
+
+## PointLayer "track" wander mode (added June 2026)
+
+A fifth entry in `WANDER_TYPES` (`'drift' | 'brownian' | 'orbit' | 'wave' |
+'track'`), selected via the row-2 mode cycler like the others. Unlike the
+other four algorithms — which perturb `_heading` and advance at constant
+`speed` with edge-bounce — `track` mode (`_trackTick`) bypasses the
+heading/velocity model entirely:
+
+- The point exponentially eases toward `Node.pointerCanvas` (the live mouse
+  position): `followHz = TRACK_MIN_FOLLOW_HZ + speed01 * (TRACK_MAX_FOLLOW_HZ
+  - TRACK_MIN_FOLLOW_HZ)`, `alpha = 1 - exp(-followHz * dt)`, then `_point`
+  lerps toward the target by `alpha` each tick — frame-rate independent.
+  `TRACK_MIN_FOLLOW_HZ = 2` (speed=0, a visible trailing lag) and
+  `TRACK_MAX_FOLLOW_HZ = 150` (speed=1, effectively snaps within a frame) —
+  `speed` controls follow lag, not movement style.
+- **`amount`** sets the radius (`amount * TRACK_DRIFT_RADIUS`, 100px at
+  amount=1) of `_trackDrift`, a 2D offset that random-walks
+  (`TRACK_DRIFT_RATE` px/s per axis) and is clamped to that radius each tick.
+  `amount = 0` collapses the radius to 0, so the point follows the mouse
+  exactly.
+- **No mask bound** — `target = mouse + _trackDrift`.
+- **Mask bound, mouse inside it** — same as above, but the drifted target is
+  clipped back onto the segment `mouse -> drifted` at the mask edge via
+  `_lastInsidePointAlongLine`, so drift can pull the target deeper into the
+  mask but never push it outside.
+- **Mask bound, mouse outside it** — `_point` is already guaranteed inside
+  the mask (the existing pre-switch relocation in `_wanderTick` handles a
+  mask that was just bound/moved). The target is the last point along the
+  line from `_point` to the mouse that is still inside the mask
+  (`_lastInsidePointAlongLine`, `TRACK_LINE_STEP = 2px` increments), i.e.
+  "walk toward the mouse until you'd leave the mask, stop just before". Drift
+  is then applied and clipped the same way as the mouse-inside case.
+
+`_lastInsidePointAlongLine(mask, from, to)` is the shared helper for both the
+mouse-outside-mask and drift-clipping cases: marches from `from` (assumed
+inside the mask) toward `to`, returning the last in-mask point before the
+line would cross outside (or `to` itself if the whole segment stays inside).

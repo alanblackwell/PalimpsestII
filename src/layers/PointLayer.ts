@@ -69,7 +69,7 @@ registerPromotionFactory((initial: Point) => new PointLayer(initial))
 //   this button never resumes a suspended binding — re-enabling it is the
 //   binding inspector's job.)
 // - Row 2 — [◀] <algorithm> [▶] cycles through WANDER_TYPES
-//   (drift / brownian / orbit / wave).
+//   (drift / brownian / orbit / wave / track).
 // - Row 3 — amount slider, showing the resolved value (manual or bound,
 //   tinted to match row 4's binding state). Touching the slider suspends
 //   a bound `amountSlot` (suspend-on-touch).
@@ -96,6 +96,19 @@ registerPromotionFactory((initial: Point) => new PointLayer(initial))
 // the nearest interior point before the step above: _nearestInsideMask
 // tries a small local search first, falling back to a coarse whole-canvas
 // search if the mask isn't found nearby.
+//
+// 'track' mode (_trackTick) bypasses the heading/velocity model above
+// entirely: the point exponentially eases toward Node.pointerCanvas (the
+// live mouse position, maintained by InteractionSystem), at a follow rate
+// between TRACK_MIN_FOLLOW_HZ (speed=0, a visible trailing lag) and
+// TRACK_MAX_FOLLOW_HZ (speed=1, effectively snaps within a frame). The
+// `amount` slider sets the radius of a slowly random-walking drift offset
+// applied to the tracked target — 0 follows the mouse exactly. If a mask is
+// bound and the mouse is outside it, the target becomes the last point along
+// the line from the point's current (in-mask) position to the mouse that is
+// still inside the mask (_lastInsidePointAlongLine); the drift offset is
+// clipped the same way, so it can pull the target back deeper into the mask
+// but never push it outside.
 
 const ACCENT      = '#cf7ecf'   // Point type accent
 const EV_ACCENT   = '#e0e060'   // Event type accent (wander toggle)
@@ -113,8 +126,8 @@ const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
   [ValueType.Mask]:   MASK_ACCENT,
 }
 
-type WanderId = 'drift' | 'brownian' | 'orbit' | 'wave'
-const WANDER_TYPES: WanderId[] = ['drift', 'brownian', 'orbit', 'wave']
+type WanderId = 'drift' | 'brownian' | 'orbit' | 'wave' | 'track'
+const WANDER_TYPES: WanderId[] = ['drift', 'brownian', 'orbit', 'wave', 'track']
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -145,6 +158,12 @@ const ORBIT_AMOUNT_RATE  = 3.0  // additional rad/s at amount=1 (tight spiral)
 const WAVE_FREQ          = 2.0  // rad/s, oscillation frequency of the heading wave
 const WAVE_TURN_RATE     = 2.0  // rad/s turning amplitude at amount=1
 
+const TRACK_DRIFT_RADIUS = 100  // px, max drift-offset radius at amount=1
+const TRACK_DRIFT_RATE   = 120  // px/s, random-walk step rate of the drift offset
+const TRACK_LINE_STEP    = 2     // px, step size when searching along a line for the mask edge
+const TRACK_MIN_FOLLOW_HZ = 2    // 1/s, sluggish follow at speed=0 (visible trailing lag)
+const TRACK_MAX_FOLLOW_HZ = 150  // 1/s, effectively snaps within a frame at speed=1
+
 const MASK_THRESHOLD  = 0.5   // alpha [0,1] above which a point is "inside" the mask
 const EDGE_SAMPLE_EPS = 3      // px offset used to estimate the mask edge gradient
 const SNAP_MAX_RADIUS = 150    // px, search radius for relocating a point left outside a moved/added mask
@@ -170,6 +189,7 @@ export class PointLayer extends Layer implements PointSource {
   private _heading: number            // radians
   private _orbitSpin: number          // ±1, flips on each bounce in orbit mode
   private _wavePhase: number          // radians, advances over time in wave mode
+  private _trackDrift = { x: 0, y: 0 } // px offset from the tracked target, random-walked in 'track' mode
 
   private _lastToggleTime: number | null = null   // wanderToggleSlot rising-edge detection
   private _lastTickTime:   number | null = null   // performance.now() of previous tick
@@ -339,6 +359,14 @@ export class PointLayer extends Layer implements PointSource {
       if (inside !== null) this._point = inside
     }
 
+    if (WANDER_TYPES[this._algoIndex] === 'track') {
+      const speed01 = this._speedSlot.isActive
+        ? Math.max(0, Math.min(1, (this._speedSlot.source as RateSource).getRate() / RATE_DISPLAY_MAX))
+        : this._speed
+      this._trackTick(dt, amount, speed01, mask)
+      return
+    }
+
     switch (WANDER_TYPES[this._algoIndex]) {
       case 'drift':
         // Forward motion with slight drifts left/right in heading direction.
@@ -385,6 +413,81 @@ export class PointLayer extends Layer implements PointSource {
     if (bounced) this._orbitSpin = -this._orbitSpin
 
     this._point = next
+  }
+
+  // 'track' mode: follows Node.pointerCanvas (the mouse position), offset by
+  // a slowly-wandering drift vector whose magnitude is capped by `amount`.
+  // If a mask is bound, the tracked target is constrained to stay inside it
+  // (see _lastInsidePointAlongLine), and the point exponentially eases
+  // toward that target at a rate controlled by `speed01` — at speed01=1 the
+  // point effectively snaps to the target within a frame; at speed01=0 it
+  // trails behind with a visible lag.
+  //
+  // By this point _point is guaranteed to be inside `mask` (or mask is
+  // null) thanks to the relocation step in _wanderTick, so it can be used
+  // directly as the "last valid point inside the mask".
+  private _trackTick(dt: number, amount: number, speed01: number, mask: MaskValue): void {
+    const mouse = Node.pointerCanvas
+    if (mouse === null) return
+
+    // Random-walk the drift offset within a disc of radius amount * TRACK_DRIFT_RADIUS.
+    const maxR = amount * TRACK_DRIFT_RADIUS
+    this._trackDrift.x += (Math.random() * 2 - 1) * TRACK_DRIFT_RATE * dt
+    this._trackDrift.y += (Math.random() * 2 - 1) * TRACK_DRIFT_RATE * dt
+    const r = Math.hypot(this._trackDrift.x, this._trackDrift.y)
+    if (r > maxR) {
+      if (r > 1e-6) {
+        this._trackDrift.x *= maxR / r
+        this._trackDrift.y *= maxR / r
+      } else {
+        this._trackDrift.x = 0
+        this._trackDrift.y = 0
+      }
+    }
+
+    let target: Point
+    if (mask) {
+      const mouseInside = this._sampleMaskAlpha(mask, mouse.x, mouse.y) >= MASK_THRESHOLD
+      const base = mouseInside ? mouse : this._lastInsidePointAlongLine(mask, this._point, mouse)
+      const drifted = { x: base.x + this._trackDrift.x, y: base.y + this._trackDrift.y }
+      // Drift may move the target back deeper inside the mask, but not out
+      // of it — clip along the line from `base` (inside) to `drifted`.
+      target = this._lastInsidePointAlongLine(mask, base, drifted)
+    } else {
+      target = { x: mouse.x + this._trackDrift.x, y: mouse.y + this._trackDrift.y }
+    }
+
+    // Exponentially ease toward the target, frame-rate independent. At
+    // speed01=1, followHz is high enough to snap to the target within a
+    // frame; at speed01=0 a slow follow rate produces a visible trailing lag.
+    const followHz = TRACK_MIN_FOLLOW_HZ + speed01 * (TRACK_MAX_FOLLOW_HZ - TRACK_MIN_FOLLOW_HZ)
+    const alpha = 1 - Math.exp(-followHz * dt)
+    this._point = {
+      x: this._point.x + (target.x - this._point.x) * alpha,
+      y: this._point.y + (target.y - this._point.y) * alpha,
+    }
+  }
+
+  // Marches from `from` (assumed inside `mask`) toward `to` in TRACK_LINE_STEP
+  // increments, returning the last point still inside the mask before the
+  // line crosses to an outside point. Returns `to` unchanged if the whole
+  // line stays inside the mask, or `from` unchanged if even one step out
+  // already lands outside.
+  private _lastInsidePointAlongLine(mask: OffscreenCanvas, from: Point, to: Point): Point {
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const dist = Math.hypot(dx, dy)
+    if (dist < 1e-6) return { ...from }
+
+    const steps = Math.max(1, Math.ceil(dist / TRACK_LINE_STEP))
+    let last = { ...from }
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps
+      const p = { x: from.x + dx * t, y: from.y + dy * t }
+      if (this._sampleMaskAlpha(mask, p.x, p.y) < MASK_THRESHOLD) return last
+      last = p
+    }
+    return last
   }
 
   // Returns the inward-pointing unit normal at `p` if it lies outside the

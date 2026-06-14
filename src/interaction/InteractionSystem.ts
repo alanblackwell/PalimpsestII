@@ -94,6 +94,7 @@ export class InteractionSystem {
   private readonly _onMove:   (e: PointerEvent) => void
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
+  private readonly _onLeave:  (e: PointerEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
   private _spaceAction:      (() => void) | null = null
   private _deleteAction:     (() => void) | null = null
@@ -116,6 +117,7 @@ export class InteractionSystem {
     this._onMove   = e => this._handleMove(e)
     this._onUp     = e => this._handleUp(e)
     this._onCancel = e => this._handleUp(e)   // treat cancel like up
+    this._onLeave  = () => { Node.pointerCanvas = null }
     this._onKey    = e => this._handleKey(e)
     this._onContext = e => this._handleContextMenu(e)
 
@@ -123,6 +125,7 @@ export class InteractionSystem {
     canvas.addEventListener('pointermove',   this._onMove)
     canvas.addEventListener('pointerup',     this._onUp)
     canvas.addEventListener('pointercancel', this._onCancel)
+    canvas.addEventListener('pointerleave',  this._onLeave)
     canvas.addEventListener('contextmenu',   this._onContext)
     // Key events on document so they fire even before the canvas is clicked.
     document.addEventListener('keydown',     this._onKey)
@@ -198,6 +201,7 @@ export class InteractionSystem {
     this._canvas.removeEventListener('pointermove',   this._onMove)
     this._canvas.removeEventListener('pointerup',     this._onUp)
     this._canvas.removeEventListener('pointercancel', this._onCancel)
+    this._canvas.removeEventListener('pointerleave',  this._onLeave)
     this._canvas.removeEventListener('contextmenu',   this._onContext)
     document.removeEventListener('keydown',           this._onKey)
   }
@@ -327,6 +331,7 @@ export class InteractionSystem {
 
   private _handleMove(e: PointerEvent): void {
     const point = this._point(e)
+    Node.pointerCanvas = point
     if (this._widgetCapture) {
       this._widget?.handlePointerMove(point)
       // Keep drag overlay position current

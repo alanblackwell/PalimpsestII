@@ -1,5 +1,6 @@
 import { ValueType, BoundingBox, emptyBoundingBox } from './types.js'
 import type { ParameterSlot } from './ParameterSlot.js'
+import type { Point } from './types.js'
 
 // ------------------------------------------------------------
 // Node — base class for all entities in the dataflow graph
@@ -48,6 +49,11 @@ export abstract class Node {
   // Set by main.ts while an OS file (image) is being dragged over the canvas.
   // Read by Layer.renderSlots to highlight empty Image slots as drop targets.
   static fileDragActive = false
+
+  // Current pointer position in canvas coordinates, updated by
+  // InteractionSystem on every pointermove/pointerdown; null while the
+  // pointer is outside the canvas. Read by PointLayer's "track" wander mode.
+  static pointerCanvas: Point | null = null
 
   // Current canvas dimensions — updated by Evaluator on construction and resize.
   // Layers that produce full-canvas outputs (e.g. MaskLayer, ShapeLayer mask)
