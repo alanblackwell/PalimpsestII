@@ -14,6 +14,12 @@ export const SWIPE_AXIS_RATIO  = 1.5  // dominant axis must exceed the other by 
 export const TAP_MAX_MOVEMENT  = 10   // px, max movement to still count as a tap
 export const TWO_FINGER_TAP_MS = 300  // max duration for a two-finger tap
 
+// A deferred single-finger touch held for this long without lifting (and
+// without a second touch arriving) is "promoted" to a drag — a node
+// handle/slider/mask-paint drag, or the stack widget's reorder drag. A fast
+// swipe released before this elapses keeps swipe priority over either.
+export const PROMOTE_MS = 150
+
 export const MIN_ZOOM      = 1
 export const MAX_ZOOM      = 4
 export const ZOOM_SNAP_EPS = 0.05     // snap back to scale=1/pan=0 within this margin

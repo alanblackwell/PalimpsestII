@@ -94,6 +94,18 @@ export abstract class Node {
     start: number   // performance.now() at recognition
   } | null = null
 
+  // Set by InteractionSystem while a touch-driven drag (node handle/slider,
+  // mask paint, or stack-widget reorder) is in progress; read by Evaluator
+  // to draw a crosshair at the drop/edit point, since a finger occludes the
+  // canvas under it. Null when no touch drag is active.
+  static touchDragPoint: Point | null = null
+
+  // Set by InteractionSystem while a two-finger pinch gesture is in
+  // progress (canvas-space coordinates of the two touch points); read by
+  // Evaluator to draw a connecting line as visual confirmation that the
+  // pinch was recognised. Null when no pinch is active.
+  static pinchFeedback: { a: Point; b: Point } | null = null
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

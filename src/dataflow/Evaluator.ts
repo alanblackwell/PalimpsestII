@@ -229,6 +229,65 @@ export class Evaluator {
     if (Node.gestureFlash !== null) {
       this._drawGestureFlash(this.ctx)
     }
+
+    // Touch-drag feedback — crosshair at the drop/edit point, since a
+    // finger occludes the canvas underneath it.
+    if (Node.touchDragPoint !== null) {
+      this._drawTouchCrosshair(this.ctx)
+    }
+
+    // Pinch-gesture feedback — line between the two touch points.
+    if (Node.pinchFeedback !== null) {
+      this._drawPinchFeedback(this.ctx)
+    }
+  }
+
+  // Crosshair centred on the current touch-drag point — a node handle/
+  // slider/mask-paint drag, or a stack-widget reorder drag.
+  private _drawTouchCrosshair(ctx: CanvasRenderingContext2D): void {
+    const p = Node.touchDragPoint!
+    const inner = 8, outer = 22
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.90)'
+    ctx.lineWidth   = 2
+    ctx.shadowColor = 'rgba(0,0,0,0.6)'
+    ctx.shadowBlur  = 4
+
+    ctx.beginPath()
+    ctx.moveTo(p.x - outer, p.y); ctx.lineTo(p.x - inner, p.y)
+    ctx.moveTo(p.x + inner, p.y); ctx.lineTo(p.x + outer, p.y)
+    ctx.moveTo(p.x, p.y - outer); ctx.lineTo(p.x, p.y - inner)
+    ctx.moveTo(p.x, p.y + inner); ctx.lineTo(p.x, p.y + outer)
+    ctx.stroke()
+
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, inner, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  // Line connecting the two touch points of an in-progress pinch gesture.
+  private _drawPinchFeedback(ctx: CanvasRenderingContext2D): void {
+    const { a, b } = Node.pinchFeedback!
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.6)'
+    ctx.shadowBlur  = 6
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+    ctx.lineWidth   = 2
+    ctx.beginPath()
+    ctx.moveTo(a.x, a.y)
+    ctx.lineTo(b.x, b.y)
+    ctx.stroke()
+
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    for (const p of [a, b]) {
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
   }
 
   // Briefly flash a block arrow in the swipe direction, over the centre of
