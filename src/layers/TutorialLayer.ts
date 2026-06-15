@@ -82,7 +82,7 @@ const PAGES: TutPage[] = [
       {
         label: 'Text',
         colour: '#888888',
-        factory: () => new TextLayer('Hello'),
+        factory: () => new TextLayer(),
       },
     ],
   },

@@ -113,7 +113,7 @@ const COLUMNS: ColDef[] = [
       { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
       { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy, rndColour()) } },
       { label: 'Rect',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
-      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer('Text') },
+      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer() },
       { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer() },
       { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
     ],

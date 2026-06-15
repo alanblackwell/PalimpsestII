@@ -123,6 +123,29 @@ const WRAP_PAD = 12
 // remains visible against both light and dark backgrounds in display mode.
 const DEFAULT_COLOUR: Colour = { r: 0.83, g: 0.83, b: 0.83, a: 1 }
 
+// Word pool for generating placeholder text — the classic cod-Latin
+// "Lorem ipsum" passage, split into individual words.
+const LOREM_WORDS = (
+  'Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod ' +
+  'tempor incididunt ut labore et dolore magna aliqua Ut enim ad minim ' +
+  'veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea ' +
+  'commodo consequat Duis aute irure dolor in reprehenderit in voluptate ' +
+  'velit esse cillum dolore eu fugiat nulla pariatur Excepteur sint occaecat ' +
+  'cupidatat non proident sunt in culpa qui officia deserunt mollit anim id ' +
+  'est laborum Sed ut perspiciatis unde omnis iste natus error sit voluptatem ' +
+  'accusantium doloremque laudantium totam rem aperiam eaque ipsa quae ab illo ' +
+  'inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo ' +
+  'Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut fugit'
+).split(' ')
+
+// A short run of two or three consecutive words from LOREM_WORDS, used as
+// placeholder text for newly-created TextLayers.
+function randomDefaultText(): string {
+  const n = 2 + Math.floor(Math.random() * 2)   // 2 or 3 words
+  const start = Math.floor(Math.random() * (LOREM_WORDS.length - n))
+  return LOREM_WORDS.slice(start, start + n).join(' ')
+}
+
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
   | { type: 'scale';  startDist: number; startSize: number; center: Point }
@@ -142,7 +165,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private readonly _rotationSlot: ParameterSlot
 
   // Persisted text content
-  private _text: string = 'Hello'
+  private _text: string = ''
 
   // Typography (manual, persisted across recomputes)
   private _fontFamily: string = 'sans-serif'
@@ -179,13 +202,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _dragHoverActive:  boolean = false   // OS text drag hovering this layer
   private _isDefaultText:    boolean = true    // true until the user provides real content
 
-  constructor(text = 'Hello') {
+  constructor(text?: string) {
     super()
     this._maskCanvas   = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._imageCanvas  = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
-    this._text         = text
-    this._cursorPos    = text.length
-    this._isDefaultText = (text === 'Hello')
+    this._isDefaultText = text === undefined
+    this._text         = text ?? randomDefaultText()
+    this._cursorPos    = this._text.length
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
     this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
     this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
@@ -386,7 +409,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       if (accept) {
         this._text = textarea.value
         this._cursorPos = Math.min(this._cursorPos, this._text.length)
-        this._isDefaultText = (this._text === 'Hello')
+        this._isDefaultText = false
         this.markDirty()
       }
       document.body.removeChild(overlay)
@@ -516,17 +539,29 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   private _deleteBackward(): void {
+    if (this._isDefaultText) {
+      this._text          = ''
+      this._cursorPos     = 0
+      this._isDefaultText = false
+      this.markDirty()
+      return
+    }
     if (this._cursorPos === 0) return
     this._text = this._text.slice(0, this._cursorPos - 1) + this._text.slice(this._cursorPos)
     this._cursorPos--
-    this._isDefaultText = false
     this.markDirty()
   }
 
   private _deleteForward(): void {
+    if (this._isDefaultText) {
+      this._text          = ''
+      this._cursorPos     = 0
+      this._isDefaultText = false
+      this.markDirty()
+      return
+    }
     if (this._cursorPos >= this._text.length) return
     this._text = this._text.slice(0, this._cursorPos) + this._text.slice(this._cursorPos + 1)
-    this._isDefaultText = false
     this.markDirty()
   }
 
@@ -579,6 +614,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   override serializeState(): Record<string, unknown> {
     return {
       text:           this._text,
+      isDefaultText:  this._isDefaultText,
       fontFamily:     this._fontFamily,
       bold:           this._bold,
       italic:         this._italic,
@@ -599,7 +635,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._manualPosition = state.manualPosition as Point
     }
     this._cursorPos     = this._text.length
-    this._isDefaultText = (this._text === 'Hello')
+    this._isDefaultText = typeof state.isDefaultText === 'boolean'
+      ? state.isDefaultText
+      : (this._text === 'Hello')
   }
 
   protected recompute(): void {
