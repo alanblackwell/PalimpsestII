@@ -72,6 +72,10 @@ export class CaptureLayer extends Layer implements ImageSource {
   // default), only the plain rendered composite is captured.
   private _editCapture = false
 
+  // When true, captures/recordings also include the LayerStackWidget,
+  // regardless of its on-screen visibility — for both photo and movie modes.
+  private _stackCapture = false
+
   // Live masked composite of layers below — updated continuously while
   // _movieMode is true (so a recording in progress has frames to draw).
   private _result: OffscreenCanvas | null = null
@@ -103,6 +107,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
   // Button bounds — set during renderPanel, used for hit-testing.
   private _editBtnB:    BBox | null = null
+  private _stackBtnB:   BBox | null = null
   private _modeBtnB:    BBox | null = null
   private _shutterBtnB: BBox | null = null
   private _saveBtnB:    BBox | null = null
@@ -146,6 +151,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     return {
       movieMode:     this._movieMode,
       editCapture:   this._editCapture,
+      stackCapture:  this._stackCapture,
       lastEventTime: this._lastEventTime,
     }
   }
@@ -153,6 +159,7 @@ export class CaptureLayer extends Layer implements ImageSource {
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.movieMode === 'boolean')   this._movieMode   = state.movieMode
     if (typeof state.editCapture === 'boolean') this._editCapture = state.editCapture
+    if (typeof state.stackCapture === 'boolean') this._stackCapture = state.stackCapture
     if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
       this._lastEventTime = state.lastEventTime as EventValue
     }
@@ -232,6 +239,10 @@ export class CaptureLayer extends Layer implements ImageSource {
       this.layerBelow?.renderStack(ctx)
       this._applyMask(ctx, w, h)
     }
+
+    // Stack-widget overlay — drawn after masking, like the edit-mode panel
+    // overlay, so it's unaffected by the mask's shape.
+    if (this._stackCapture) Node.renderStackWidget?.(ctx)
 
     return canvas
   }
@@ -446,6 +457,11 @@ export class CaptureLayer extends Layer implements ImageSource {
 
   private _toggleEditCapture(): void {
     this._editCapture = !this._editCapture
+    this.markDirty()
+  }
+
+  private _toggleStackCapture(): void {
+    this._stackCapture = !this._stackCapture
     this.markDirty()
   }
 
@@ -674,14 +690,16 @@ export class CaptureLayer extends Layer implements ImageSource {
     const shutterB: BBox = { x: saveB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
     const modeB:    BBox = { x: shutterB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
     const editB:    BBox = { x: modeB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
+    const stackB:   BBox = { x: editB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
     this._saveBtnB    = saveB
     this._shutterBtnB = shutterB
     this._modeBtnB    = modeB
     this._editBtnB    = editB
+    this._stackBtnB   = stackB
 
-    // Status text, clipped between the stripe and the edit-mode button.
+    // Status text, clipped between the stripe and the stack-capture button.
     const textL = x + STRIPE + 8
-    const textW = editB.x - textL - 6
+    const textW = stackB.x - textL - 6
     if (textW > 0) {
       ctx.save()
       ctx.beginPath()
@@ -697,6 +715,9 @@ export class CaptureLayer extends Layer implements ImageSource {
 
     // Edit/display capture toggle — cursor dragging a handle.
     this._drawEditIcon(ctx, editB, this._editCapture)
+
+    // Stack-widget capture toggle — small stack of overlapping rectangles.
+    this._drawStackIcon(ctx, stackB, this._stackCapture)
 
     // Mode toggle — photo / movie.
     this._drawBtn(ctx, modeB, this._movieMode ? '🎥' : '📷', ACCENT)
@@ -865,6 +886,34 @@ export class CaptureLayer extends Layer implements ImageSource {
     ctx.strokeRect(hx, hy, hs, hs)
   }
 
+  // Small stack of overlapping rectangles — stack-widget capture toggle.
+  private _drawStackIcon(ctx: Ctx2D, b: BBox, active: boolean): void {
+    this._drawBtnBg(ctx, b)
+    const colour = active ? ACCENT : 'rgba(255,255,255,0.55)'
+
+    const rw   = b.width  * 0.5
+    const rh   = b.height * 0.38
+    const step = b.width  * 0.14
+
+    ctx.save()
+    ctx.strokeStyle = colour
+    ctx.lineWidth   = 1.4
+    for (let i = 2; i >= 0; i--) {
+      const rx = b.x + b.width  * 0.18 + step * i
+      const ry = b.y + b.height * 0.18 + step * i
+      ctx.beginPath()
+      ctx.roundRect(rx, ry, rw, rh, 1.5)
+      if (i === 0) {
+        ctx.fillStyle   = colour
+        ctx.globalAlpha = 0.25
+        ctx.fill()
+        ctx.globalAlpha = 1
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
   // Conventional still-shutter button — a slightly dished (concave) white disc.
   private _drawShutterIcon(ctx: Ctx2D, b: BBox): void {
     this._drawBtnBg(ctx, b)
@@ -927,6 +976,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._editBtnB    !== null && boundingBoxContains(this._editBtnB, point))    return this
+    if (this._stackBtnB   !== null && boundingBoxContains(this._stackBtnB, point))   return this
     if (this._modeBtnB    !== null && boundingBoxContains(this._modeBtnB, point))    return this
     if (this._shutterBtnB !== null && boundingBoxContains(this._shutterBtnB, point)) return this
     if (this._saveBtnB    !== null && boundingBoxContains(this._saveBtnB, point))    return this
@@ -938,6 +988,10 @@ export class CaptureLayer extends Layer implements ImageSource {
   handlePointerDown(point: Point): boolean {
     if (this._editBtnB !== null && boundingBoxContains(this._editBtnB, point)) {
       this._toggleEditCapture()
+      return true
+    }
+    if (this._stackBtnB !== null && boundingBoxContains(this._stackBtnB, point)) {
+      this._toggleStackCapture()
       return true
     }
     if (this._modeBtnB !== null && boundingBoxContains(this._modeBtnB, point)) {

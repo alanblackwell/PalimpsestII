@@ -363,6 +363,10 @@ Node.selectLayer = (layer) => {
   if (layer instanceof Layer) widget.selected = layer
 }
 
+// Lets any layer render the LayerStackWidget into its own canvas — see
+// CaptureLayer's stack-capture toggle.
+Node.renderStackWidget = (ctx) => widget.render(ctx, true)
+
 const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())

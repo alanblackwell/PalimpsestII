@@ -300,8 +300,11 @@ export class LayerStackWidget {
   // Rendering
   // ------------------------------------------------------------------
 
-  render(ctx: Ctx2D): void {
-    if (!this._visible) return
+  // `force` bypasses the visibility check — used by CaptureLayer's
+  // stack-capture toggle to render the widget into a capture even while it's
+  // hidden from the live view.
+  render(ctx: Ctx2D, force = false): void {
+    if (!this._visible && !force) return
     const n  = this._layers.length
     if (n === 0) return
     const sp = this._spacing()

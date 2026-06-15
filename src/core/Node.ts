@@ -1,6 +1,6 @@
 import { ValueType, BoundingBox, emptyBoundingBox } from './types.js'
 import type { ParameterSlot } from './ParameterSlot.js'
-import type { Point } from './types.js'
+import type { Point, Ctx2D } from './types.js'
 
 // ------------------------------------------------------------
 // Node — base class for all entities in the dataflow graph
@@ -77,6 +77,12 @@ export abstract class Node {
   // CaptureLayer's edit-mode shutter sequence, which briefly selects the
   // layer below to reveal its controls before restoring the selection.
   static selectLayer: ((layer: Node) => void) | null = null
+
+  // Set by main.ts to `(ctx) => widget.render(ctx, true)`. Lets any layer
+  // draw the LayerStackWidget onto its own canvas regardless of the live
+  // widget's on-screen visibility — used by CaptureLayer's stack-capture
+  // toggle.
+  static renderStackWidget: ((ctx: Ctx2D) => void) | null = null
 
   // ----------------------------------------------------------
   // Dependency management
