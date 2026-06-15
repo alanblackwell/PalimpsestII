@@ -72,6 +72,12 @@ export abstract class Node {
   // effects it draws itself (e.g. TextLayer's text shadow).
   static currentLayer: Node | null = null
 
+  // Set by main.ts to `(layer) => { widget.selected = layer }`. Lets any
+  // layer programmatically change the selected/current layer — e.g.
+  // CaptureLayer's edit-mode shutter sequence, which briefly selects the
+  // layer below to reveal its controls before restoring the selection.
+  static selectLayer: ((layer: Node) => void) | null = null
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

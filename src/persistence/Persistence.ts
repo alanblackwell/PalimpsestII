@@ -42,6 +42,7 @@ import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { MediaLayer }        from '../layers/MediaLayer.js'
+import { CaptureLayer }      from '../layers/CaptureLayer.js'
 import { VideoLayer }        from '../layers/VideoLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 import { RectLayer }         from '../layers/RectLayer.js'
@@ -152,6 +153,7 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   ClipDrawingLayer: () => new ClipDrawingLayer(),
   RotateLayer:      () => new RotateLayer(),
   MediaLayer:       () => new MediaLayer(),
+  CaptureLayer:     () => new CaptureLayer(),
   VideoLayer:       () => new VideoLayer(),
   TutorialLayer:    () => new TutorialLayer(),
   RectLayer:        () => new RectLayer(Node.canvasWidth / 2, Node.canvasHeight / 2, 200, 150),

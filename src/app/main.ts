@@ -357,6 +357,12 @@ const widget = new LayerStackWidget(canvas)
 widget.setVisible(false)   // hidden at startup; revealed when a mode is chosen
 evaluator.setLayerStackWidget(widget)
 
+// Lets any layer change the selected/current layer programmatically —
+// see CaptureLayer's edit-mode shutter sequence.
+Node.selectLayer = (layer) => {
+  if (layer instanceof Layer) widget.selected = layer
+}
+
 const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
