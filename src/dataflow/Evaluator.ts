@@ -151,9 +151,12 @@ export class Evaluator {
 
     if (this._displayMode) {
       // Display mode: plain composite, no depth effects.
+      Node.currentLayer = null
       renderTop.renderStack(this.ctx)
       return
     }
+
+    Node.currentLayer = renderTop
 
     // Edit mode: walk the chain bottom→top so each layer can be rendered
     // with individual alpha/filter settings.

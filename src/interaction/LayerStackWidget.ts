@@ -88,6 +88,17 @@ export class LayerStackWidget {
       if (!l.isInfrastructure && !l.isHiddenHelper) this._layers.unshift(l)   // root at [0]
       l = l.layerBelow
     }
+    // A drag (or pending click) may be holding a reference to a layer that
+    // was just removed from the stack by some other action (archived, sent
+    // to Background, ejected, etc.) while the pointer was still down. If we
+    // don't drop it here, render()'s floating-card path keeps drawing that
+    // layer's card forever at its last drag position, since it's no longer
+    // in `_layers` for the normal ordered draw to occlude it.
+    if (this._dragLayer !== null && !this._layers.includes(this._dragLayer)) {
+      this._dragLayer = null
+      this._dragging  = false
+      this._dropIndex = -1
+    }
     // Default selection: second-from-top, so the gap is visible immediately.
     if (this._selected === null || !this._layers.includes(this._selected)) {
       const n = this._layers.length
@@ -299,7 +310,7 @@ export class LayerStackWidget {
     // Draw root-to-top so each later card occludes the earlier ones.
     for (let i = 0; i < n; i++) {
       const layer = this._layers[i]!
-      if (layer === this._dragLayer) continue
+      if (this._dragging && layer === this._dragLayer) continue
       const y = this._dragging
         ? this._cardYDrag(i, sp)
         : this._cardY(i, sp)
@@ -311,8 +322,14 @@ export class LayerStackWidget {
       this._drawDropIndicator(ctx, sp, ch)
     }
 
-    // Dragged card floats above everything.
-    if (this._dragLayer !== null) {
+    // Dragged card floats above everything. Gated on _dragging (not just
+    // _dragLayer !== null) — a pointerdown "arms" _dragLayer for a possible
+    // drag before the 6px move threshold promotes it to an actual drag, and
+    // if the matching pointerup is ever missed (e.g. released outside the
+    // canvas), _dragLayer can stay set with _dragging false indefinitely.
+    // Without this guard that stale reference would render as a permanent
+    // floating ghost card at its long-stale _dragY position.
+    if (this._dragging && this._dragLayer !== null) {
       this._drawCard(ctx, this._dragLayer, this._dragY, this._cardW(), ch, true)
     }
 

@@ -535,9 +535,25 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   // Returns the inward-pointing unit normal at `p` if it lies outside the
-  // permitted area (mask, or canvas bounds when no mask is bound), or null
-  // if `p` is inside.
+  // permitted area — the canvas bounds always apply, and (if a mask is
+  // bound) the mask too — or null if `p` is inside both.
   private _boundaryNormal(p: Point, mask: MaskValue): { x: number; y: number } | null {
+    // Canvas bounds take priority over the mask: mask-alpha sampling clamps
+    // to the canvas-sized surface, so it can never report an edge beyond the
+    // canvas — without this check, a mask shape extending past the canvas
+    // would let the point wander off-canvas forever.
+    const W = Node.canvasWidth
+    const H = Node.canvasHeight
+    let cnx = 0, cny = 0
+    if (p.x < 0) cnx = 1
+    else if (p.x > W) cnx = -1
+    if (p.y < 0) cny = 1
+    else if (p.y > H) cny = -1
+    if (cnx !== 0 || cny !== 0) {
+      const len = Math.hypot(cnx, cny)
+      return { x: cnx / len, y: cny / len }
+    }
+
     if (mask) {
       const a = this._sampleMaskAlpha(mask, p.x, p.y)
       if (a >= MASK_THRESHOLD) return null
@@ -561,16 +577,7 @@ export class PointLayer extends Layer implements PointSource {
       return { x: nx / len, y: ny / len }
     }
 
-    const W = Node.canvasWidth
-    const H = Node.canvasHeight
-    let nx = 0, ny = 0
-    if (p.x < 0) nx = 1
-    else if (p.x > W) nx = -1
-    if (p.y < 0) ny = 1
-    else if (p.y > H) ny = -1
-    if (nx === 0 && ny === 0) return null
-    const len = Math.hypot(nx, ny)
-    return { x: nx / len, y: ny / len }
+    return null
   }
 
   private _sampleMaskAlpha(mask: OffscreenCanvas, x: number, y: number): number {

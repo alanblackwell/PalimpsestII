@@ -59,6 +59,23 @@ function hasContextMenuHandler(node: unknown): node is ContextMenuHandler {
   return typeof (node as Record<string, unknown>)?.handleContextMenu === 'function'
 }
 
+// A layer (e.g. TextLayer) may claim all keyboard/paste input while the
+// pointer hovers a designated in-place-edit region. isTextEditActive() is
+// checked fresh on every key/paste event; handleTextEditKey returns true to
+// consume the event (and bypass the normal shortcut chain).
+interface TextEditTarget {
+  isTextEditActive(): boolean
+  handleTextEditKey(e: KeyboardEvent): boolean
+  pasteTextAtCursor(text: string): void
+}
+
+function isTextEditTarget(node: unknown): node is TextEditTarget {
+  const n = node as Record<string, unknown>
+  return typeof n?.isTextEditActive === 'function' &&
+         typeof n?.handleTextEditKey === 'function' &&
+         typeof n?.pasteTextAtCursor === 'function'
+}
+
 // Nodes with an isInteractive flag (Region subclasses) advertise
 // whether they will respond to interaction in their current state.
 // Nodes that have no such flag are assumed to always be interactive.
@@ -96,11 +113,14 @@ export class InteractionSystem {
   private readonly _onCancel: (e: PointerEvent) => void
   private readonly _onLeave:  (e: PointerEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
+  private readonly _onPaste:  (e: ClipboardEvent) => void
   private _spaceAction:      (() => void) | null = null
   private _deleteAction:     (() => void) | null = null
   private _collectionAction: (() => void) | null = null
   private _backgroundAction: (() => void) | null = null
   private _menuFocusAction:  (() => void) | null = null
+  private _pasteAction:      ((text: string) => void) | null = null
+  private _imagePasteAction: ((file: File) => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
   private _onMaskDrop:     ((source: Node, target: Layer) => void) | null = null
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
@@ -119,6 +139,7 @@ export class InteractionSystem {
     this._onCancel = e => this._handleUp(e)   // treat cancel like up
     this._onLeave  = () => { Node.pointerCanvas = null }
     this._onKey    = e => this._handleKey(e)
+    this._onPaste  = e => this._handlePaste(e)
     this._onContext = e => this._handleContextMenu(e)
 
     canvas.addEventListener('pointerdown',   this._onDown)
@@ -127,8 +148,9 @@ export class InteractionSystem {
     canvas.addEventListener('pointercancel', this._onCancel)
     canvas.addEventListener('pointerleave',  this._onLeave)
     canvas.addEventListener('contextmenu',   this._onContext)
-    // Key events on document so they fire even before the canvas is clicked.
+    // Key/paste events on document so they fire even before the canvas is clicked.
     document.addEventListener('keydown',     this._onKey)
+    document.addEventListener('paste',       this._onPaste)
   }
 
   // ----------------------------------------------------------
@@ -169,6 +191,19 @@ export class InteractionSystem {
     this._menuFocusAction = fn
   }
 
+  // Register a callback invoked on a system paste (Cmd/Ctrl+V) when no layer
+  // is in in-place text-edit mode — e.g. to create a new TextLayer from the
+  // clipboard text.
+  setPasteAction(fn: (text: string) => void): void {
+    this._pasteAction = fn
+  }
+
+  // Register a callback invoked on a system paste (Cmd/Ctrl+V) whose
+  // clipboard data is an image — e.g. to create a new ImageLayer from it.
+  setImagePasteAction(fn: (file: File) => void): void {
+    this._imagePasteAction = fn
+  }
+
   // Register a callback invoked when a bind-drag drop creates a binding.
   setBoundCallback(fn: (source: Node, slot: ParameterSlot) => void): void {
     this._onBound = fn
@@ -204,6 +239,7 @@ export class InteractionSystem {
     this._canvas.removeEventListener('pointerleave',  this._onLeave)
     this._canvas.removeEventListener('contextmenu',   this._onContext)
     document.removeEventListener('keydown',           this._onKey)
+    document.removeEventListener('paste',             this._onPaste)
   }
 
   // ----------------------------------------------------------
@@ -401,6 +437,14 @@ export class InteractionSystem {
     if (e.target instanceof HTMLElement &&
         e.target.closest('textarea, input, select, [contenteditable]')) return
 
+    // A layer in in-place text-edit mode (e.g. TextLayer with the pointer
+    // hovering its edit region) claims all keyboard input, including keys
+    // that are normally global shortcuts (space, delete, m, h, ...).
+    const selected = this._widget?.selected ?? null
+    if (selected !== null && isTextEditTarget(selected) && selected.isTextEditActive()) {
+      if (selected.handleTextEditKey(e)) { e.preventDefault(); return }
+    }
+
     if (e.key === ' ') {
       this._closeInspector()
       this._spaceAction?.()
@@ -430,6 +474,45 @@ export class InteractionSystem {
     if (this._widget !== null) {
       const key = e.shiftKey ? `Shift+${e.key}` : e.key
       if (this._widget.handleKey(key)) e.preventDefault()
+    }
+  }
+
+  // System paste (Cmd/Ctrl+V). If the clipboard holds image data,
+  // _imagePasteAction handles it (e.g. creating a new ImageLayer). Otherwise,
+  // if a layer is in in-place text-edit mode, the pasted text goes to its
+  // cursor; failing that, _pasteAction handles it (e.g. creating a new
+  // TextLayer from the clipboard text).
+  private _handlePaste(e: ClipboardEvent): void {
+    if (e.target instanceof HTMLElement &&
+        e.target.closest('textarea, input, select, [contenteditable]')) return
+
+    const items = e.clipboardData?.items
+    if (items && this._imagePasteAction !== null) {
+      for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile()
+          if (file !== null) {
+            this._imagePasteAction(file)
+            e.preventDefault()
+            return
+          }
+        }
+      }
+    }
+
+    const text = e.clipboardData?.getData('text/plain') ?? ''
+    if (!text) return
+
+    const selected = this._widget?.selected ?? null
+    if (selected !== null && isTextEditTarget(selected) && selected.isTextEditActive()) {
+      selected.pasteTextAtCursor(text)
+      e.preventDefault()
+      return
+    }
+
+    if (this._pasteAction !== null) {
+      this._pasteAction(text)
+      e.preventDefault()
     }
   }
 

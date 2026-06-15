@@ -65,6 +65,13 @@ export abstract class Node {
   static canvasWidth  = 800
   static canvasHeight = 600
 
+  // The layer the Evaluator is rendering as "current" this frame — the one
+  // that floats above the rest with a drop shadow in edit mode (null in
+  // display mode, where no layer gets that treatment). Lets a layer's own
+  // renderSelf match the same drop-shadow-only-when-current convention for
+  // effects it draws itself (e.g. TextLayer's text shadow).
+  static currentLayer: Node | null = null
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

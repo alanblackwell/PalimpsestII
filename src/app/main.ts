@@ -394,6 +394,14 @@ const refreshStack = (selectLayer?: Layer) => {
 // DeletionLayer is permanently part of the stack directly above Root.
 function lowestAnchor(): Layer { return deletionLayer }
 
+// Insert `newLayer` above `selected` — except when RootLayer itself is
+// selected, in which case DeletionLayer sits directly above Root (even when
+// empty/not visible) and the new layer must go above that instead, so it
+// isn't buried below it.
+function insertAboveSelected(newLayer: Layer, selected: Layer): void {
+  newLayer.insertAbove(selected instanceof RootLayer ? lowestAnchor() : selected)
+}
+
 // MenuLayer sits at the very top.
 const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
   postInsertLayer(newLayer)
@@ -937,7 +945,7 @@ canvas.addEventListener('drop', (e) => {
       newLayer.insertAbove(selected.layerBelow ?? lowestAnchor())
     } else {
       // Default: insert above current layer.
-      newLayer.insertAbove(selected)
+      insertAboveSelected(newLayer, selected)
     }
   } else {
     newLayer.insertAbove(lowestAnchor())
@@ -951,6 +959,162 @@ canvas.addEventListener('drop', (e) => {
 
   refreshStack(targetSlot !== null ? selected! : newLayer)
 })
+
+// ------------------------------------------------------------------
+// Drag-and-drop plain text — pastes into the selected TextLayer at the
+// cursor, or creates a new TextLayer.
+// ------------------------------------------------------------------
+//
+// Placement rules:
+//   • Dragged over the LayerStackWidget → placeholder card, same as the
+//     file-drop ghost above; dropping creates a TextLayer at that position.
+//   • Selected layer is a TextLayer → green edit-region highlight appears
+//     while dragging over the canvas; drop pastes at the cursor (or
+//     replaces the default text, per TextLayer.pasteTextAtCursor).
+//   • MenuLayer selected → new TextLayer inserted below MenuLayer.
+//   • Otherwise → new TextLayer inserted above the selected layer.
+
+let textDragGhost: TextLayer | null = null
+
+function isTextDrag(e: DragEvent): boolean {
+  const types = e.dataTransfer?.types
+  return !!types && types.includes('text/plain') && !types.includes('Files')
+}
+
+canvas.addEventListener('dragover', (e) => {
+  if (!isTextDrag(e)) return
+  e.preventDefault()
+  e.dataTransfer!.dropEffect = 'copy'
+
+  const pt = { x: e.offsetX, y: e.offsetY }
+
+  if (widget.inBounds(pt)) {
+    const selected = widget.selected
+    if (selected instanceof TextLayer) selected.setExternalDragHover(false)
+    if (textDragGhost === null) {
+      textDragGhost = new TextLayer()
+      Layer.assignDebugName(textDragGhost)
+      textDragGhost.bounds = { ...menuLayer.bounds }
+      widget.beginExternalDrag(textDragGhost, pt)
+    } else {
+      widget.updateExternalDrag(pt)
+    }
+    return
+  }
+
+  if (textDragGhost !== null) {
+    widget.cancelExternalDrag()
+    graph.unregister(textDragGhost)
+    textDragGhost = null
+  }
+
+  const selected = widget.selected
+  if (selected instanceof TextLayer) {
+    selected.setExternalDragHover(true)
+    Node.scheduleFrame?.()
+  }
+})
+
+canvas.addEventListener('dragleave', () => {
+  if (textDragGhost !== null) {
+    widget.cancelExternalDrag()
+    graph.unregister(textDragGhost)
+    textDragGhost = null
+  }
+  const selected = widget.selected
+  if (selected instanceof TextLayer) {
+    selected.setExternalDragHover(false)
+    Node.scheduleFrame?.()
+  }
+})
+
+canvas.addEventListener('drop', (e) => {
+  if (!isTextDrag(e)) return
+  e.preventDefault()
+
+  const text = e.dataTransfer?.getData('text/plain') ?? ''
+
+  if (textDragGhost !== null) {
+    const ghost = textDragGhost
+    textDragGhost = null
+    if (text) {
+      widget.commitExternalDrag()
+      ghost.pasteTextAtCursor(text)
+      postInsertLayer(ghost)
+      refreshStack(ghost)
+    } else {
+      widget.cancelExternalDrag()
+      graph.unregister(ghost)
+    }
+    return
+  }
+
+  const selected = widget.selected
+  if (selected instanceof TextLayer) {
+    selected.setExternalDragHover(false)
+    if (text) selected.pasteTextAtCursor(text)
+    return
+  }
+
+  if (!text) return
+  createTextLayerFromText(text)
+})
+
+// Create a new TextLayer containing `text`, placed above the selected
+// layer — or below MenuLayer if MenuLayer is selected. Shared by the OS
+// text-drop handler above and the global system-paste action below.
+function createTextLayerFromText(text: string): void {
+  const selected = widget.selected
+
+  const newLayer = new TextLayer()
+  Layer.assignDebugName(newLayer)
+  newLayer.bounds = { ...menuLayer.bounds }
+  newLayer.pasteTextAtCursor(text)
+
+  if (selected instanceof MenuLayer) {
+    const below = menuLayer.layerBelow
+    newLayer.insertAbove(below ?? lowestAnchor())
+  } else if (selected !== null) {
+    insertAboveSelected(newLayer, selected)
+  } else {
+    newLayer.insertAbove(lowestAnchor())
+  }
+
+  postInsertLayer(newLayer)
+  refreshStack(newLayer)
+}
+
+// Global system paste (Cmd/Ctrl+V) when no layer is in in-place text-edit
+// mode — same placement rule as dropping text onto the canvas.
+interaction.setPasteAction((text) => createTextLayerFromText(text))
+
+// Create a new ImageLayer containing the pasted image data, placed above the
+// selected layer — or below MenuLayer if MenuLayer is selected. Same
+// placement rule as createTextLayerFromText.
+function createImageLayerFromFile(file: File): void {
+  const selected = widget.selected
+
+  const newLayer = new ImageLayer()
+  Layer.assignDebugName(newLayer)
+  newLayer.bounds = { ...menuLayer.bounds }
+
+  if (selected instanceof MenuLayer) {
+    const below = menuLayer.layerBelow
+    newLayer.insertAbove(below ?? lowestAnchor())
+  } else if (selected !== null) {
+    insertAboveSelected(newLayer, selected)
+  } else {
+    newLayer.insertAbove(lowestAnchor())
+  }
+
+  newLayer.loadFile(file)
+  postInsertLayer(newLayer)
+  refreshStack(newLayer)
+}
+
+// Global system paste of image data (Cmd/Ctrl+V) — same placement rule as
+// pasting text.
+interaction.setImagePasteAction((file) => createImageLayerFromFile(file))
 
 // ------------------------------------------------------------------
 // Resize

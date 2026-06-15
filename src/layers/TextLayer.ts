@@ -110,6 +110,19 @@ const ROT_ARM    = 85   // rotate handle arm length from centre (px)
 const HANDLE_HIT = 14   // pointer hit-test radius (px)
 const SCALE_OFFSET_FACTOR = 1.6  // scale-handle distance, relative to font size
 
+// Direct in-place text editing
+const EDIT_REGION_R = 50   // hover radius around the move handle (px)
+const CURSOR_GAP    = 3    // gap between baseline and cursor triangle (px)
+const CURSOR_W      = 5    // cursor triangle half-width (px)
+const CURSOR_H      = 8    // cursor triangle height (px)
+
+// Unmasked word-wrap: horizontal padding from each canvas edge (px)
+const WRAP_PAD = 12
+
+// Default text colour when colourSlot is unbound — light grey, so text
+// remains visible against both light and dark backgrounds in display mode.
+const DEFAULT_COLOUR: Colour = { r: 0.83, g: 0.83, b: 0.83, a: 1 }
+
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
   | { type: 'scale';  startDist: number; startSize: number; center: Point }
@@ -139,7 +152,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   // Resolved values (overwritten each recompute)
   private _position: Point  = { x: 400, y: 300 }
-  private _colour:   Colour = { r: 1, g: 1, b: 1, a: 1 }
+  private _colour:   Colour = DEFAULT_COLOUR
   private _size:     number = DEFAULT_SIZE
 
   // Scanline data sampled from the mask (null = no mask / not yet sampled)
@@ -160,11 +173,19 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _manualPosition: Point | null = null
   private _drag:           DragState | null = null
 
+  // Direct in-place text editing — ephemeral UI state, not persisted.
+  private _cursorPos:        number  = 0
+  private _hoverActive:      boolean = false   // mouse hovering the edit region
+  private _dragHoverActive:  boolean = false   // OS text drag hovering this layer
+  private _isDefaultText:    boolean = true    // true until the user provides real content
+
   constructor(text = 'Hello') {
     super()
     this._maskCanvas   = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._imageCanvas  = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._text         = text
+    this._cursorPos    = text.length
+    this._isDefaultText = (text === 'Hello')
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
     this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
     this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
@@ -364,6 +385,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const close = (accept: boolean) => {
       if (accept) {
         this._text = textarea.value
+        this._cursorPos = Math.min(this._cursorPos, this._text.length)
+        this._isDefaultText = (this._text === 'Hello')
         this.markDirty()
       }
       document.body.removeChild(overlay)
@@ -423,6 +446,129 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Direct in-place text editing
+  // ----------------------------------------------------------
+  //
+  // Hovering the mouse within EDIT_REGION_R of the move handle (or an OS
+  // text drag hovering this layer) makes this layer the keyboard-edit
+  // target: InteractionSystem routes all keydown/paste events here instead
+  // of running its normal shortcut chain.
+
+  // Duck-typed by InteractionSystem — true while keyboard/paste input
+  // should be routed to this layer instead of global shortcuts.
+  isTextEditActive(): boolean {
+    return this._hoverActive || this._dragHoverActive
+  }
+
+  // Forces edit-hover for an OS text drag, independent of the mouse position
+  // (HTML5 drag events don't update Node.pointerCanvas).
+  setExternalDragHover(active: boolean): void {
+    this._dragHoverActive = active
+  }
+
+  // Recomputed every renderPanel frame from the live pointer position.
+  private _updateEditHover(): void {
+    const mouse = Node.pointerCanvas
+    const hp = this._handlePos()
+    this._hoverActive = mouse !== null && ptDist(mouse, hp.move) <= EDIT_REGION_R
+  }
+
+  // Duck-typed by InteractionSystem — handles a keydown while
+  // isTextEditActive() is true. Returns true if consumed (preventDefault).
+  handleTextEditKey(e: KeyboardEvent): boolean {
+    const key = e.key
+    if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      this._insertText(key)
+      return true
+    }
+    switch (key) {
+      case 'Enter':      this._insertText('\n');  return true
+      case 'Backspace':  this._deleteBackward();  return true
+      case 'Delete':     this._deleteForward();   return true
+      case 'ArrowLeft':  this._moveCursor(-1, 0); return true
+      case 'ArrowRight': this._moveCursor(1, 0);  return true
+      case 'ArrowUp':    this._moveCursor(0, -1); return true
+      case 'ArrowDown':  this._moveCursor(0, 1);  return true
+      case 'Home':       this._moveCursorToLineEdge(-1); return true
+      case 'End':        this._moveCursorToLineEdge(1);  return true
+      default: return false
+    }
+  }
+
+  // Duck-typed by InteractionSystem — handles a paste while
+  // isTextEditActive() is true. If only the default text is present, the
+  // pasted text replaces it rather than being inserted.
+  pasteTextAtCursor(text: string): void {
+    if (!text) return
+    this._insertText(text)
+  }
+
+  private _insertText(s: string): void {
+    if (this._isDefaultText) {
+      this._text          = s
+      this._cursorPos     = s.length
+      this._isDefaultText = false
+    } else {
+      this._text = this._text.slice(0, this._cursorPos) + s + this._text.slice(this._cursorPos)
+      this._cursorPos += s.length
+    }
+    this.markDirty()
+  }
+
+  private _deleteBackward(): void {
+    if (this._cursorPos === 0) return
+    this._text = this._text.slice(0, this._cursorPos - 1) + this._text.slice(this._cursorPos)
+    this._cursorPos--
+    this._isDefaultText = false
+    this.markDirty()
+  }
+
+  private _deleteForward(): void {
+    if (this._cursorPos >= this._text.length) return
+    this._text = this._text.slice(0, this._cursorPos) + this._text.slice(this._cursorPos + 1)
+    this._isDefaultText = false
+    this.markDirty()
+  }
+
+  private _moveCursor(dx: number, dy: number): void {
+    if (dx !== 0) {
+      this._cursorPos = Math.max(0, Math.min(this._text.length, this._cursorPos + dx))
+    } else if (dy !== 0) {
+      const lines = this._text.split('\n')
+      const { line, col } = this._cursorLineCol(lines)
+      const targetLine = Math.max(0, Math.min(lines.length - 1, line + dy))
+      const targetCol  = Math.min(col, lines[targetLine]!.length)
+      this._cursorPos  = this._lineColToIndex(lines, targetLine, targetCol)
+    }
+    this.markDirty()
+  }
+
+  private _moveCursorToLineEdge(dir: -1 | 1): void {
+    const lines = this._text.split('\n')
+    const { line } = this._cursorLineCol(lines)
+    const targetCol = dir < 0 ? 0 : lines[line]!.length
+    this._cursorPos = this._lineColToIndex(lines, line, targetCol)
+    this.markDirty()
+  }
+
+  // Cursor position as (line, column) within `_text.split('\n')`.
+  private _cursorLineCol(lines: string[]): { line: number; col: number } {
+    let remaining = this._cursorPos
+    for (let i = 0; i < lines.length; i++) {
+      const len = lines[i]!.length
+      if (remaining <= len || i === lines.length - 1) return { line: i, col: remaining }
+      remaining -= len + 1   // +1 for the '\n'
+    }
+    return { line: 0, col: 0 }
+  }
+
+  private _lineColToIndex(lines: string[], line: number, col: number): number {
+    let idx = 0
+    for (let i = 0; i < line; i++) idx += lines[i]!.length + 1
+    return idx + col
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 
@@ -452,6 +598,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (state.manualPosition && typeof state.manualPosition === 'object') {
       this._manualPosition = state.manualPosition as Point
     }
+    this._cursorPos     = this._text.length
+    this._isDefaultText = (this._text === 'Hello')
   }
 
   protected recompute(): void {
@@ -461,7 +609,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     this._colour = this._colourSlot.isActive
       ? (this._colourSlot.source as ColourSource).getColour()
-      : { r: 1, g: 1, b: 1, a: 1 }
+      : DEFAULT_COLOUR
 
     if (this._sizeSlot.isActive) {
       const t = (this._sizeSlot.source as AmountSource).getAmount() as Amount
@@ -700,13 +848,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    this._renderCanvas(ctx)
+    // Only draw the text's own drop shadow when this layer is the current
+    // (selected) one — matching the depth-based shadow the Evaluator applies
+    // to every layer's renderSelf.
+    this._renderCanvas(ctx, Node.currentLayer === this)
   }
 
   renderPanel(ctx: Ctx2D): void {
+    this._updateEditHover()
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
     this._renderHandles(ctx)
+    this._renderEditOverlay(ctx)
   }
 
   // ── Main pill ─────────────────────────────────────────────────
@@ -873,10 +1026,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.restore()
   }
 
-  // Unmasked: split on \n, render lines centred on _position, rotated about it.
+  // Unmasked: word-wrap to fit the canvas width (the default boundary when
+  // no mask is set), render lines centred on _position, rotated about it.
   private _renderUnmasked(ctx: Ctx2D): void {
     const { x: px, y: py } = this._position
-    const lines  = this._text.split('\n')
+    const lines  = this._wrapLines(ctx)
     const lineH  = Math.ceil(this._size * 1.35)
     const totalH = (lines.length - 1) * lineH
 
@@ -888,10 +1042,47 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.textBaseline = 'middle'
     let y = -totalH / 2
     for (const line of lines) {
-      ctx.fillText(line, 0, y)
+      ctx.fillText(line.text, 0, y)
       y += lineH
     }
     ctx.restore()
+  }
+
+  // Word-wrap _text to fit within the canvas width (minus WRAP_PAD on each
+  // side), preserving '\n' as hard breaks. Each returned line carries the
+  // index into _text where its text begins, so the cursor (an index into
+  // _text) can be mapped back to a wrapped line + column for rendering.
+  private _wrapLines(ctx: Ctx2D): { text: string; start: number }[] {
+    const maxWidth = Math.max(1, Node.canvasWidth - WRAP_PAD * 2)
+    const lines: { text: string; start: number }[] = []
+
+    let paraOffset = 0
+    for (const para of this._text.split('\n')) {
+      const tokens = para.split(/(\s+)/).filter(t => t.length > 0)
+
+      let line = ''
+      let lineStart = paraOffset
+      let consumed  = 0
+      let pendingWs = ''
+
+      for (const tok of tokens) {
+        if (/^\s+$/.test(tok)) { pendingWs += tok; consumed += tok.length; continue }
+
+        if (line.length > 0 && ctx.measureText(line + pendingWs + tok).width > maxWidth) {
+          lines.push({ text: line, start: lineStart })
+          line      = tok
+          lineStart = paraOffset + consumed
+        } else {
+          line = line.length > 0 ? line + pendingWs + tok : pendingWs + tok
+        }
+        consumed += tok.length
+        pendingWs = ''
+      }
+      lines.push({ text: line, start: lineStart })
+
+      paraOffset += para.length + 1   // +1 for the '\n'
+    }
+    return lines
   }
 
   // Masked: flow text into the mask shape using per-scanline word-wrap.
@@ -1078,6 +1269,80 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.stroke()
     }
 
+    ctx.restore()
+  }
+
+  // Green edit-region boundary + blinking cursor triangle, shown while
+  // isTextEditActive() (hover or OS text-drag).
+  private _renderEditOverlay(ctx: Ctx2D): void {
+    if (!this.isTextEditActive()) return
+    const hp = this._handlePos()
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(120,255,120,0.85)'
+    ctx.lineWidth   = 2
+    ctx.setLineDash([4, 4])
+    ctx.beginPath()
+    ctx.arc(hp.move.x, hp.move.y, EDIT_REGION_R, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+
+    // Cursor is only positionable for unmasked (centred-line) layout.
+    if (this._maskRows === null) {
+      const pos = this._cursorWorldPos(ctx)
+      if (pos !== null) this._drawCursorTriangle(ctx, pos)
+    }
+  }
+
+  // World-space position of the cursor, just below the text baseline of the
+  // line it sits on — used to draw the triangle cursor.
+  private _cursorWorldPos(ctx: Ctx2D): Point | null {
+    if (!this._text) return null
+
+    ctx.save()
+    ctx.font = this._fontString()
+    const lines = this._wrapLines(ctx)
+
+    // Find the wrapped line containing the cursor: the last line whose
+    // start is <= _cursorPos (starts are non-decreasing across the text).
+    let line = 0
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i]
+      if (l !== undefined && l.start <= this._cursorPos) line = i
+      else break
+    }
+    const lineRec = lines[line] ?? { text: '', start: 0 }
+    const col = Math.min(Math.max(this._cursorPos - lineRec.start, 0), lineRec.text.length)
+
+    const lineH  = Math.ceil(this._size * 1.35)
+    const totalH = (lines.length - 1) * lineH
+
+    const lineWidth = ctx.measureText(lineRec.text).width
+    const prefixW   = ctx.measureText(lineRec.text.slice(0, col)).width
+    ctx.restore()
+
+    // Local frame: origin at _position, x to the right, y down, before
+    // rotation — matches the translate/rotate setup in _renderUnmasked.
+    const localX = -lineWidth / 2 + prefixW
+    const localY = -totalH / 2 + line * lineH + this._size * 0.3 + CURSOR_GAP
+
+    const cos = Math.cos(this._rotation), sin = Math.sin(this._rotation)
+    return {
+      x: this._position.x + localX * cos - localY * sin,
+      y: this._position.y + localX * sin + localY * cos,
+    }
+  }
+
+  // A small triangle pointing up at the baseline from below.
+  private _drawCursorTriangle(ctx: Ctx2D, pos: Point): void {
+    ctx.save()
+    ctx.fillStyle = 'rgba(120,255,120,0.95)'
+    ctx.beginPath()
+    ctx.moveTo(pos.x, pos.y)
+    ctx.lineTo(pos.x - CURSOR_W, pos.y + CURSOR_H)
+    ctx.lineTo(pos.x + CURSOR_W, pos.y + CURSOR_H)
+    ctx.closePath()
+    ctx.fill()
     ctx.restore()
   }
 
