@@ -272,7 +272,7 @@ export class Evaluator {
   // points of an in-progress pinch gesture — a resize-handle affordance.
   private _drawPinchFeedback(ctx: CanvasRenderingContext2D): void {
     const { a, b } = Node.pinchFeedback!
-    const colour = 'rgba(150,150,150,0.85)'
+    const colour = 'rgba(150,150,150,0.35)'
     const angle  = Math.atan2(b.y - a.y, b.x - a.x)
 
     ctx.save()
@@ -280,7 +280,7 @@ export class Evaluator {
     ctx.shadowBlur  = 6
     ctx.strokeStyle = colour
     ctx.fillStyle   = colour
-    ctx.lineWidth   = 10
+    ctx.lineWidth   = 18
     ctx.lineCap     = 'round'
     ctx.beginPath()
     ctx.moveTo(a.x, a.y)
@@ -294,7 +294,7 @@ export class Evaluator {
 
   // Filled triangle with its tip at `p`, pointing along `angle`.
   private _drawArrowhead(ctx: CanvasRenderingContext2D, p: Point, angle: number): void {
-    const len = 26, width = 30
+    const len = 36, width = 42
     ctx.save()
     ctx.translate(p.x, p.y)
     ctx.rotate(angle)

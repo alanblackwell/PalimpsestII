@@ -45,8 +45,6 @@ const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
 // drawn directly below the canvas-space panel pill.
 const SLOT_H    = 26
 const SLOT_GAP  = 4
-const PANEL_X   = 300
-const PANEL_W   = 260
 const BTN_SZ    = SLOT_H - 6   // square toggle-button size
 const SW_LABEL_W = 78
 const SW_VALUE_W = 38
@@ -277,9 +275,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   }
 
   renderPanel(ctx: Ctx2D): void {
-    const h = this.bounds.height
     this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: h })
+    this._drawPill(ctx, this.canvasBounds)
     this._drawHandles(ctx)
     if (this.phaseSlot.isActive) {
       this._drawPhaseIndicator(ctx)
@@ -348,7 +345,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   private _drawOutlineToggle(ctx: Ctx2D): void {
     const row = this._outlineRowBounds()
     const midY = row.y + row.height / 2
-    const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
+    const btnX = row.x + row.width - BTN_SZ - 3
     const btnY = row.y + 3
     this._toggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
 

@@ -2,6 +2,7 @@ import { Node } from './Node.js'
 import { ParameterSlot } from './ParameterSlot.js'
 import { ValueType, SlotState } from './types.js'
 import type { Ctx2D, Point, Direction }  from './types.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 const SLOT_TC: Partial<Record<ValueType, string>> = {
   [ValueType.Amount]:    '#4a8fe8',
@@ -191,7 +192,7 @@ export abstract class Layer extends Node {
   // widget, above the slot rows. Layers that render a pill on the canvas
   // should use this instead of this.bounds (which is hidden by the widget).
   get canvasBounds(): { x: number; y: number; width: number; height: number } {
-    return { x: 300, y: 50, width: 260, height: this.bounds.height }
+    return { x: contentLeft(Node.canvasWidth), y: 50, width: panelWidth(Node.canvasWidth), height: this.bounds.height }
   }
 
   // Render parameter-slot drop targets below the layer's canvas panel.
@@ -216,8 +217,8 @@ export abstract class Layer extends Node {
     const SLOT_H  = 26
     const SLOT_GAP = 4
     const LABEL_W  = 78
-    const PANEL_X  = 300
-    const PANEL_W  = 260
+    const PANEL_X  = contentLeft(Node.canvasWidth)
+    const PANEL_W  = panelWidth(Node.canvasWidth)
     const drag     = Node.bindDrag
 
     ctx.save()

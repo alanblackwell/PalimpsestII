@@ -13,6 +13,9 @@ const WIDGET_MIN    = 120    // floor — keeps cards usable on very narrow (pho
 const WIDGET_MAX    = 280    // ceiling — matches the original fixed width on wide canvases
 const WIDGET_MARGIN = 20     // gap between the strip's right edge and canvas-space content
 
+const PANEL_DEFAULT_W = 260   // historical fixed width of a canvas-space pill
+const PANEL_MARGIN    = 10    // gap between a pill's right edge and the canvas edge
+
 // Total width of the LayerStackWidget strip for a given canvas width.
 export function stackWidgetWidth(canvasWidth: number): number {
   return Math.round(Math.max(WIDGET_MIN, Math.min(WIDGET_MAX, canvasWidth * WIDGET_FRAC)))
@@ -21,4 +24,11 @@ export function stackWidgetWidth(canvasWidth: number): number {
 // Left edge of the canvas-space panel area (just right of the strip).
 export function contentLeft(canvasWidth: number): number {
   return stackWidgetWidth(canvasWidth) + WIDGET_MARGIN
+}
+
+// Width of a canvas-space pill starting at contentLeft(canvasWidth) — the
+// historical fixed 260px, clamped so the pill's right edge stays within the
+// canvas on narrow (phone) canvases.
+export function panelWidth(canvasWidth: number): number {
+  return Math.max(0, Math.min(PANEL_DEFAULT_W, canvasWidth - contentLeft(canvasWidth) - PANEL_MARGIN))
 }
