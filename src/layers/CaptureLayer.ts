@@ -15,8 +15,6 @@ import { graph } from '../dataflow/Graph.js'
 
 const ACCENT  = '#7ecf7e'   // Image type colour
 const STRIPE  = 4
-const PANEL_X = 300
-const PANEL_W = 260
 const BTN     = 22
 const BTN_GAP = 4
 const BTN_M   = 6
@@ -642,6 +640,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
   renderPanel(ctx: Ctx2D): void {
     const h = this.bounds.height
+    const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
     this._drawStripPill(ctx, this.bounds)
     this._drawCapturePill(ctx, { x: PANEL_X, y: 50, width: PANEL_W, height: h })
     this._drawPreviewPill(ctx, { x: PANEL_X, y: 50 + h + PREVIEW_GAP, width: PANEL_W, height: PREVIEW_H })

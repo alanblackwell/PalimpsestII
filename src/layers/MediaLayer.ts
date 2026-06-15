@@ -14,8 +14,6 @@ import { graph } from '../dataflow/Graph.js'
 
 const ACCENT   = '#7ecf7e'   // Image type colour
 const STRIPE   = 4
-const PANEL_X  = 300
-const PANEL_W  = 260
 const BTN      = 22          // load button size
 const BTN_M    = 6           // load button margin from pill edge
 
@@ -266,11 +264,10 @@ export class MediaLayer extends Layer implements ImageSource {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    const h = this.bounds.height
     // Left strip pill (visible in the layer stack widget)
     this._drawStripPill(ctx, this.bounds)
     // Canvas-space pill with file load + status
-    this._drawMediaPill(ctx, { x: PANEL_X, y: 50, width: PANEL_W, height: h })
+    this._drawMediaPill(ctx, this.canvasBounds)
     // Playback control bar across the bottom of the canvas
     this._renderControlBar(ctx)
   }
@@ -286,6 +283,7 @@ export class MediaLayer extends Layer implements ImageSource {
     const idx = this.slots.indexOf(this.enableSlot)
     if (idx < 0) return
 
+    const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
     const btnX = PANEL_X + PANEL_W - BTN_SZ - 3

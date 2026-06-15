@@ -9,6 +9,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import type { Clock } from '../dataflow/Clock.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // RootLayer — the immovable bottom of the layer stack
@@ -40,9 +41,7 @@ const STRIPE  = 4
 const STRIP_H = 36
 
 // Canvas-space pill position (right of Stack Widget)
-const PANEL_X = 300
 const PANEL_Y = 50
-const PANEL_W = 260
 
 // Centred clock-dial readout
 const CLOCK_R         = 70     // dial radius, px
@@ -178,7 +177,7 @@ export class RootLayer extends Layer {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    this._drawPill(ctx, { x: PANEL_X, y: PANEL_Y, width: PANEL_W, height: STRIP_H })
+    this._drawPill(ctx, { x: contentLeft(Node.canvasWidth), y: PANEL_Y, width: panelWidth(Node.canvasWidth), height: STRIP_H })
     this._renderClockReadout(ctx)
   }
 
@@ -315,7 +314,7 @@ export class RootLayer extends Layer {
 
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
-    const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
+    const btnX = contentLeft(Node.canvasWidth) + panelWidth(Node.canvasWidth) - BTN_SZ - 3
     const btnY = y + 3
 
     this._toggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }

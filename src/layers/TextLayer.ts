@@ -15,6 +15,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // TextLayer — renders a string onto the canvas
@@ -44,8 +45,6 @@ const BTN   = 20
 const BTN_M = 6
 
 // Controls-row geometry (below the main pill)
-const CTRL_X   = 300   // left edge; matches slot PANEL_X
-const CTRL_W   = 216
 const CTRL_H   = 28
 const CTRL_GAP = 4    // gap between pill bottom and controls row
 
@@ -1205,7 +1204,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   private _ctrlDims() {
-    return { x: CTRL_X, y: this._ctrlY, w: CTRL_W, h: CTRL_H }
+    return { x: contentLeft(Node.canvasWidth), y: this._ctrlY, w: panelWidth(Node.canvasWidth), h: CTRL_H }
   }
 
   private _ctrlPanelBounds() {
@@ -1222,7 +1221,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _ctrlBtn(offsetX: number, w: number) {
     const y   = this._ctrlY
     const bh  = CTRL_H - 8
-    return { x: CTRL_X + offsetX, y: y + 4, width: w, height: bh }
+    return { x: contentLeft(Node.canvasWidth) + offsetX, y: y + 4, width: w, height: bh }
   }
 
   //  6          84        108       130  (divider)  134       162      192

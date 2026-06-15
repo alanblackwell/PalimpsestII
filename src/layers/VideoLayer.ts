@@ -14,8 +14,6 @@ import { graph } from '../dataflow/Graph.js'
 
 const ACCENT   = '#7ecf7e'   // Image type colour
 const STRIPE   = 4
-const PANEL_X  = 300
-const PANEL_W  = 260
 const NAV_SZ   = 22          // prev / next button size
 const NAV_OX   = STRIPE + 6  // nav button left offset from panel x
 
@@ -225,11 +223,10 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    const h = this.bounds.height
     // Left strip pill (visible in the layer stack widget)
     this._drawStripPill(ctx, this.bounds)
     // Canvas-space pill with camera selector controls
-    this._drawCameraPill(ctx, { x: PANEL_X, y: 50, width: PANEL_W, height: h })
+    this._drawCameraPill(ctx, this.canvasBounds)
   }
 
   // Slot rows are rendered by the base class; we add the freeze toggle button.
@@ -243,6 +240,7 @@ export class VideoLayer extends Layer implements ImageSource {
     const idx = this.slots.indexOf(this.enableSlot)
     if (idx < 0) return
 
+    const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
     const btnX = PANEL_X + PANEL_W - BTN_SZ - 3

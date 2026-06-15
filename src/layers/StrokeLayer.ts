@@ -13,6 +13,7 @@ import {
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // StrokeLayer — freehand stroke fitted to cubic Bézier curves
@@ -44,8 +45,6 @@ import { BindingLayer }  from './BindingLayer.js'
 
 const ACCENT     = '#e86a4a'
 const AM_COL     = '#4a8fe8'   // Amount type accent (stroke-width slot)
-const PANEL_X    = 300
-const PANEL_W    = 260
 const HANDLE_R   = 7     // circle handle radius
 const HANDLE_SZ  = 6     // square handle half-size
 const HANDLE_HIT = 14    // pointer hit radius
@@ -477,7 +476,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, { x: PANEL_X, y: 50, width: PANEL_W, height: this.bounds.height })
+    this._drawPill(ctx, this.canvasBounds)
     if (this._hasStroke && !this._drawMode) {
       this._renderHandles(ctx)
     }
@@ -493,7 +492,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   private _strokeWidthPillBounds(): BBox {
     const standardSlots = this.slots.filter(s => s !== this.widthSlot)
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: PANEL_X, y: this.panelBottom + standardH + 8, width: PANEL_W, height: 2 * SLOT_H + SLOT_GAP }
+    return { x: contentLeft(Node.canvasWidth), y: this.panelBottom + standardH + 8, width: panelWidth(Node.canvasWidth), height: 2 * SLOT_H + SLOT_GAP }
   }
 
   private _strokeSliderRowBounds(): BBox {
@@ -924,7 +923,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     )
 
     // Draw / Done button (canvas-space pill only)
-    if (width >= PANEL_W) {
+    if (width >= panelWidth(Node.canvasWidth)) {
       const BTN_W = 44, BTN_H = height - 8
       const btnX  = x + width - BTN_W - 4, btnY = y + 4
       this._drawBtnBounds = { x: btnX, y: btnY, width: BTN_W, height: BTN_H }

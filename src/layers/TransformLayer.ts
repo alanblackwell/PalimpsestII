@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
@@ -11,6 +12,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // TransformLayer — 2-D affine transform applied to an image
@@ -63,8 +65,6 @@ const MAX_SCALE = 4.0
 // be computed without re-rendering.
 const SLOT_H    = 26
 const SLOT_GAP  = 4
-const PANEL_X   = 300
-const PANEL_W   = 260
 const PILL_GAP  = 8    // vertical gap between the slot pill and the opacity pill
 const OPACITY_H = 36
 const OP_LABEL_W = 50
@@ -622,7 +622,7 @@ export class TransformLayer extends Layer implements ImageSource {
   private _opacityPillBounds() {
     const groupH = this.slots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
     const y = this.panelBottom + groupH + PILL_GAP
-    return { x: PANEL_X, y, width: PANEL_W, height: OPACITY_H }
+    return { x: contentLeft(Node.canvasWidth), y, width: panelWidth(Node.canvasWidth), height: OPACITY_H }
   }
 
   private _opacitySliderGeom() {

@@ -260,7 +260,7 @@ export class EventLayer extends Layer implements EventSource {
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
     this._drawPill(ctx, this.bounds)
-    const cp = { x: 300, y: 50, width: 260, height: this.bounds.height }
+    const cp = this.canvasBounds
     this._cpBounds = cp
     this._drawPill(ctx, cp)
     if (!this._animPathSlot.isActive || !this._targetSlot.isActive) {

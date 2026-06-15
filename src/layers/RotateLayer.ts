@@ -12,6 +12,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // RotateLayer — animates rotation of image content about a centre point
@@ -42,7 +43,6 @@ const DIAL_R = 48          // sweep-hand dial radius (px)
 // Slot-row constants (must match Layer.ts renderSlots)
 const SLOT_H   = 26
 const SLOT_GAP = 4
-const PANEL_X  = 300
 const LABEL_W  = 78
 
 export class RotateLayer extends Layer implements ImageSource {
@@ -310,6 +310,7 @@ export class RotateLayer extends Layer implements ImageSource {
     const idx = this.slots.indexOf(this.runModeSlot)
     if (idx < 0) return
 
+    const PANEL_X = contentLeft(Node.canvasWidth)
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
     const cbx  = PANEL_X + LABEL_W - 14

@@ -1,4 +1,5 @@
 import { Layer }        from '../core/Layer.js'
+import { Node }         from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
@@ -8,6 +9,7 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // AnimPathLayer — samples a shape layer's perimeter at a given phase
@@ -29,7 +31,6 @@ const DOT_R   = 3
 // Slot-row constants (must match Layer.ts renderSlots)
 const SLOT_H   = 26
 const SLOT_GAP = 4
-const PANEL_X  = 300
 const LABEL_W  = 78
 
 export class AnimPathLayer extends Layer implements PointSource {
@@ -158,7 +159,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
+    this._drawPill(ctx, this.canvasBounds)
   }
 
   // Draw radio checkbox overlay on the runModeSlot row.
@@ -168,6 +169,7 @@ export class AnimPathLayer extends Layer implements PointSource {
     const idx = this.slots.indexOf(this.runModeSlot)
     if (idx < 0) return
 
+    const PANEL_X = contentLeft(Node.canvasWidth)
     const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
     const midY = y + SLOT_H / 2
     const cbx  = PANEL_X + LABEL_W - 14

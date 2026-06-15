@@ -9,6 +9,7 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // MaskLayer — compositing mask editor
@@ -47,8 +48,7 @@ const BRUSH_MAX     = 100
 const BRUSH_DEFAULT = 20
 const N_SHAPES      =  4
 
-// Tools-panel geometry (drawn at x=300, above the slot rows)
-const PANEL_X   = 300
+// Tools-panel geometry (drawn at the canvas-space panel x, above the slot rows)
 const TOOLS_H   = 44
 const TOOLS_GAP =  6
 
@@ -350,19 +350,20 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private _drawToolsPanel(ctx: Ctx2D): void {
     const ty  = this._toolsY
-    const tw  = 260
+    const px  = this._panelX
+    const tw  = panelWidth(Node.canvasWidth)
     const midY = ty + TOOLS_H / 2
 
     ctx.save()
 
     ctx.fillStyle = 'rgba(0,0,0,0.40)'
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, ty, tw, TOOLS_H, 6)
+    ctx.roundRect(px, ty, tw, TOOLS_H, 6)
     ctx.fill()
 
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, ty, 4, TOOLS_H, [4, 0, 0, 4])
+    ctx.roundRect(px, ty, 4, TOOLS_H, [4, 0, 0, 4])
     ctx.fill()
 
     // Tool buttons
@@ -374,7 +375,7 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.font         = '9px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('sz', PANEL_X + 128, midY)
+    ctx.fillText('sz', px + 128, midY)
 
     // Brush-size slider
     this._drawSlider(ctx)
@@ -626,30 +627,33 @@ export class MaskLayer extends Layer implements MaskSource {
   // Button / slider bounds
   // ----------------------------------------------------------
 
+  // Left edge of the canvas-space tools/slot panel — matches Layer.canvasBounds.
+  private get _panelX(): number { return contentLeft(Node.canvasWidth) }
+
   private _paintBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 8, y: ty + 8, width: 54, height: 28 }
+    return { x: this._panelX + 8, y: ty + 8, width: 54, height: 28 }
   }
 
   private _eraseBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 66, y: ty + 8, width: 54, height: 28 }
+    return { x: this._panelX + 66, y: ty + 8, width: 54, height: 28 }
   }
 
   // Slider track area (pointer hit zone).
   private _sliderBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 142, y: ty + 6, width: 72, height: 32 }
+    return { x: this._panelX + 142, y: ty + 6, width: 72, height: 32 }
   }
 
   private _clearBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 222, y: ty + 10, width: 18, height: 24 }
+    return { x: this._panelX + 222, y: ty + 10, width: 18, height: 24 }
   }
 
   private _resetBtnBounds() {
     const ty = this._toolsY
-    return { x: PANEL_X + 244, y: ty + 10, width: 18, height: 24 }
+    return { x: this._panelX + 244, y: ty + 10, width: 18, height: 24 }
   }
 
   // ----------------------------------------------------------

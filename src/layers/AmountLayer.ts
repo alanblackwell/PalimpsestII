@@ -161,7 +161,7 @@ export class AmountLayer extends Layer implements AmountSource {
 
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
-    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
+    this._drawPill(ctx, this.canvasBounds)
   }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
