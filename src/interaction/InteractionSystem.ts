@@ -611,19 +611,27 @@ export class InteractionSystem {
     const dir = classifySwipe(dx, dy)
 
     if (tp.inWidget) {
-      if (dir === 'up')        this._widget?.raiseNext()
-      else if (dir === 'down') this._widget?.raisePrev()
+      if (dir === 'up')        { this._flashGesture('up', 'widget');   this._widget?.raiseNext() }
+      else if (dir === 'down') { this._flashGesture('down', 'widget'); this._widget?.raisePrev() }
       else                      this._widget?.tapSelect(point)
       return
     }
 
     switch (dir) {
-      case 'up':    this._widget?.navigateUp();   break
-      case 'down':  this._widget?.navigateDown(); break
-      case 'left':  this._deleteAction?.();       break
-      case 'right': this._backgroundAction?.();   break
+      case 'up':    this._flashGesture('up', 'canvas');    this._widget?.navigateUp();   break
+      case 'down':  this._flashGesture('down', 'canvas');  this._widget?.navigateDown(); break
+      case 'left':  this._flashGesture('left', 'canvas');  this._deleteAction?.();       break
+      case 'right': this._flashGesture('right', 'canvas'); this._backgroundAction?.();   break
       default:      this._handleEmptyAreaClick(point); break
     }
+  }
+
+  // Briefly flash a direction arrow over the canvas (or stack widget)
+  // centre — visual confirmation that a swipe was recognised, to help
+  // distinguish a recognised swipe from a tap that fell through to pixel-pick.
+  private _flashGesture(dir: 'up' | 'down' | 'left' | 'right', target: 'canvas' | 'widget'): void {
+    Node.gestureFlash = { dir, target, start: performance.now() }
+    Node.scheduleFrame?.()
   }
 
   private _handleWheel(e: WheelEvent): void {

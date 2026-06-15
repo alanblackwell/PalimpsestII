@@ -84,6 +84,16 @@ export abstract class Node {
   // toggle.
   static renderStackWidget: ((ctx: Ctx2D) => void) | null = null
 
+  // Set by InteractionSystem when a touch swipe gesture is recognised; read
+  // by Evaluator to briefly flash a direction arrow over the canvas (or
+  // stack widget) centre — visual confirmation that the swipe registered,
+  // rather than falling through to a tap/click.
+  static gestureFlash: {
+    dir: 'up' | 'down' | 'left' | 'right'
+    target: 'canvas' | 'widget'
+    start: number   // performance.now() at recognition
+  } | null = null
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

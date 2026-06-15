@@ -5,6 +5,9 @@ import { Clock }     from './Clock.js'
 import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
 
+// Duration of the swipe-gesture direction-arrow flash (see Node.gestureFlash).
+const GESTURE_FLASH_MS = 350
+
 // ------------------------------------------------------------
 // Evaluator — drives the render loop and wires everything together
 // ------------------------------------------------------------
@@ -221,6 +224,54 @@ export class Evaluator {
     if (Node.bindDrag.active && Node.bindDrag.source !== null) {
       this._drawBindDragOverlay(this.ctx)
     }
+
+    // Swipe-gesture feedback — briefly flash a direction arrow.
+    if (Node.gestureFlash !== null) {
+      this._drawGestureFlash(this.ctx)
+    }
+  }
+
+  // Briefly flash a block arrow in the swipe direction, over the centre of
+  // the canvas (main-canvas swipes) or the centre of the stack widget strip
+  // (stack-widget swipes) — visual confirmation that a swipe was recognised.
+  private _drawGestureFlash(ctx: CanvasRenderingContext2D): void {
+    const flash = Node.gestureFlash!
+    const elapsed = performance.now() - flash.start
+    if (elapsed > GESTURE_FLASH_MS) {
+      Node.gestureFlash = null
+      return
+    }
+
+    const { width, height } = this.canvas
+    const cx = flash.target === 'widget'
+      ? (this._layerStackWidget?.widgetWidth ?? width) / 2
+      : width / 2
+    const cy = height / 2
+
+    const angle = { up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[flash.dir]
+    const alpha = 0.85 * (1 - elapsed / GESTURE_FLASH_MS)
+
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(angle)
+    ctx.globalAlpha = alpha
+    ctx.shadowColor = 'rgba(0,0,0,0.6)'
+    ctx.shadowBlur  = 12
+    ctx.fillStyle   = 'rgba(255,255,255,0.95)'
+    ctx.beginPath()
+    ctx.moveTo(-36, 12)
+    ctx.lineTo(0, -48)
+    ctx.lineTo(36, 12)
+    ctx.lineTo(14, 12)
+    ctx.lineTo(14, 48)
+    ctx.lineTo(-14, 48)
+    ctx.lineTo(-14, 12)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
+
+    // Continue redrawing until the flash fades, even in demand-driven mode.
+    Node.scheduleFrame?.()
   }
 
   private _drawBindDragOverlay(ctx: CanvasRenderingContext2D): void {
