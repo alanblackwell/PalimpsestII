@@ -209,6 +209,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._isDefaultText = text === undefined
     this._text         = text ?? randomDefaultText()
     this._cursorPos    = this._text.length
+    this._manualPosition = this._randomPosition()
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
     this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
     this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
@@ -633,6 +634,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (typeof state.rotation === 'number')   this._rotation   = state.rotation
     if (state.manualPosition && typeof state.manualPosition === 'object') {
       this._manualPosition = state.manualPosition as Point
+    } else {
+      // Older saves predate randomised initial placement — fall back to the
+      // canvas-centre default rather than the constructor's random position.
+      this._manualPosition = null
     }
     this._cursorPos     = this._text.length
     this._isDefaultText = typeof state.isDefaultText === 'boolean'
@@ -1423,6 +1428,25 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (this._bold)   parts.push('bold')
     parts.push(`${Math.round(this._size)}px`, this._fontFamily)
     return parts.join(' ')
+  }
+
+  // Pick a random on-canvas position for a newly-created layer's single-line
+  // text, keeping the whole rendered line within the canvas — mirrors
+  // rndShape's random placement for Ellipse/Rect/Path layers.
+  private _randomPosition(): Point {
+    const lineH = Math.ceil(this._size * 1.35)
+    let textWidth = 0
+    const ctx = this._imageCanvas.getContext('2d')
+    if (ctx) {
+      ctx.font  = this._fontString()
+      textWidth = ctx.measureText(this._text).width
+    }
+    const halfW = Math.min(textWidth / 2, Node.canvasWidth  / 2)
+    const halfH = Math.min(lineH / 2,     Node.canvasHeight / 2)
+    return {
+      x: halfW + Math.random() * Math.max(0, Node.canvasWidth  - 2 * halfW),
+      y: halfH + Math.random() * Math.max(0, Node.canvasHeight - 2 * halfH),
+    }
   }
 
   private _drawBtn(
