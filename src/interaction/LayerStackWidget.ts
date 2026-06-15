@@ -73,6 +73,10 @@ export class LayerStackWidget {
   private _dragY       = 0      // current absolute pointer y
   private _dropIndex   = -1     // insertion index in _layers when dropped
 
+  // ── Touch gesture state ──────────────────────────────────────
+  private _scrollOffset = 0     // px, vertical scroll of the card stack
+  private _raisedLayer: Layer | null = null   // temporarily raised (swipe up/down)
+
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
   }
@@ -98,6 +102,9 @@ export class LayerStackWidget {
       this._dragLayer = null
       this._dragging  = false
       this._dropIndex = -1
+    }
+    if (this._raisedLayer !== null && !this._layers.includes(this._raisedLayer)) {
+      this._raisedLayer = null
     }
     // Default selection: second-from-top, so the gap is visible immediately.
     if (this._selected === null || !this._layers.includes(this._selected)) {
@@ -154,6 +161,61 @@ export class LayerStackWidget {
       this._select(this._layers[ci - 1] ?? this._selected)
       Node.scheduleFrame?.()
     }
+  }
+
+  // Raise the next/previous thumbnail (towards top/bottom of stack) as a
+  // temporary selection/drag target, without changing the current layer.
+  // Clamped to [1, n-1] — index 0 (Root) renders blank unless selected
+  // (thumbnailOnlyWhenSelected) and is never a useful raise target.
+  raiseNext(): void {
+    const n = this._layers.length
+    if (n <= 1) return
+    const base = this._raisedLayer !== null
+      ? this._layers.indexOf(this._raisedLayer)
+      : this._currentIndex()
+    const next = Math.max(1, Math.min(n - 1, base + 1))
+    this._raisedLayer = this._layers[next] ?? null
+    Node.scheduleFrame?.()
+  }
+
+  raisePrev(): void {
+    const n = this._layers.length
+    if (n <= 1) return
+    const base = this._raisedLayer !== null
+      ? this._layers.indexOf(this._raisedLayer)
+      : this._currentIndex()
+    const prev = Math.max(1, Math.min(n - 1, base - 1))
+    this._raisedLayer = this._layers[prev] ?? null
+    Node.scheduleFrame?.()
+  }
+
+  // Clear any raised thumbnail and select the layer hit at `pt`, if any —
+  // mirrors the existing tap-to-select behaviour.
+  tapSelect(pt: Point): void {
+    this._raisedLayer = null
+    const hit = this._hitTest(pt)
+    if (hit !== null) this._select(hit)
+    Node.scheduleFrame?.()
+  }
+
+  // If `pt` hits the raised card's full bounds, arm it for the existing
+  // drag/reorder/bind-drag machinery exactly as handlePointerDown would for
+  // a direct hit. Returns true if armed.
+  armRaisedDrag(pt: Point): boolean {
+    if (this._raisedLayer === null) return false
+    const sp = this._spacing()
+    const ch = this._cardH()
+    const i  = this._layers.indexOf(this._raisedLayer)
+    if (i < 0) return false
+    const y = this._cardY(i, sp)
+    if (pt.x < 0 || pt.x >= this._widgetW() || pt.y < y || pt.y >= y + ch) return false
+
+    this._canvas.focus()
+    this._dragLayer   = this._raisedLayer
+    this._dragOffsetY = pt.y - y
+    this._dragY       = y
+    this._dropIndex   = i
+    return true
   }
 
   // Reorder: move selected layer one position higher (Shift+ArrowUp).
@@ -236,7 +298,7 @@ export class LayerStackWidget {
   //   │  card 0  (root)      │
   //
   // i = 0 (root) → near bottom;  i = N-1 (topmost) → near TOP_MARGIN.
-  private _cardY(i: number, sp: number): number {
+  private _cardYRaw(i: number, sp: number): number {
     const ci = this._currentIndex()
     const n  = this._layers.length
     const ch = this._cardH()
@@ -259,6 +321,30 @@ export class LayerStackWidget {
     return currentY + (ci - i) * sp                       // below section
   }
 
+  // Scroll-adjusted card position — every caller of _cardY gets
+  // scroll-awareness for free.
+  private _cardY(i: number, sp: number): number {
+    return this._cardYRaw(i, sp) - this._scrollOffset
+  }
+
+  // Total unscrolled height of the card stack (root card's bottom edge).
+  private _contentHeight(sp: number, ch: number): number {
+    return this._cardYRaw(0, sp) + ch
+  }
+
+  private _maxScroll(): number {
+    return Math.max(0, this._contentHeight(this._spacing(), this._cardH()) - this._canvas.height)
+  }
+
+  // Scroll the card stack by `dy` px (positive = reveal lower cards),
+  // clamped to the valid range. Driven by two-finger drag and mouse wheel.
+  scrollBy(dy: number): void {
+    const max = this._maxScroll()
+    if (max <= 0) return
+    this._scrollOffset = Math.max(0, Math.min(max, this._scrollOffset + dy))
+    Node.scheduleFrame?.()
+  }
+
   // During a drag, shift cards above / below the gap to open space.
   private _cardYDrag(i: number, sp: number): number {
     if (!this._dragging || this._dragLayer === null) return this._cardY(i, sp)
@@ -279,6 +365,17 @@ export class LayerStackWidget {
   private _hitTest(pt: Point): Layer | null {
     const sp = this._spacing()
     const ch = this._cardH()
+
+    // A raised thumbnail (swipe up/down in the widget) takes priority over
+    // the stack's normal occlusion order — its whole card area is the target.
+    if (this._raisedLayer !== null) {
+      const ri = this._layers.indexOf(this._raisedLayer)
+      if (ri >= 0) {
+        const y = this._cardY(ri, sp)
+        if (pt.y >= y && pt.y < y + ch) return this._raisedLayer
+      }
+    }
+
     const ci = this._currentIndex()
     const n  = this._layers.length
     // Test from topmost (drawn last, highest z) downward.
@@ -310,6 +407,14 @@ export class LayerStackWidget {
     const sp = this._spacing()
     const ch = this._cardH()
 
+    // Clip the scrollable card stack to the strip — cards scrolled out of
+    // view must not draw outside it. The label strip and scrollbar are
+    // always-visible overlays drawn after restoring the clip.
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(0, 0, this._widgetW(), this._canvas.height)
+    ctx.clip()
+
     // Draw root-to-top so each later card occludes the earlier ones.
     for (let i = 0; i < n; i++) {
       const layer = this._layers[i]!
@@ -336,8 +441,56 @@ export class LayerStackWidget {
       this._drawCard(ctx, this._dragLayer, this._dragY, this._cardW(), ch, true)
     }
 
+    // Raised thumbnail (swipe up/down) floats above everything else, unless
+    // it's the card currently being dragged (already drawn above).
+    if (this._raisedLayer !== null && !(this._dragging && this._dragLayer === this._raisedLayer)) {
+      this._drawRaisedCard(ctx, sp, ch)
+    }
+
+    ctx.restore()
+
     // Current-layer name strip at the very bottom of the widget area.
     this._drawCurrentLabel(ctx)
+    this._drawScrollbar(ctx)
+  }
+
+  // Thin scrollbar at the left edge of the window, visible only when the
+  // card stack overflows the strip's height.
+  private _drawScrollbar(ctx: Ctx2D): void {
+    const max = this._maxScroll()
+    if (max <= 0) return
+    const sp      = this._spacing()
+    const ch      = this._cardH()
+    const viewH   = this._canvas.height
+    const content = this._contentHeight(sp, ch)
+    const barW    = 3
+    const thumbH  = Math.max(20, viewH * (viewH / content))
+    const thumbY  = (viewH - thumbH) * (this._scrollOffset / max)
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.fillRect(0, 0, barW, viewH)
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'
+    ctx.fillRect(0, thumbY, barW, thumbH)
+    ctx.restore()
+  }
+
+  // Redraw the raised card at its (scrolled) position, on top of any cards
+  // that would normally occlude it, with a highlight stroke distinguishing
+  // it from the cyan "selected" tint.
+  private _drawRaisedCard(ctx: Ctx2D, sp: number, ch: number): void {
+    const i = this._layers.indexOf(this._raisedLayer!)
+    if (i < 0) return
+    const y = this._cardY(i, sp)
+    this._drawCard(ctx, this._raisedLayer!, y, this._cardW(), ch)
+
+    ctx.save()
+    ctx.translate(CARD_X, y)
+    ctx.rotate(TILT)
+    ctx.strokeStyle = 'rgba(255,255,160,0.9)'
+    ctx.lineWidth   = 2.5
+    ctx.strokeRect(0.5, 0.5, this._cardW() - 1, ch - 1)
+    ctx.restore()
   }
 
   private _drawCurrentLabel(ctx: Ctx2D): void {
@@ -483,8 +636,9 @@ export class LayerStackWidget {
       this._select(this._dragLayer)
       Node.scheduleFrame?.()
     }
-    this._dragging  = false
-    this._dragLayer = null
+    this._dragging    = false
+    this._dragLayer   = null
+    this._raisedLayer = null
   }
 
   // Draw a thin cyan line at the current drop target position.

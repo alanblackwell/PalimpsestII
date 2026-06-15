@@ -4,6 +4,11 @@ import { ParameterSlot }        from '../core/ParameterSlot.js'
 import { SlotState, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
+import {
+  classifySwipe, computePinchTransform,
+  TAP_MAX_MOVEMENT, TWO_FINGER_TAP_MS,
+  type PinchStart,
+} from './gestures.js'
 
 // ------------------------------------------------------------
 // InteractionSystem — routes canvas pointer events to the stack
@@ -87,6 +92,22 @@ function isInteractive(node: Node): boolean {
 }
 
 // ------------------------------------------------------------------
+// Touch gesture tracking
+// ------------------------------------------------------------------
+
+// A touch pointer that has been "deferred" — not claimed by a draggable
+// node or the widget's own drag handling — pending swipe/tap/pinch
+// recognition. `x/y` are canvas-space (via _point); `clientX/clientY` are
+// raw screen coordinates, used for pinch distance/centroid math.
+interface TouchPointer {
+  x: number; y: number
+  startX: number; startY: number
+  clientX: number; clientY: number
+  startTime: number
+  inWidget: boolean
+}
+
+// ------------------------------------------------------------------
 // InteractionSystem
 // ------------------------------------------------------------------
 
@@ -106,12 +127,23 @@ export class InteractionSystem {
   // True while a pointer gesture is being handled by the LayerStackWidget.
   private _widgetCapture = false
 
+  // ── Touch gesture state ──────────────────────────────────────────
+  // Touch pointers not (yet) claimed by _active or _widgetCapture,
+  // pending swipe/tap/pinch/scroll recognition. See gestures.ts.
+  private _touchPointers = new Map<number, TouchPointer>()
+  private _pinchStart: PinchStart | null = null
+  private _scrollCentroidY: number | null = null
+  private _zoomScale = 1
+  private _panX = 0
+  private _panY = 0
+
   // Bound listener references retained so destroy() can remove them.
   private readonly _onDown:   (e: PointerEvent) => void
   private readonly _onMove:   (e: PointerEvent) => void
   private readonly _onUp:     (e: PointerEvent) => void
   private readonly _onCancel: (e: PointerEvent) => void
   private readonly _onLeave:  (e: PointerEvent) => void
+  private readonly _onWheel:  (e: WheelEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
   private readonly _onPaste:  (e: ClipboardEvent) => void
   private _spaceAction:      (() => void) | null = null
@@ -138,6 +170,7 @@ export class InteractionSystem {
     this._onUp     = e => this._handleUp(e)
     this._onCancel = e => this._handleUp(e)   // treat cancel like up
     this._onLeave  = () => { Node.pointerCanvas = null }
+    this._onWheel  = e => this._handleWheel(e)
     this._onKey    = e => this._handleKey(e)
     this._onPaste  = e => this._handlePaste(e)
     this._onContext = e => this._handleContextMenu(e)
@@ -147,10 +180,15 @@ export class InteractionSystem {
     canvas.addEventListener('pointerup',     this._onUp)
     canvas.addEventListener('pointercancel', this._onCancel)
     canvas.addEventListener('pointerleave',  this._onLeave)
+    canvas.addEventListener('wheel',         this._onWheel, { passive: false })
     canvas.addEventListener('contextmenu',   this._onContext)
     // Key/paste events on document so they fire even before the canvas is clicked.
     document.addEventListener('keydown',     this._onKey)
     document.addEventListener('paste',       this._onPaste)
+
+    // Pinch-to-zoom applies translate()/scale() directly to the canvas
+    // element; transform-origin 0,0 keeps the math in _point() simple.
+    canvas.style.transformOrigin = '0 0'
   }
 
   // ----------------------------------------------------------
@@ -237,6 +275,7 @@ export class InteractionSystem {
     this._canvas.removeEventListener('pointerup',     this._onUp)
     this._canvas.removeEventListener('pointercancel', this._onCancel)
     this._canvas.removeEventListener('pointerleave',  this._onLeave)
+    this._canvas.removeEventListener('wheel',         this._onWheel)
     this._canvas.removeEventListener('contextmenu',   this._onContext)
     document.removeEventListener('keydown',           this._onKey)
     document.removeEventListener('paste',             this._onPaste)
@@ -246,8 +285,16 @@ export class InteractionSystem {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _point(e: PointerEvent): Point {
-    return { x: e.offsetX, y: e.offsetY }
+  // Maps client (viewport) coordinates to canvas-pixel coordinates,
+  // inverting any CSS transform applied to the canvas element (the
+  // pinch-to-zoom magnifier scales/translates the canvas without affecting
+  // its internal resolution or any layer's rendering/hit-testing).
+  private _point(e: { clientX: number; clientY: number }): Point {
+    const rect = this._canvas.getBoundingClientRect()
+    return {
+      x: (e.clientX - rect.left) * (this._canvas.width  / rect.width),
+      y: (e.clientY - rect.top)  * (this._canvas.height / rect.height),
+    }
   }
 
   private _pickLayerAtPixel(point: Point): Layer | null {
@@ -297,11 +344,57 @@ export class InteractionSystem {
 
   private _handleDown(e: PointerEvent): void {
     if (e.button !== 0) return   // only handle primary (left) button
-    // If we are already tracking a pointer, ignore additional ones.
-    // (Multi-touch is not yet supported.)
-    if (this._active !== null || this._widgetCapture) return
 
     const point = this._point(e)
+    const isTouch = e.pointerType === 'touch'
+
+    // Second touch of a two-finger gesture — pinch-zoom / two-finger tap on
+    // the main canvas, or two-finger scroll on the stack widget. Only
+    // recognised while a single touch is "deferred" (Phase A/D below).
+    if (isTouch && this._touchPointers.size === 1 && this._active === null && !this._widgetCapture) {
+      this._touchPointers.set(e.pointerId, {
+        x: point.x, y: point.y, startX: point.x, startY: point.y,
+        clientX: e.clientX, clientY: e.clientY,
+        startTime: performance.now(),
+        inWidget: this._widget?.inBounds(point) ?? false,
+      })
+      this._canvas.setPointerCapture(e.pointerId)
+
+      const [first, second] = [...this._touchPointers.values()] as [TouchPointer, TouchPointer]
+      if (!first.inWidget && !second.inWidget) {
+        // Pinch-zoom / two-finger tap on the main canvas.
+        const rect = this._canvas.getBoundingClientRect()
+        this._pinchStart = {
+          distance: Math.hypot(second.clientX - first.clientX, second.clientY - first.clientY),
+          centroid: { x: (first.clientX + second.clientX) / 2, y: (first.clientY + second.clientY) / 2 },
+          scale: this._zoomScale,
+          pan: { x: this._panX, y: this._panY },
+          rectLeft: rect.left, rectTop: rect.top,
+          clientWidth: this._canvas.clientWidth, clientHeight: this._canvas.clientHeight,
+        }
+      } else if (first.inWidget && second.inWidget) {
+        // Two-finger scroll on the stack widget.
+        this._scrollCentroidY = (first.clientY + second.clientY) / 2
+      }
+      return
+    }
+
+    // If we are already tracking a pointer/gesture, ignore additional ones.
+    if (this._active !== null || this._widgetCapture || this._touchPointers.size > 0) return
+
+    // Touch on the stack widget: a hit on the raised card (Phase D) feeds
+    // the existing drag/reorder/bind-drag machinery directly; everything
+    // else is deferred for swipe/tap recognition.
+    if (isTouch && this._widget !== null && this._widget.inBounds(point)) {
+      if (this._widget.armRaisedDrag(point)) {
+        this._widgetCapture = true
+        this._canvas.setPointerCapture(e.pointerId)
+        this._setCursor('grabbing')
+        return
+      }
+      this._deferTouch(e, point, true)
+      return
+    }
 
     // Route to the LayerStackWidget first if the pointer is in its strip.
     if (this._widget !== null && this._widget.inBounds(point)) {
@@ -318,31 +411,13 @@ export class InteractionSystem {
     const node  = this._hitTest(point)
 
     if (node === null || !isDraggable(node)) {
-      const selected = this._widget?.selected ?? null
-
-      // A click on a parameter-slot row (empty or bound) takes priority
-      // over pixel-pick — it either creates+binds a default layer for an
-      // empty slot, or selects/restores the layer bound to a filled slot.
-      if (selected !== null) {
-        const slot = selected.hitTestSlot(point)
-        if (slot !== null) {
-          this._onSlotClick?.(selected, slot)
-          return
-        }
+      // Touch on an empty main-canvas area: defer for swipe/tap recognition
+      // (Phase A) instead of resolving the click immediately.
+      if (isTouch) {
+        this._deferTouch(e, point, false)
+        return
       }
-
-      // No interactive hit — pixel-pick to select a layer by rendered content.
-      // Suppressed when the selected layer sets blockPixelPick (e.g. MaskLayer,
-      // where painting begins in transparent areas).
-      const blocked = selected !== null &&
-        (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
-      if (this._widget !== null && !blocked) {
-        const picked = this._pickLayerAtPixel(point)
-        if (picked !== null) {
-          this._widget.selected = picked
-          Node.scheduleFrame?.()
-        }
-      }
+      this._handleEmptyAreaClick(point)
       return
     }
 
@@ -368,6 +443,12 @@ export class InteractionSystem {
   private _handleMove(e: PointerEvent): void {
     const point = this._point(e)
     Node.pointerCanvas = point
+
+    if (this._touchPointers.has(e.pointerId)) {
+      this._handleTouchMove(e, point)
+      return
+    }
+
     if (this._widgetCapture) {
       this._widget?.handlePointerMove(point)
       // Keep drag overlay position current
@@ -389,6 +470,12 @@ export class InteractionSystem {
 
   private _handleUp(e: PointerEvent): void {
     const point = this._point(e)
+
+    if (this._touchPointers.has(e.pointerId)) {
+      this._handleTouchUp(e, point)
+      return
+    }
+
     if (this._widgetCapture) {
       if (Node.bindDrag.active) {
         // Bind-drop: attempt to bind the dragged source to a slot at the drop point.
@@ -417,6 +504,134 @@ export class InteractionSystem {
     this._active.node.handlePointerUp?.()
     this._active = null
     this._updateHoverCursor(e)
+  }
+
+  // Record a touch pointer that has not been claimed by a draggable node or
+  // the widget's drag handling, pending swipe/tap/pinch/scroll recognition.
+  private _deferTouch(e: PointerEvent, point: Point, inWidget: boolean): void {
+    this._touchPointers.set(e.pointerId, {
+      x: point.x, y: point.y, startX: point.x, startY: point.y,
+      clientX: e.clientX, clientY: e.clientY,
+      startTime: performance.now(), inWidget,
+    })
+    this._canvas.setPointerCapture(e.pointerId)
+  }
+
+  // A click/tap on an empty area of the main canvas that didn't hit a
+  // draggable node: slot-row click takes priority, then pixel-pick.
+  private _handleEmptyAreaClick(point: Point): void {
+    const selected = this._widget?.selected ?? null
+
+    // A click on a parameter-slot row (empty or bound) takes priority
+    // over pixel-pick — it either creates+binds a default layer for an
+    // empty slot, or selects/restores the layer bound to a filled slot.
+    if (selected !== null) {
+      const slot = selected.hitTestSlot(point)
+      if (slot !== null) {
+        this._onSlotClick?.(selected, slot)
+        return
+      }
+    }
+
+    // No interactive hit — pixel-pick to select a layer by rendered content.
+    // Suppressed when the selected layer sets blockPixelPick (e.g. MaskLayer,
+    // where painting begins in transparent areas).
+    const blocked = selected !== null &&
+      (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
+    if (this._widget !== null && !blocked) {
+      const picked = this._pickLayerAtPixel(point)
+      if (picked !== null) {
+        this._widget.selected = picked
+        Node.scheduleFrame?.()
+      }
+    }
+  }
+
+  // Update a deferred touch pointer's tracked position, and drive the
+  // live pinch-zoom transform / widget two-finger scroll while two
+  // pointers are down.
+  private _handleTouchMove(e: PointerEvent, point: Point): void {
+    const tp = this._touchPointers.get(e.pointerId)
+    if (tp === undefined) return
+    tp.x = point.x; tp.y = point.y
+    tp.clientX = e.clientX; tp.clientY = e.clientY
+
+    if (this._touchPointers.size !== 2) return
+    const [a, b] = [...this._touchPointers.values()] as [TouchPointer, TouchPointer]
+
+    if (this._pinchStart !== null) {
+      const { scale, panX, panY } = computePinchTransform(
+        this._pinchStart,
+        [{ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY }],
+        { width: window.innerWidth, height: window.innerHeight },
+      )
+      this._zoomScale = scale
+      this._panX = panX
+      this._panY = panY
+      this._canvas.style.transform = (scale === 1 && panX === 0 && panY === 0)
+        ? ''
+        : `translate(${panX}px, ${panY}px) scale(${scale})`
+    } else if (this._scrollCentroidY !== null) {
+      const centroidY = (a.clientY + b.clientY) / 2
+      this._widget?.scrollBy(this._scrollCentroidY - centroidY)
+      this._scrollCentroidY = centroidY
+    }
+  }
+
+  // Resolve a deferred touch pointer on release: either end a two-finger
+  // gesture (recognising a two-finger tap), or classify a single-finger
+  // gesture as a swipe (dispatching to the corresponding action) or a tap
+  // (falling back to the equivalent click behaviour).
+  private _handleTouchUp(e: PointerEvent, point: Point): void {
+    const tp = this._touchPointers.get(e.pointerId)
+    if (tp === undefined) return
+    this._touchPointers.delete(e.pointerId)
+
+    if (this._touchPointers.size === 1) {
+      const [[otherId, other]] = [...this._touchPointers.entries()] as [[number, TouchPointer]]
+      const moved = (p: TouchPointer) => Math.hypot(p.x - p.startX, p.y - p.startY) > TAP_MAX_MOVEMENT
+      const duration = performance.now() - Math.min(tp.startTime, other.startTime)
+      if (this._pinchStart !== null && !moved(tp) && !moved(other) && duration < TWO_FINGER_TAP_MS) {
+        // Two-finger tap on the main canvas — toggle edit/display mode.
+        this._closeInspector()
+        this._spaceAction?.()
+      }
+      try { this._canvas.releasePointerCapture(otherId) } catch { /* already released */ }
+      this._touchPointers.delete(otherId)
+      this._pinchStart = null
+      this._scrollCentroidY = null
+      return
+    }
+
+    this._pinchStart = null
+    this._scrollCentroidY = null
+
+    const dx = tp.x - tp.startX
+    const dy = tp.y - tp.startY
+    const dir = classifySwipe(dx, dy)
+
+    if (tp.inWidget) {
+      if (dir === 'up')        this._widget?.raiseNext()
+      else if (dir === 'down') this._widget?.raisePrev()
+      else                      this._widget?.tapSelect(point)
+      return
+    }
+
+    switch (dir) {
+      case 'up':    this._widget?.navigateUp();   break
+      case 'down':  this._widget?.navigateDown(); break
+      case 'left':  this._deleteAction?.();       break
+      case 'right': this._backgroundAction?.();   break
+      default:      this._handleEmptyAreaClick(point); break
+    }
+  }
+
+  private _handleWheel(e: WheelEvent): void {
+    const point = this._point(e)
+    if (this._widget?.inBounds(point)) {
+      this._widget.scrollBy(e.deltaY)
+      e.preventDefault()
+    }
   }
 
   // Returns true if `selected` ingested `src` (consuming the drop).
@@ -549,7 +764,7 @@ export class InteractionSystem {
 
   private _handleContextMenu(e: MouseEvent): void {
     e.preventDefault()
-    const point = { x: e.offsetX, y: e.offsetY }
+    const point = this._point(e)
     const selected = this._widget?.selected ?? null
     if (selected === null) return
 
