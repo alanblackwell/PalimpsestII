@@ -461,6 +461,11 @@ export class InteractionSystem {
       e.preventDefault()
       return
     }
+    if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+      this._copyCanvasToClipboard()
+      e.preventDefault()
+      return
+    }
     if (e.key === 'b' && !e.ctrlKey && !e.metaKey) {
       this._backgroundAction?.()
       e.preventDefault()
@@ -475,6 +480,24 @@ export class InteractionSystem {
       const key = e.shiftKey ? `Shift+${e.key}` : e.key
       if (this._widget.handleKey(key)) e.preventDefault()
     }
+  }
+
+  // System copy (Cmd/Ctrl+C). Writes the canvas's current pixels — whatever
+  // is currently rendered, including controls/widgets in edit mode, or just
+  // the composited image in display mode — to the system clipboard as a PNG.
+  private _copyCanvasToClipboard(): void {
+    if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+      console.warn('Copying the canvas to the clipboard is not supported in this browser.')
+      return
+    }
+    const blobPromise = new Promise<Blob>((resolve, reject) => {
+      this._canvas.toBlob((blob) => {
+        if (blob !== null) resolve(blob)
+        else reject(new Error('canvas.toBlob returned null'))
+      }, 'image/png')
+    })
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': blobPromise })])
+      .catch(err => console.warn('Failed to copy canvas to clipboard:', err))
   }
 
   // System paste (Cmd/Ctrl+V). If the clipboard holds image data,
