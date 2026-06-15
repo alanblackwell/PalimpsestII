@@ -36,7 +36,7 @@ import { VideoLayer }      from './VideoLayer.js'
 import { MediaLayer }      from './MediaLayer.js'
 import { CaptureLayer }    from './CaptureLayer.js'
 import { TutorialLayer }   from './TutorialLayer.js'
-import { StrokeLayer }    from './StrokeLayer.js'
+import { StrokeLayer }     from './StrokeLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
 
 // ------------------------------------------------------------
@@ -47,35 +47,25 @@ import { RotateLayer }     from './RotateLayer.js'
 // renderPanel draws a button grid on the main canvas area.
 // Clicking a button inserts an instance of that layer type
 // immediately below this layer in the stack, then calls onAdded.
-//
-// The caller (main.ts) uses onAdded to refresh the widget,
-// evaluator, and interaction system.
 
-// ── Constants ─────────────────────────────────────────────────
+// ── Layout constants ──────────────────────────────────────────
 
-const ACCENT   = '#888888'
+const ACCENT      = '#888888'
+const BTN_W_MAX   = 120
+const BTN_W_MIN   = 64
+const BTN_H       = 34
+const BTN_GAP     = 7
+const PANEL_Y     = 54
+const HEADER_H    = 28
+const PAD         = 10
+const RIGHT_MARGIN = 12
 
-// Button grid layout (canvas-space).
-// The grid is centred in the space to the right of the LayerStackWidget.
-// On narrow canvases there isn't room for COLS_MAX columns at BTN_W_MAX,
-// so columns and/or button width shrink — see _layout().
-const COLS_MAX     = 4
-const BTN_W_MAX    = 120
-const BTN_W_MIN    = 64
-const BTN_H        = 34
-const BTN_GAP      = 7
-const PANEL_Y      = 54     // top of panel
-const HEADER_H     = 28     // height of the "Add layer" title row
-const PAD          = 10     // inner padding below header
-const RIGHT_MARGIN = 12     // minimum gap to the canvas's right edge
-
-// ── Randomisation helpers ──────────────────────────────────────
+// ── Randomisation helpers ─────────────────────────────────────
 
 const rnd  = () => Math.random()
 const rndR = (lo: number, hi: number) => lo + rnd() * (hi - lo)
 
-// Random shape geometry: position and size guaranteed to fit within the canvas.
-export function rndShape(canvasW: number, canvasH: number): { cx: number; cy: number; sw: number; sh: number } {
+export function rndShape(canvasW: number, canvasH: number) {
   const sw = rndR(0.10, 0.40) * canvasW
   const sh = rndR(0.10, 0.35) * canvasH
   const cx = rndR(sw / 2, canvasW - sw / 2)
@@ -83,59 +73,139 @@ export function rndShape(canvasW: number, canvasH: number): { cx: number; cy: nu
   return { cx, cy, sw, sh }
 }
 
-// ── Button definitions ─────────────────────────────────────────
+// ── Button and column types ───────────────────────────────────
 
 type BtnDef = {
-  label:   string
-  colour:  string
-  height?: number   // default panel height override (px); uses MenuLayer height if omitted
-  // 'save'/'load' buttons call the callbacks from setSaveLoadCallbacks instead
-  // of creating a layer — factory is unused for these.
+  label:    string
+  colour:   string
+  height?:  number   // default panel height override (px)
   kind?:    'save' | 'load'
   factory?: (cx: number, cy: number, w: number, h: number) => Layer
 }
 
-const BUTTONS: BtnDef[] = [
-  { label: 'Amount',     colour: '#4a8fe8', factory: ()         => new AmountLayer(rnd()) },
-  { label: 'Colour',     colour: '#e8944a', height: 170, factory: () => new ColourLayer(rndColour()) },
-  { label: 'Point',      colour: '#cf7ecf', factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
-  { label: 'Rate',       colour: '#e87e7e', factory: ()         => new RateLayer(rndR(0.1, 2.0)) },
-  { label: 'Event',      colour: '#e0e060', factory: ()         => new EventLayer() },
-  { label: 'Flash',      colour: '#e0e060', factory: ()         => new FlashLayer() },
-  { label: 'Count',      colour: '#a0a0a0', factory: ()         => new CountLayer(0) },
-  { label: 'Select',     colour: '#7ecf7e', factory: ()         => new SelectLayer() },
-  { label: 'Direction',  colour: '#7ecfcf', factory: ()         => new DirectionLayer(rnd() * Math.PI * 2, 1) },
-  { label: 'Math',       colour: '#4a8fe8', factory: ()         => new MathLayer(2) },
-  { label: 'Collection', colour: '#7ecf7e', factory: ()         => new CollectionLayer() },
-  { label: 'Sequencer',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
-  { label: 'Path',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy, rndColour()) } },
-  { label: 'Stroke',     colour: '#e86a4a', factory: () => new StrokeLayer() },
-  { label: 'AnimPath',   colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
-  { label: 'Rect',       colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
-  { label: 'Ellipse',    colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
-  { label: 'Text',       colour: '#888888', factory: ()         => new TextLayer('Text') },
-  { label: 'Image',      colour: '#7ecf7e', factory: ()         => new ImageLayer() },
-  { label: 'EdgePath',   colour: '#cf9f7e', factory: ()         => new EdgePathLayer() },
-  { label: 'Mask',       colour: '#cfcf7e', factory: () => new MaskLayer() },
-  { label: 'Composite',  colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
-  { label: 'Filter',     colour: '#7ecf7e', factory: () => new FilterLayer() },
-  { label: 'Noise',      colour: '#4a8fe8', height: 161, factory: ()        => new NoiseLayer() },
-  { label: 'Fill',       colour: '#7ecf7e', factory: (_,__,w,h) => new FillLayer(w, h) },
-  { label: 'Transform',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
-  { label: 'Clip',       colour: '#7ecf7e', factory: () => new ClipLayer() },
-  { label: 'Tile',       colour: '#7ecf7e', factory: () => new TileLayer() },
-  { label: 'Rotate',     colour: '#7ecf7e', factory: () => new RotateLayer() },
-  { label: 'Video',      colour: '#7ecf7e', factory: () => new VideoLayer() },
-  { label: 'Media',      colour: '#7ecf7e', factory: () => new MediaLayer() },
-  { label: 'Capture',    colour: '#7ecf7e', factory: () => new CaptureLayer() },
-  { label: 'Tutorial',   colour: '#a0a4b8', factory: () => new TutorialLayer() },
-  { label: 'Save',       colour: '#a0a4b8', kind: 'save' },
-  { label: 'Load',       colour: '#a0a4b8', kind: 'load' },
+// A column groups related buttons.
+// `top` buttons anchor to the top of the column.
+// `bottom` buttons anchor to the bottom, with a gap between them and
+// the top group when the column is shorter than the tallest column.
+//
+// On narrow canvases the rightmost column(s) are folded into their
+// left neighbour so the grid still fits in the available width.
+type ColDef = {
+  name:   string
+  top:    BtnDef[]
+  bottom: BtnDef[]
+}
+
+// ── Column definitions ────────────────────────────────────────
+//
+// To reorder buttons:   move entries within a top[] or bottom[] array.
+// To move columns:      cut/paste an entry to another column's array.
+// To change pin:        move from top[] to bottom[] or vice versa.
+// To add a button:      add an entry with label, colour, and factory.
+// To remove a button:   delete the entry.
+
+const COLUMNS: ColDef[] = [
+
+  // ── Shapes ─────────────────────────────────────────────────────────
+  {
+    name: 'Shapes',
+    top: [
+      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
+      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy, rndColour()) } },
+      { label: 'Rect',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
+      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer('Text') },
+      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer() },
+      { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
+    ],
+    bottom: [
+      { label: 'AnimPath', colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
+      { label: 'Mask',     colour: '#cfcf7e', factory: ()          => new MaskLayer() },
+      { label: 'Clip',      colour: '#7ecf7e', factory: ()          => new ClipLayer() },
+    ],
+  },
+
+  // ── Values ─────────────────────────────────────────────────────────
+  {
+    name: 'Values',
+    top: [
+      { label: 'Colour',    colour: '#e8944a', height: 170, factory: ()          => new ColourLayer(rndColour()) },
+      { label: 'Point',     colour: '#cf7ecf',              factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
+      { label: 'Amount',    colour: '#4a8fe8',              factory: ()          => new AmountLayer(rnd()) },
+      { label: 'Direction', colour: '#7ecfcf',              factory: ()          => new DirectionLayer(rnd() * Math.PI * 2, 1) },
+    ],
+    bottom: [
+      { label: 'Event',      colour: '#e0e060', factory: () => new EventLayer() },
+      { label: 'Count',      colour: '#a0a0a0', factory: () => new CountLayer(0) },
+      { label: 'Select',     colour: '#7ecf7e', factory: () => new SelectLayer() },
+      { label: 'Collection', colour: '#7ecf7e', factory: () => new CollectionLayer() },
+    ],
+  },
+
+  // ── Media ──────────────────────────────────────────────────────────
+  {
+    name: 'Media',
+    top: [
+      { label: 'Image',   colour: '#7ecf7e',              factory: ()          => new ImageLayer() },
+      { label: 'Media',     colour: '#7ecf7e', factory: ()          => new MediaLayer() },
+      { label: 'Video',   colour: '#7ecf7e',              factory: ()          => new VideoLayer() },
+      { label: 'Capture', colour: '#7ecf7e',              factory: ()          => new CaptureLayer() },
+      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
+    ],
+    bottom: [
+      { label: 'Composite', colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
+      { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer() },
+      { label: 'Transform', colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
+      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer() },
+    ],
+  },
+
+  // ── Control ────────────────────────────────────────────────────────
+  {
+    name: 'Control',
+    top: [
+      { label: 'Tutorial',  colour: '#a0a4b8', factory: ()          => new TutorialLayer() },
+      { label: 'Rate',      colour: '#e87e7e', factory: ()          => new RateLayer(rndR(0.1, 2.0)) },
+      { label: 'Flash',     colour: '#e0e060', factory: ()          => new FlashLayer() },
+      { label: 'Sequencer', colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
+      // Not yet assigned to a column — move to the appropriate place:
+      { label: 'Math',      colour: '#4a8fe8', factory: ()          => new MathLayer(2) },
+      { label: 'EdgePath',  colour: '#cf9f7e', factory: ()          => new EdgePathLayer() },
+      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer() },
+    ],
+    bottom: [
+      { label: 'Load', colour: '#a0a4b8', kind: 'load' },
+      { label: 'Save', colour: '#a0a4b8', kind: 'save' },
+    ],
+  },
 ]
 
-// ── MenuLayer ──────────────────────────────────────────────────
+// ── Layers not shown in the main menu ────────────────────────
+//
+// These layer types exist in the codebase but are created
+// programmatically rather than from the Add-layer menu:
+//
+//   Clip<Shape> family — ClipRectLayer, ClipEllipseLayer,
+//     ClipPathLayer, ClipTextLayer, ClipDrawingLayer.
+//     Auto-created by dragging a Mask card onto an Image/Fill/
+//     Noise/Video layer in the stack widget.
+//
+//   BackgroundLayer — off-stack collection for layers that keep
+//     recomputing while hidden from the stack.
+//
+//   ClockLayer  — singleton time source, wired at startup.
+//
+//   RootLayer   — bottom anchor of the layer stack.
+//
+//   DeletionLayer — archive for deleted/backgrounded layers;
+//     appears in the stack only when the archive is non-empty.
+//
+//   BindingLayer — created automatically when a slot is bound
+//     via drag-and-drop; not directly user-facing.
+
+// ── MenuLayer ─────────────────────────────────────────────────
 
 type BBox = { x: number; y: number; width: number; height: number }
+type PlacedBtn = { btn: BtnDef; bx: number; by: number; bw: number }
 
 export class MenuLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
@@ -147,8 +217,8 @@ export class MenuLayer extends Layer {
   private _onSave: (() => void) | null = null
   private _onLoad: (() => void) | null = null
 
-  // Bounding box of the entire panel (set during renderPanel, used for hit testing)
-  private _cpBounds: BBox | null = null
+  private _cpBounds:  BBox | null  = null
+  private _btnBounds: PlacedBtn[]  = []
 
   constructor(canvasW: number, canvasH: number, onAdded: (layer: Layer) => void) {
     super()
@@ -158,17 +228,12 @@ export class MenuLayer extends Layer {
     this.debugName = 'Menu'
   }
 
-  // Wires the Save/Load buttons to the host app's persistence logic.
   setSaveLoadCallbacks(onSave: () => void, onLoad: () => void): void {
     this._onSave = onSave
     this._onLoad = onLoad
   }
 
   protected recompute(): void {}
-
-  // ----------------------------------------------------------
-  // Rendering
-  // ----------------------------------------------------------
 
   renderSelf(_ctx: Ctx2D): void {}
 
@@ -195,16 +260,16 @@ export class MenuLayer extends Layer {
     const idx = this._btnIndexAt(point)
     if (idx < 0) return false
 
-    const btn = BUTTONS[idx]!
+    const btn = this._btnBounds[idx]!.btn
 
     if (btn.kind === 'save') { this._onSave?.(); return true }
     if (btn.kind === 'load') { this._onLoad?.(); return true }
 
-    const cx      = this._canvasW / 2
-    const cy      = this._canvasH / 2
+    const cx       = this._canvasW / 2
+    const cy       = this._canvasH / 2
     const newLayer = btn.factory!(cx, cy, this._canvasW, this._canvasH)
     Layer.assignDebugName(newLayer)
-    newLayer.bounds    = { ...this.bounds, height: btn.height ?? this.bounds.height }
+    newLayer.bounds = { ...this.bounds, height: btn.height ?? this.bounds.height }
 
     const below = this.layerBelow
     if (below !== null) newLayer.insertAbove(below)
@@ -219,23 +284,21 @@ export class MenuLayer extends Layer {
   // Private helpers
   // ----------------------------------------------------------
 
-  // Choose the column count and button width that best fill the space to
-  // the right of the LayerStackWidget. Starts at COLS_MAX/BTN_W_MAX; if
-  // that doesn't fit, drops columns (down to 2) and shrinks button width
-  // (down to BTN_W_MIN) so the grid fills the available width. The panel
-  // is then centred in any leftover space.
+  // How many columns fit and how wide each button should be.
+  // Starts at COLUMNS.length / BTN_W_MAX; reduces columns then
+  // button width until everything fits, minimum 1 column.
   private _layout(): { cols: number; btnW: number; panX: number; panW: number } {
     const canvasW = Node.canvasWidth
     const left    = contentLeft(canvasW)
     const availW  = Math.max(BTN_W_MIN + PAD * 2, canvasW - left - RIGHT_MARGIN)
 
-    let cols = COLS_MAX
+    let cols = COLUMNS.length
     let btnW = BTN_W_MAX
-    for (; cols > 2; cols--) {
+    for (; cols > 1; cols--) {
       btnW = (availW - PAD * 2 - (cols - 1) * BTN_GAP) / cols
       if (btnW >= BTN_W_MIN) break
     }
-    if (cols === 2) btnW = (availW - PAD * 2 - BTN_GAP) / 2
+    if (cols === 1) btnW = availW - PAD * 2
     btnW = Math.min(BTN_W_MAX, Math.max(BTN_W_MIN, btnW))
 
     const gridW = cols * btnW + (cols - 1) * BTN_GAP
@@ -245,16 +308,23 @@ export class MenuLayer extends Layer {
     return { cols, btnW, panX, panW }
   }
 
+  // Returns the active columns, folding any columns that don't fit
+  // into the rightmost active column (top[] to top[], bottom[] to bottom[]).
+  private _resolveColumns(activeCols: number): { top: BtnDef[]; bottom: BtnDef[] }[] {
+    const n      = Math.min(activeCols, COLUMNS.length)
+    const result = COLUMNS.slice(0, n).map(c => ({ top: [...c.top], bottom: [...c.bottom] }))
+    for (let c = n; c < COLUMNS.length; c++) {
+      const last = result[result.length - 1]!
+      last.top.push(...COLUMNS[c]!.top)
+      last.bottom.push(...COLUMNS[c]!.bottom)
+    }
+    return result
+  }
+
   private _btnIndexAt(point: Point): number {
-    const { cols, btnW, panX } = this._layout()
-    const gridX = panX + PAD
-    const gy    = PANEL_Y + HEADER_H + PAD
-    for (let i = 0; i < BUTTONS.length; i++) {
-      const col = i % cols
-      const row = Math.floor(i / cols)
-      const bx  = gridX + col * (btnW + BTN_GAP)
-      const by  = gy    + row * (BTN_H + BTN_GAP)
-      if (point.x >= bx && point.x <= bx + btnW &&
+    for (let i = 0; i < this._btnBounds.length; i++) {
+      const { bx, by, bw } = this._btnBounds[i]!
+      if (point.x >= bx && point.x <= bx + bw &&
           point.y >= by && point.y <= by + BTN_H) return i
     }
     return -1
@@ -262,71 +332,74 @@ export class MenuLayer extends Layer {
 
   private _drawGrid(ctx: Ctx2D): void {
     const { cols, btnW, panX, panW } = this._layout()
-    const rows  = Math.ceil(BUTTONS.length / cols)
-    const gridH = rows * BTN_H + (rows - 1) * BTN_GAP
-    const panH  = HEADER_H + PAD + gridH + PAD
-    const gridX = panX + PAD
+    const resolved  = this._resolveColumns(cols)
+    const totalRows = resolved.reduce((mx, c) => Math.max(mx, c.top.length + c.bottom.length), 0)
+    const gridH     = totalRows > 0 ? totalRows * BTN_H + (totalRows - 1) * BTN_GAP : 0
+    const panH      = HEADER_H + PAD + gridH + PAD
+    const gridX     = panX + PAD
+    const gy        = PANEL_Y + HEADER_H + PAD
 
-    this._cpBounds = { x: panX, y: PANEL_Y, width: panW, height: panH }
+    this._cpBounds  = { x: panX, y: PANEL_Y, width: panW, height: panH }
+    this._btnBounds = []
 
-    // Shrink the label font as buttons get narrower so labels stay legible.
     const fontSize = btnW < 75 ? 9 : btnW < 95 ? 10 : 11
 
     ctx.save()
 
-    // Panel background
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath()
     ctx.roundRect(panX, PANEL_Y, panW, panH, 10)
     ctx.fill()
 
-    // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     ctx.roundRect(panX, PANEL_Y, 4, panH, [4, 0, 0, 4])
     ctx.fill()
 
-    // Header label
     ctx.fillStyle    = 'rgba(255,255,255,0.55)'
     ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText('Add layer', panX + 14, PANEL_Y + HEADER_H / 2)
 
-    // Buttons
-    const gy = PANEL_Y + HEADER_H + PAD
+    for (let c = 0; c < resolved.length; c++) {
+      const col = resolved[c]!
+      const bx  = gridX + c * (btnW + BTN_GAP)
 
-    for (let i = 0; i < BUTTONS.length; i++) {
-      const btn  = BUTTONS[i]!
-      const col  = i % cols
-      const row  = Math.floor(i / cols)
-      const bx   = gridX + col * (btnW + BTN_GAP)
-      const by   = gy    + row * (BTN_H + BTN_GAP)
-      const midY = by + BTN_H / 2
+      const drawBtn = (btn: BtnDef, row: number) => {
+        const by   = gy + row * (BTN_H + BTN_GAP)
+        const midY = by + BTN_H / 2
 
-      // Button background
-      ctx.fillStyle = 'rgba(255,255,255,0.07)'
-      ctx.beginPath()
-      ctx.roundRect(bx, by, btnW, BTN_H, 5)
-      ctx.fill()
+        ctx.fillStyle = 'rgba(255,255,255,0.07)'
+        ctx.beginPath()
+        ctx.roundRect(bx, by, btnW, BTN_H, 5)
+        ctx.fill()
 
-      // Colour-coded left stripe
-      ctx.fillStyle = btn.colour + 'cc'
-      ctx.beginPath()
-      ctx.roundRect(bx, by, 3, BTN_H, [5, 0, 0, 5])
-      ctx.fill()
+        ctx.fillStyle = btn.colour + 'cc'
+        ctx.beginPath()
+        ctx.roundRect(bx, by, 3, BTN_H, [5, 0, 0, 5])
+        ctx.fill()
 
-      // Label, clipped to the button so it can't bleed into neighbours
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(bx, by, btnW, BTN_H)
-      ctx.clip()
-      ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-      ctx.font         = `${fontSize}px monospace`
-      ctx.textAlign    = 'left'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(btn.label, bx + 10, midY)
-      ctx.restore()
+        ctx.save()
+        ctx.beginPath()
+        ctx.rect(bx, by, btnW, BTN_H)
+        ctx.clip()
+        ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+        ctx.font         = `${fontSize}px monospace`
+        ctx.textAlign    = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(btn.label, bx + 10, midY)
+        ctx.restore()
+
+        this._btnBounds.push({ btn, bx, by, bw: btnW })
+      }
+
+      for (let i = 0; i < col.top.length; i++) {
+        drawBtn(col.top[i]!, i)
+      }
+      for (let i = 0; i < col.bottom.length; i++) {
+        drawBtn(col.bottom[i]!, totalRows - col.bottom.length + i)
+      }
     }
 
     ctx.restore()
