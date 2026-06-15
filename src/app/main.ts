@@ -307,6 +307,11 @@ const app = document.getElementById('app')!
 const canvas = document.createElement('canvas')
 canvas.width  = window.innerWidth
 canvas.height = window.innerHeight
+// Without this, browsers intercept single/two-finger touch gestures for
+// native page scroll/pinch-zoom — firing pointercancel as soon as the
+// gesture is recognised (well under InteractionSystem's swipe threshold),
+// so our swipe/pinch handling never sees the full gesture.
+canvas.style.touchAction = 'none'
 app.appendChild(canvas)
 
 // ------------------------------------------------------------------
