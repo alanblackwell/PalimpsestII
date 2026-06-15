@@ -697,11 +697,23 @@ export class InteractionSystem {
       case 'right': this._flashGesture('right', 'canvas'); this._backgroundAction?.();   break
       default:
         // No swipe — a tap. If it landed on a draggable node (button,
-        // toggle, slider track, etc.), simulate a click via down+up;
-        // otherwise fall back to slot-click / pixel-pick.
-        if (tp.hitNode !== null && tp.hitNode.handlePointerDown(point)) {
-          tp.hitNode.handlePointerUp?.()
-          Node.scheduleFrame?.()
+        // toggle, slider track, etc.), simulate a click via down+up.
+        if (tp.hitNode !== null) {
+          if (tp.hitNode.handlePointerDown(point)) {
+            tp.hitNode.handlePointerUp?.()
+            Node.scheduleFrame?.()
+          } else {
+            // Node claimed the point (e.g. dead space within a canvas-space
+            // pill) but declined the tap — check for a slot-dot click,
+            // mirroring the mouse path (_handleDown), but don't fall through
+            // to pixel-pick: a miss on the current layer's own panel must
+            // not re-pick the layer underneath.
+            const sel = this._widget?.selected ?? null
+            if (sel !== null) {
+              const slot = sel.hitTestSlot(point)
+              if (slot !== null) this._onSlotClick?.(sel, slot)
+            }
+          }
         } else {
           this._handleEmptyAreaClick(point)
         }
