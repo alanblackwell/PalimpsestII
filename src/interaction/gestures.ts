@@ -20,9 +20,10 @@ export const TWO_FINGER_TAP_MS = 300  // max duration for a two-finger tap
 // swipe released before this elapses keeps swipe priority over either.
 export const PROMOTE_MS = 150
 
-export const MIN_ZOOM      = 1
+export const MIN_ZOOM      = 0.5  // pinch-in shrinks the canvas to half size, to bring
+                                   // content beyond the screen edge into view
 export const MAX_ZOOM      = 4
-export const ZOOM_SNAP_EPS = 0.05     // snap back to scale=1/pan=0 within this margin
+export const ZOOM_SNAP_EPS = 0.05     // snap to scale=1/pan=0 within this margin of scale 1
 
 export type SwipeDir = 'up' | 'down' | 'left' | 'right' | null
 
@@ -51,13 +52,31 @@ export interface PinchStart {
   clientHeight: number   // canvas.clientHeight (unscaled)
 }
 
+// Clamp `pan` for one axis. `base` is the box's natural (untransformed)
+// position, `box` its scaled size, `viewport` the screen size.
+//   - When the scaled box is larger than the viewport (zoomed in), the box
+//     must always *cover* the viewport — pan is bounded so no background
+//     gap appears at either edge.
+//   - When the scaled box is smaller than the viewport (zoomed out), the
+//     box must stay *contained within* the viewport — pan is bounded so the
+//     whole (shrunk) box can be repositioned anywhere on screen, bringing
+//     content that was previously off-screen into view.
+// Both cases are the same two bounds, `-base` and `viewport - box - base`,
+// just in opposite order — so take the min/max of the pair.
+function clampPan(pan: number, base: number, box: number, viewport: number): number {
+  const a = -base
+  const b = viewport - box - base
+  return Math.max(Math.min(pan, Math.max(a, b)), Math.min(a, b))
+}
+
 // Given a pinch gesture's starting state and the two touch points' current
 // positions (client coords), returns the canvas's new CSS transform
 // (`translate(panX,panY) scale(scale)`, with transform-origin: 0 0):
 //   - scale tracks the change in finger distance, clamped to [MIN_ZOOM,MAX_ZOOM]
 //   - pan keeps the canvas-local point under the gesture's starting centroid
 //     fixed under the *current* centroid (pinch-to-point + two-finger pan)
-//   - pan is clamped so the scaled canvas box still covers the viewport
+//   - pan is clamped per clampPan() above — cover the viewport when zoomed
+//     in, stay contained within it when zoomed out
 //   - snaps to the identity transform (scale=1, pan=0) near scale=1
 export function computePinchTransform(
   start: PinchStart,
@@ -73,7 +92,7 @@ export function computePinchTransform(
   let scale = start.scale * (distNow / Math.max(1, start.distance))
   scale = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, scale))
 
-  if (scale < MIN_ZOOM + ZOOM_SNAP_EPS) {
+  if (Math.abs(scale - 1) < ZOOM_SNAP_EPS) {
     return { scale: 1, panX: 0, panY: 0 }
   }
 
@@ -88,20 +107,14 @@ export function computePinchTransform(
   let panX = start.pan.x + (newLeft - start.rectLeft)
   let panY = start.pan.y + (newTop  - start.rectTop)
 
-  // Natural (untransformed) box position — clamp pan so the scaled box
-  // still covers the viewport (no gaps to the page background).
+  // Natural (untransformed) box position.
   const baseLeft = start.rectLeft - start.pan.x
   const baseTop  = start.rectTop  - start.pan.y
   const boxW = start.clientWidth  * scale
   const boxH = start.clientHeight * scale
 
-  const maxPanX = -baseLeft
-  const minPanX = viewport.width  - boxW - baseLeft
-  const maxPanY = -baseTop
-  const minPanY = viewport.height - boxH - baseTop
-
-  panX = Math.max(Math.min(panX, maxPanX), minPanX)
-  panY = Math.max(Math.min(panY, maxPanY), minPanY)
+  panX = clampPan(panX, baseLeft, boxW, viewport.width)
+  panY = clampPan(panY, baseTop, boxH, viewport.height)
 
   return { scale, panX, panY }
 }

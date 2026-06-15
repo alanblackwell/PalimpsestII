@@ -1,6 +1,7 @@
 import { Node }      from '../core/Node.js'
 import { Layer }     from '../core/Layer.js'
 import { ValueType } from '../core/types.js'
+import type { Point } from '../core/types.js'
 import { Clock }     from './Clock.js'
 import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
@@ -267,26 +268,42 @@ export class Evaluator {
     ctx.restore()
   }
 
-  // Line connecting the two touch points of an in-progress pinch gesture.
+  // Grey bar with outward-pointing arrowheads connecting the two touch
+  // points of an in-progress pinch gesture — a resize-handle affordance.
   private _drawPinchFeedback(ctx: CanvasRenderingContext2D): void {
     const { a, b } = Node.pinchFeedback!
+    const colour = 'rgba(150,150,150,0.85)'
+    const angle  = Math.atan2(b.y - a.y, b.x - a.x)
 
     ctx.save()
     ctx.shadowColor = 'rgba(0,0,0,0.6)'
     ctx.shadowBlur  = 6
-    ctx.strokeStyle = 'rgba(255,255,255,0.85)'
-    ctx.lineWidth   = 2
+    ctx.strokeStyle = colour
+    ctx.fillStyle   = colour
+    ctx.lineWidth   = 10
+    ctx.lineCap     = 'round'
     ctx.beginPath()
     ctx.moveTo(a.x, a.y)
     ctx.lineTo(b.x, b.y)
     ctx.stroke()
 
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'
-    for (const p of [a, b]) {
-      ctx.beginPath()
-      ctx.arc(p.x, p.y, 10, 0, Math.PI * 2)
-      ctx.fill()
-    }
+    this._drawArrowhead(ctx, a, angle + Math.PI)
+    this._drawArrowhead(ctx, b, angle)
+    ctx.restore()
+  }
+
+  // Filled triangle with its tip at `p`, pointing along `angle`.
+  private _drawArrowhead(ctx: CanvasRenderingContext2D, p: Point, angle: number): void {
+    const len = 26, width = 30
+    ctx.save()
+    ctx.translate(p.x, p.y)
+    ctx.rotate(angle)
+    ctx.beginPath()
+    ctx.moveTo(0, 0)
+    ctx.lineTo(-len, -width / 2)
+    ctx.lineTo(-len, width / 2)
+    ctx.closePath()
+    ctx.fill()
     ctx.restore()
   }
 
