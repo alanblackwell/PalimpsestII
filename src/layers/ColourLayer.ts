@@ -11,6 +11,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { ColourPickerRegion, registerPromotionFactory } from '../regions/ColourPickerRegion.js'
 import { BindingLayer } from './BindingLayer.js'
 
@@ -58,8 +59,6 @@ const SAMPLE_RADIUS_MAX = 100   // px
 // border/slider row line up exactly with the standard slot rows.
 const SLOT_H   = 26
 const SLOT_GAP = 4
-const PANEL_X  = 300
-const PANEL_W  = 260
 const BTN_SZ   = SLOT_H - 6
 
 registerPromotionFactory((initial: Colour) => new ColourLayer(initial))
@@ -215,7 +214,6 @@ export class ColourLayer extends Layer implements ColourSource {
       }
     }
 
-    this._syncPickerBounds()
   }
 
   // Suspend an active binding so the picker can take over that zone.
@@ -253,10 +251,10 @@ export class ColourLayer extends Layer implements ColourSource {
     const r2 = r * r
     const cx = Math.round(pt.x)
     const cy = Math.round(pt.y)
-    const x0 = Math.max(0, cx - r)
-    const x1 = Math.min(sw - 1, cx + r)
-    const y0 = Math.max(0, cy - r)
-    const y1 = Math.min(sh - 1, cy + r)
+    const x0 = Math.max(0, Math.ceil(cx - r))
+    const x1 = Math.min(sw - 1, Math.floor(cx + r))
+    const y0 = Math.max(0, Math.ceil(cy - r))
+    const y1 = Math.min(sh - 1, Math.floor(cy + r))
 
     let sumR = 0, sumG = 0, sumB = 0, sumA = 0, count = 0
 
@@ -291,7 +289,7 @@ export class ColourLayer extends Layer implements ColourSource {
 
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
-    this._drawPill(ctx, { x: 300, y: 50, width: 260, height: this.bounds.height })
+    this._drawPill(ctx, this.canvasBounds)
   }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
@@ -391,6 +389,8 @@ export class ColourLayer extends Layer implements ColourSource {
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
+    const pX = contentLeft(Node.canvasWidth)
+    const pW = panelWidth(Node.canvasWidth)
     const g = this._sampleGroupGeom()
 
     ctx.save()
@@ -401,16 +401,16 @@ export class ColourLayer extends Layer implements ColourSource {
     ctx.strokeStyle = SAMPLE_ACCENT + '88'
     ctx.lineWidth   = 1.5
     ctx.beginPath()
-    ctx.roundRect(PANEL_X - 2, g.y0 - 2, PANEL_W + 4, groupH + 4, 8)
+    ctx.roundRect(pX - 2, g.y0 - 2, pW + 4, groupH + 4, 8)
     ctx.stroke()
 
     ctx.fillStyle = SAMPLE_ACCENT
     ctx.beginPath()
-    ctx.roundRect(PANEL_X - 2, g.y0 - 2, 4, groupH + 4, [4, 0, 0, 4])
+    ctx.roundRect(pX - 2, g.y0 - 2, 4, groupH + 4, [4, 0, 0, 4])
     ctx.fill()
 
     // Enable/disable toggle button, overlaid on the sampleEnableSlot row
-    const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
+    const btnX = pX + pW - BTN_SZ - 3
     const btnY = g.y0 + 3
     this._sampleToggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
 
@@ -452,7 +452,7 @@ export class ColourLayer extends Layer implements ColourSource {
     const sg = this._sampleSliderGeom()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, g.sliderY, PANEL_W, SLOT_H, 6)
+    ctx.roundRect(pX, g.sliderY, pW, SLOT_H, 6)
     ctx.fill()
 
     ctx.font         = '10px monospace'
@@ -485,14 +485,16 @@ export class ColourLayer extends Layer implements ColourSource {
   }
 
   private _sampleSliderGeom() {
+    const pX = contentLeft(Node.canvasWidth)
+    const pW = panelWidth(Node.canvasWidth)
     const g = this._sampleGroupGeom()
-    const midY   = g.sliderY + SLOT_H / 2
-    const labelX = PANEL_X + 8
-    const labelW = 50  // "radius"
-    const valueRight = PANEL_X + PANEL_W - 8
-    const valueW = 36
-    const sld0   = labelX + labelW
-    const sldR   = valueRight - valueW - 6
+    const midY      = g.sliderY + SLOT_H / 2
+    const labelX    = pX + 8
+    const labelW    = 50  // "radius"
+    const valueRight = pX + pW - 8
+    const valueW    = 36
+    const sld0      = labelX + labelW
+    const sldR      = valueRight - valueW - 6
     return { ...g, midY, labelX, sld0, sldR, valueRight }
   }
 
@@ -589,22 +591,6 @@ export class ColourLayer extends Layer implements ColourSource {
     this._sampleSliderDrag = false
   }
 
-  // ----------------------------------------------------------
-  // Private
-  // ----------------------------------------------------------
-
-  private _syncPickerBounds(): void {
-    const { x, y, width, height } = this.bounds
-    const px = ColourLayer.PAD_X
-    const py = ColourLayer.PAD_Y
-    const lh = ColourLayer.LABEL_H
-    this._picker.bounds = {
-      x:      x + px,
-      y:      y + py,
-      width:  Math.max(0, width  - px * 2),
-      height: Math.max(0, height - py * 2 - lh),
-    }
-  }
 }
 
 function byteHex(v: number): string {
