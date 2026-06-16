@@ -118,6 +118,11 @@ export abstract class Node {
   // pinch was recognised. Null when no pinch is active.
   static pinchFeedback: { a: Point; b: Point } | null = null
 
+  // Set by InteractionSystem; called by layers that need to snap the
+  // canvas view back to identity (scale=1, pan=0,0) — e.g. VideoLayer's
+  // fit/fill toggle so the video aligns with the physical screen.
+  static resetViewTransform: (() => void) | null = null
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

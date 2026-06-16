@@ -121,6 +121,7 @@ export class VideoLayer extends Layer implements ImageSource {
   private _displayH        = 0
   private _rotation        = 0
   private _manualTransform = false
+  private _fillMode        = false   // false = letterbox (contain), true = fill (cover)
   private _drag: DragState | null = null
 
   // ── UI hit-test bounds (set during render, read during interaction) ──
@@ -128,6 +129,7 @@ export class VideoLayer extends Layer implements ImageSource {
   private _camBtnB:     BBox | null = null
   private _screenBtnB:  BBox | null = null
   private _fileBtnB:    BBox | null = null
+  private _fitBtnB:     BBox | null = null
   private _prevBtnB:    BBox | null = null
   private _nextBtnB:    BBox | null = null
   private _loadBtnB:    BBox | null = null
@@ -219,6 +221,7 @@ export class VideoLayer extends Layer implements ImageSource {
       displayH:        this._displayH,
       rotation:        this._rotation,
       manualTransform: this._manualTransform,
+      fillMode:        this._fillMode,
     }
   }
 
@@ -249,6 +252,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.displayH === 'number')         this._displayH       = state.displayH
     if (typeof state.rotation === 'number')         this._rotation       = state.rotation
     if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
+    if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────
@@ -272,8 +276,10 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._sourceType === 'file' && !this._scrubbing)
       this._currentTime = this._video.currentTime
 
-    if (!this._manualTransform && this._sourceType !== 'none')
-      this._computeAutoFit()
+    if (!this._manualTransform && this._sourceType !== 'none') {
+      if (this._fillMode) this._computeFill()
+      else this._computeAutoFit()
+    }
 
     // Capture a frame when data is available.
     const isStream = (this._sourceType === 'camera' || this._sourceType === 'screen')
@@ -448,7 +454,19 @@ export class VideoLayer extends Layer implements ImageSource {
     const vh    = this._video.videoHeight || 9
     const sw    = Node.viewportWidth
     const sh    = Node.viewportHeight
-    const scale = Math.min(sw / vw, sh / vh)
+    const scale = Math.min(sw / vw, sh / vh)   // contain / letterbox
+    this._displayW = vw * scale
+    this._displayH = vh * scale
+    this._cx = sw / 2
+    this._cy = sh / 2
+  }
+
+  private _computeFill(): void {
+    const vw    = this._video.videoWidth  || 16
+    const vh    = this._video.videoHeight || 9
+    const sw    = Node.viewportWidth
+    const sh    = Node.viewportHeight
+    const scale = Math.max(sw / vw, sh / vh)   // cover / fill
     this._displayW = vw * scale
     this._displayH = vh * scale
     this._cx = sw / 2
@@ -627,6 +645,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._prevBtnB    !== null && boundingBoxContains(this._prevBtnB,    point)) return this
     if (this._nextBtnB    !== null && boundingBoxContains(this._nextBtnB,    point)) return this
     if (this._loadBtnB    !== null && boundingBoxContains(this._loadBtnB,    point)) return this
+    if (this._fitBtnB     !== null && boundingBoxContains(this._fitBtnB,     point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
     if (this._scrubHit(point)) return this
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
@@ -677,6 +696,14 @@ export class VideoLayer extends Layer implements ImageSource {
         this._deviceIdx = (this._deviceIdx + 1) % this._devices.length
         void this._startCameraStream()
       }
+      return true
+    }
+    // Fit/fill toggle — clears manualTransform and resets view pan/zoom
+    if (this._fitBtnB !== null && boundingBoxContains(this._fitBtnB, point)) {
+      this._fillMode       = !this._fillMode
+      this._manualTransform = false
+      Node.resetViewTransform?.()
+      this.markDirty()
       return true
     }
     // File controls
@@ -860,9 +887,33 @@ export class VideoLayer extends Layer implements ImageSource {
       ctx.fillText(srcIcons[i]!, bx + SRC_W / 2, btnY + SRC_W / 2)
     }
 
-    // Right section — source-specific controls
+    // Fit/fill toggle button — far right, always visible
+    const FIT_W = 28
+    const FIT_M = 4
+    const fitX  = x + width - FIT_M - FIT_W
+    const fitY  = y + (height - SRC_W) / 2
+    this._fitBtnB = { x: fitX, y: fitY, width: FIT_W, height: SRC_W }
+
+    ctx.fillStyle = this._fillMode ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
+    ctx.beginPath()
+    ctx.roundRect(fitX, fitY, FIT_W, SRC_W, 4)
+    ctx.fill()
+    if (this._fillMode) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.roundRect(fitX + 0.5, fitY + 0.5, FIT_W - 1, SRC_W - 1, 4)
+      ctx.stroke()
+    }
+    ctx.font         = '9px monospace'
+    ctx.fillStyle    = this._fillMode ? ACCENT : 'rgba(255,255,255,0.45)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this._fillMode ? 'fill' : 'fit', fitX + FIT_W / 2, fitY + SRC_W / 2)
+
+    // Right section — source-specific controls (narrowed to leave room for fit button)
     const rightX = x + SRC_L + 3 * (SRC_W + SRC_GAP) + 4
-    const rightW = x + width - 6 - rightX
+    const rightW = fitX - 4 - rightX
 
     if (rightW > 4) {
       ctx.save()

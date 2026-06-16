@@ -196,6 +196,8 @@ export class InteractionSystem {
     // Pinch-to-zoom applies translate()/scale() directly to the canvas
     // element; transform-origin 0,0 keeps the math in _point() simple.
     canvas.style.transformOrigin = '0 0'
+
+    Node.resetViewTransform = () => this._applyCanvasTransform(1, 0, 0)
   }
 
   // ----------------------------------------------------------
