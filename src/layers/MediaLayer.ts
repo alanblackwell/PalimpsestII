@@ -21,12 +21,23 @@ const BTN_M    = 6           // load button margin from pill edge
 const BAR_MARGIN  = 16   // margin from canvas edges
 const BAR_H       = 36   // control bar height
 const PLAY_SZ     = 28   // play/pause button size
-const HANDLE_R    = 8    // scrub handle radius
+const SCRUB_R     = 8    // scrub handle radius
 const TRACK_H     = 4    // track line thickness
 const TIME_W      = 74   // reserved width for the time readout
 const THUMB_W     = 120  // preview thumbnail width
 const THUMB_H     = 68   // preview thumbnail height
 const THUMB_GAP   = 8    // gap between thumbnail and control bar
+
+// Transform handles
+const ROT_ACCENT = '#7ecfcf'   // Direction type colour for rotation handle
+const HANDLE_R   = 7    // circle handle radius
+const HANDLE_SZ  = 6    // square handle half-size
+const HANDLE_HIT = 14   // pointer hit-test radius
+const ROT_ARM    = 85   // rotate-handle arm length from centre
+const SCALE_OX   = 70   // scale handle image-local x offset from centre
+const SCALE_OY   = 70   // scale handle image-local y offset from centre
+const MIN_VW     = 40   // minimum display width when scaling
+const MIN_VH     = 30   // minimum display height when scaling
 
 function fmtTime(s: number): string {
   if (!isFinite(s) || s < 0) s = 0
@@ -34,6 +45,19 @@ function fmtTime(s: number): string {
   const mm = Math.floor(total / 60)
   const ss = total % 60
   return `${mm}:${String(ss).padStart(2, '0')}`
+}
+
+// ── Types ─────────────────────────────────────────────────────
+
+type BBox = { x: number; y: number; width: number; height: number }
+
+type DragState =
+  | { type: 'move';   startMouse: Point; startCX: number; startCY: number }
+  | { type: 'scale';  startDist: number; startW: number; startH: number; center: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+
+function ptDist(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
 // ── MediaLayer ────────────────────────────────────────────────
@@ -48,8 +72,6 @@ function fmtTime(s: number): string {
 // (_previewVideo) is seeked alongside the main element while scrubbing,
 // so a small thumbnail of the frame at that position can be shown above
 // the handle without disturbing the main playback element.
-
-type BBox = { x: number; y: number; width: number; height: number }
 
 export class MediaLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
@@ -92,6 +114,18 @@ export class MediaLayer extends Layer implements ImageSource {
   private _previewVideo:  HTMLVideoElement
   private _previewCanvas: OffscreenCanvas | null = null
   private _previewTime:   number | null = null
+
+  // ── Display transform ─────────────────────────────────────────
+  // When _manualTransform is false, these are recomputed each frame to
+  // letterbox-fit the video within the visible viewport. Once the user
+  // drags any handle, _manualTransform is set and the values are locked.
+  private _cx              = 0
+  private _cy              = 0
+  private _displayW        = 0
+  private _displayH        = 0
+  private _rotation        = 0
+  private _manualTransform = false
+  private _drag: DragState | null = null
 
   // ── Construction ─────────────────────────────────────────────
 
@@ -181,10 +215,16 @@ export class MediaLayer extends Layer implements ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      filename:      this._filename,
-      playing:       this._playing,
-      currentTime:   this._currentTime,
-      lastEventTime: this._lastEventTime,
+      filename:        this._filename,
+      playing:         this._playing,
+      currentTime:     this._currentTime,
+      lastEventTime:   this._lastEventTime,
+      cx:              this._cx,
+      cy:              this._cy,
+      displayW:        this._displayW,
+      displayH:        this._displayH,
+      rotation:        this._rotation,
+      manualTransform: this._manualTransform,
     }
   }
 
@@ -195,6 +235,12 @@ export class MediaLayer extends Layer implements ImageSource {
     if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
       this._lastEventTime = state.lastEventTime as EventValue
     }
+    if (typeof state.cx === 'number')               this._cx             = state.cx
+    if (typeof state.cy === 'number')               this._cy             = state.cy
+    if (typeof state.displayW === 'number')         this._displayW       = state.displayW
+    if (typeof state.displayH === 'number')         this._displayH       = state.displayH
+    if (typeof state.rotation === 'number')         this._rotation       = state.rotation
+    if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────
@@ -218,6 +264,10 @@ export class MediaLayer extends Layer implements ImageSource {
       this._currentTime = this._video.currentTime
     }
 
+    // Auto-fit the video within the visible viewport (contain/letterbox).
+    // Skipped once the user has manually positioned or resized via handles.
+    if (!this._manualTransform) this._computeAutoFit()
+
     // Capture the current frame whenever data is available — covers normal
     // playback, a paused frame, and a frame reached by scrubbing.
     if (this._objectUrl !== null && this._video.readyState >= HTMLVideoElement.HAVE_CURRENT_DATA) {
@@ -230,12 +280,17 @@ export class MediaLayer extends Layer implements ImageSource {
       const ctx = this._result.getContext('2d')!
       ctx.clearRect(0, 0, cw, ch)
 
-      // Cover-scale: fill the canvas, centred, preserving aspect ratio.
-      const vw = this._video.videoWidth  || cw
-      const vh = this._video.videoHeight || ch
-      const scale = Math.max(cw / vw, ch / vh)
-      const dw = vw * scale, dh = vh * scale
-      ctx.drawImage(this._video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
+      if (this._displayW > 0 && this._displayH > 0) {
+        ctx.save()
+        ctx.translate(this._cx, this._cy)
+        ctx.rotate(this._rotation)
+        ctx.drawImage(
+          this._video,
+          -this._displayW / 2, -this._displayH / 2,
+          this._displayW, this._displayH,
+        )
+        ctx.restore()
+      }
 
       this._status = this._playing ? 'playing' : 'paused'
     }
@@ -251,6 +306,22 @@ export class MediaLayer extends Layer implements ImageSource {
         }
       })
     }
+  }
+
+  // Letterbox-fit the video within the current visible viewport.
+  // Uses viewportWidth/Height (not canvasWidth/Height) so the video fills
+  // what the user actually sees, regardless of how large the grow-only
+  // canvas has become.
+  private _computeAutoFit(): void {
+    const vw    = this._video.videoWidth  || 16
+    const vh    = this._video.videoHeight || 9
+    const sw    = Node.viewportWidth
+    const sh    = Node.viewportHeight
+    const scale = Math.min(sw / vw, sh / vh)
+    this._displayW = vw * scale
+    this._displayH = vh * scale
+    this._cx = sw / 2
+    this._cy = sh / 2
   }
 
   // ── Rendering ─────────────────────────────────────────────────
@@ -270,6 +341,8 @@ export class MediaLayer extends Layer implements ImageSource {
     this._drawMediaPill(ctx, this.canvasBounds)
     // Playback control bar across the bottom of the canvas
     this._renderControlBar(ctx)
+    // Transform handles (position / scale / rotation)
+    this._renderHandles(ctx)
   }
 
   // Slot rows are rendered by the base class; we add the play/pause toggle button.
@@ -412,7 +485,7 @@ export class MediaLayer extends Layer implements ImageSource {
 
       // Handle
       ctx.beginPath()
-      ctx.arc(handleX, trackY, HANDLE_R, 0, Math.PI * 2)
+      ctx.arc(handleX, trackY, SCRUB_R, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'
       ctx.fill()
       ctx.lineWidth   = 1.5
@@ -479,7 +552,7 @@ export class MediaLayer extends Layer implements ImageSource {
   private _scrubHit(point: Point): boolean {
     if (this._scrubTrackB === null || this._duration <= 0) return false
     const t = this._scrubTrackB
-    return point.x >= t.x - HANDLE_R && point.x <= t.x + t.width + HANDLE_R &&
+    return point.x >= t.x - SCRUB_R && point.x <= t.x + t.width + SCRUB_R &&
            point.y >= t.y && point.y <= t.y + t.height
   }
 
@@ -503,11 +576,107 @@ export class MediaLayer extends Layer implements ImageSource {
     this.forceDirty()
   }
 
+  // ── Transform handles ─────────────────────────────────────────
+
+  private _handlePos() {
+    const cos = Math.cos(this._rotation)
+    const sin = Math.sin(this._rotation)
+    return {
+      move: { x: this._cx, y: this._cy },
+      // Fixed offset (SCALE_OX, SCALE_OY) in image-local space, rotated into world space.
+      scale: {
+        x: this._cx + SCALE_OX * cos - SCALE_OY * sin,
+        y: this._cy + SCALE_OX * sin + SCALE_OY * cos,
+      },
+      // ROT_ARM above centre along the rotation axis.
+      rotate: {
+        x: this._cx + ROT_ARM * sin,
+        y: this._cy - ROT_ARM * cos,
+      },
+    }
+  }
+
+  private _renderHandles(ctx: Ctx2D): void {
+    if (this._displayW <= 0) return
+    const cx = this._cx
+    const cy = this._cy
+    const hw = this._displayW / 2
+    const hh = this._displayH / 2
+    const hp = this._handlePos()
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.80)'
+    ctx.shadowBlur  = 5
+
+    // Video outline (rotated rectangle, dashed)
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(this._rotation)
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([4, 4])
+    ctx.strokeRect(-hw, -hh, this._displayW, this._displayH)
+    ctx.restore()
+    ctx.setLineDash([])
+
+    // Arms: centre → rotate handle, centre → scale handle
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(cx, cy); ctx.lineTo(hp.rotate.x, hp.rotate.y)
+    ctx.moveTo(cx, cy); ctx.lineTo(hp.scale.x,  hp.scale.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Move handle — circle + crosshair at centre
+    ctx.beginPath()
+    ctx.arc(cx, cy, HANDLE_R, 0, Math.PI * 2)
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+    const cr = HANDLE_R * 0.6
+    ctx.beginPath()
+    ctx.moveTo(cx - cr, cy); ctx.lineTo(cx + cr, cy)
+    ctx.moveTo(cx, cy - cr); ctx.lineTo(cx, cy + cr)
+    ctx.stroke()
+
+    // Scale handle — square at lower-right corner
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(hp.scale.x - HANDLE_SZ, hp.scale.y - HANDLE_SZ, HANDLE_SZ * 2, HANDLE_SZ * 2)
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth   = 1.5
+    ctx.strokeRect(
+      hp.scale.x - HANDLE_SZ + 0.5, hp.scale.y - HANDLE_SZ + 0.5,
+      HANDLE_SZ * 2 - 1, HANDLE_SZ * 2 - 1,
+    )
+
+    // Rotate handle — circle (teal)
+    ctx.beginPath()
+    ctx.arc(hp.rotate.x, hp.rotate.y, HANDLE_R, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = ROT_ACCENT
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+
+    ctx.restore()
+  }
+
   // ── Interaction ───────────────────────────────────────────────
 
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
+    // Capture all events while a handle drag is active.
+    if (this._drag !== null) return this
+    // Transform handles
+    if (this._displayW > 0) {
+      const hp = this._handlePos()
+      if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
+      if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    }
     // Toggle button (in slot row)
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     // Load button
@@ -519,6 +688,45 @@ export class MediaLayer extends Layer implements ImageSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    // Transform handles take priority — they're canvas content, not pill UI.
+    if (this._displayW > 0) {
+      const hp = this._handlePos()
+
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+        this._drag = {
+          type:       'rotate',
+          center:     { x: this._cx, y: this._cy },
+          startAngle: Math.atan2(point.y - this._cy, point.x - this._cx),
+          startRot:   this._rotation,
+        }
+        this._manualTransform = true
+        return true
+      }
+
+      if (ptDist(point, hp.scale) <= HANDLE_HIT) {
+        this._drag = {
+          type:      'scale',
+          center:    { x: this._cx, y: this._cy },
+          startDist: Math.max(1, ptDist(point, { x: this._cx, y: this._cy })),
+          startW:    this._displayW,
+          startH:    this._displayH,
+        }
+        this._manualTransform = true
+        return true
+      }
+
+      if (ptDist(point, hp.move) <= HANDLE_HIT) {
+        this._drag = {
+          type:       'move',
+          startMouse: { ...point },
+          startCX:    this._cx,
+          startCY:    this._cy,
+        }
+        this._manualTransform = true
+        return true
+      }
+    }
+
     if (this._loadBtnB !== null && boundingBoxContains(this._loadBtnB, point)) {
       this.openFilePicker()
       return true
@@ -539,11 +747,34 @@ export class MediaLayer extends Layer implements ImageSource {
   }
 
   handlePointerMove(point: Point): void {
+    if (this._drag !== null) {
+      if (this._drag.type === 'move') {
+        this._cx = this._drag.startCX + point.x - this._drag.startMouse.x
+        this._cy = this._drag.startCY + point.y - this._drag.startMouse.y
+      } else if (this._drag.type === 'scale') {
+        const d      = Math.max(1, ptDist(point, this._drag.center))
+        const factor = d / this._drag.startDist
+        this._displayW = Math.max(MIN_VW, this._drag.startW * factor)
+        this._displayH = Math.max(MIN_VH, this._drag.startH * factor)
+      } else {
+        const angle    = Math.atan2(
+          point.y - this._drag.center.y,
+          point.x - this._drag.center.x,
+        )
+        this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+      }
+      this.markDirty()
+      return
+    }
     if (!this._scrubbing) return
     this._seekFromPointer(point)
   }
 
   handlePointerUp(): void {
+    if (this._drag !== null) {
+      this._drag = null
+      return
+    }
     if (!this._scrubbing) return
     this._scrubbing  = false
     this._previewTime = null

@@ -12,14 +12,36 @@ import { graph } from '../dataflow/Graph.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
-const ACCENT   = '#7ecf7e'   // Image type colour
-const STRIPE   = 4
-const NAV_SZ   = 22          // prev / next button size
-const NAV_OX   = STRIPE + 6  // nav button left offset from panel x
+const ACCENT     = '#7ecf7e'   // Image type colour
+const ROT_ACCENT = '#7ecfcf'   // Direction type colour for rotation handle
+const STRIPE     = 4
+const NAV_SZ     = 22          // prev / next button size
+const NAV_OX     = STRIPE + 6  // nav button left offset from panel x
 
-// ── VideoLayer ────────────────────────────────────────────────
+// Transform handles
+const HANDLE_R   = 7    // circle handle radius
+const HANDLE_SZ  = 6    // square handle half-size
+const HANDLE_HIT = 14   // pointer hit-test radius
+const ROT_ARM    = 85   // rotate-handle arm length from centre
+const SCALE_OX   = 70   // scale handle image-local x offset from centre
+const SCALE_OY   = 70   // scale handle image-local y offset from centre
+const MIN_VW     = 40   // minimum display width when scaling
+const MIN_VH     = 30   // minimum display height when scaling
+
+// ── Types ─────────────────────────────────────────────────────
 
 type BBox = { x: number; y: number; width: number; height: number }
+
+type DragState =
+  | { type: 'move';   startMouse: Point; startCX: number; startCY: number }
+  | { type: 'scale';  startDist: number; startW: number; startH: number; center: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+
+function ptDist(a: Point, b: Point): number {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+// ── VideoLayer ────────────────────────────────────────────────
 
 export class VideoLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
@@ -53,6 +75,18 @@ export class VideoLayer extends Layer implements ImageSource {
   // Human-readable status shown in the panel while the stream is not yet running
   private _status = 'initialising…'
 
+  // ── Display transform ─────────────────────────────────────────
+  // When _manualTransform is false, these are recomputed each frame to
+  // letterbox-fit the video within the visible viewport. Once the user
+  // drags any handle, _manualTransform is set and the values are locked.
+  private _cx              = 0
+  private _cy              = 0
+  private _displayW        = 0
+  private _displayH        = 0
+  private _rotation        = 0
+  private _manualTransform = false
+  private _drag: DragState | null = null
+
   // ── Construction ─────────────────────────────────────────────
 
   constructor() {
@@ -62,8 +96,6 @@ export class VideoLayer extends Layer implements ImageSource {
     this.enableSlot = new ParameterSlot(ValueType.Event, this, 'freeze toggle')
     this.slots.push(this.enableSlot)
 
-    // Hidden video element — must live in the DOM for Safari to
-    // deliver frames; positioned far off-screen.
     this._video = document.createElement('video')
     this._video.playsInline = true
     this._video.muted       = true
@@ -77,8 +109,6 @@ export class VideoLayer extends Layer implements ImageSource {
 
   // ── Camera initialisation ─────────────────────────────────────
 
-  // Acquire permission first so enumerateDevices returns real labels,
-  // then start the default (first) camera.
   private async _init(): Promise<void> {
     try {
       const probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
@@ -142,24 +172,33 @@ export class VideoLayer extends Layer implements ImageSource {
   getImage(): ImageValue { return this._result }
 
   // ── Persistence ───────────────────────────────────────────────
-  // Config only — never the live stream or captured frames. After load
-  // this layer comes back with no source; the device index is applied
-  // once enumeration completes (see _init/_startStream).
 
   override serializeState(): Record<string, unknown> {
     return {
-      deviceIdx:     this._deviceIdx,
-      frozen:        this._frozen,
-      lastEventTime: this._lastEventTime,
+      deviceIdx:       this._deviceIdx,
+      frozen:          this._frozen,
+      lastEventTime:   this._lastEventTime,
+      cx:              this._cx,
+      cy:              this._cy,
+      displayW:        this._displayW,
+      displayH:        this._displayH,
+      rotation:        this._rotation,
+      manualTransform: this._manualTransform,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
-    if (typeof state.deviceIdx === 'number') this._deviceIdx = state.deviceIdx
+    if (typeof state.deviceIdx === 'number')  this._deviceIdx = state.deviceIdx
     if (typeof state.frozen === 'boolean')    this._frozen    = state.frozen
     if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
       this._lastEventTime = state.lastEventTime as EventValue
     }
+    if (typeof state.cx === 'number')              this._cx             = state.cx
+    if (typeof state.cy === 'number')              this._cy             = state.cy
+    if (typeof state.displayW === 'number')        this._displayW       = state.displayW
+    if (typeof state.displayH === 'number')        this._displayH       = state.displayH
+    if (typeof state.rotation === 'number')        this._rotation       = state.rotation
+    if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────
@@ -179,6 +218,10 @@ export class VideoLayer extends Layer implements ImageSource {
       }
     }
 
+    // Auto-fit the video within the visible viewport (contain/letterbox).
+    // Skipped once the user has manually positioned or resized via handles.
+    if (!this._manualTransform) this._computeAutoFit()
+
     // Capture a new frame when live and video data is ready.
     if (!this._frozen && this._stream !== null &&
         this._video.readyState >= HTMLVideoElement.HAVE_CURRENT_DATA) {
@@ -191,18 +234,19 @@ export class VideoLayer extends Layer implements ImageSource {
       const ctx = this._result.getContext('2d')!
       ctx.clearRect(0, 0, cw, ch)
 
-      // Cover-scale: fill the canvas, centred, preserving aspect ratio.
-      const vw = this._video.videoWidth  || cw
-      const vh = this._video.videoHeight || ch
-      const scale = Math.max(cw / vw, ch / vh)
-      const dw = vw * scale, dh = vh * scale
-      ctx.drawImage(this._video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
+      if (this._displayW > 0 && this._displayH > 0) {
+        ctx.save()
+        ctx.translate(this._cx, this._cy)
+        ctx.rotate(this._rotation)
+        ctx.drawImage(
+          this._video,
+          -this._displayW / 2, -this._displayH / 2,
+          this._displayW, this._displayH,
+        )
+        ctx.restore()
+      }
     }
 
-    // While live and still in the stack (or parked in BackgroundLayer),
-    // schedule the next frame via a microtask — forceDirty() is called
-    // AFTER evaluate() clears our dirty flag, so the next rAF finds us
-    // dirty and captures a fresh frame.
     if (!this._frozen && this._stream !== null && (!this.outsideStack || this.inBackground)) {
       queueMicrotask(() => {
         if (!this._frozen && this._stream !== null && (!this.outsideStack || this.inBackground)) {
@@ -210,6 +254,22 @@ export class VideoLayer extends Layer implements ImageSource {
         }
       })
     }
+  }
+
+  // Letterbox-fit the video within the current visible viewport.
+  // Uses viewportWidth/Height (not canvasWidth/Height) so the video fills
+  // what the user actually sees, regardless of how large the grow-only
+  // canvas has become.
+  private _computeAutoFit(): void {
+    const vw    = this._video.videoWidth  || 16
+    const vh    = this._video.videoHeight || 9
+    const sw    = Node.viewportWidth
+    const sh    = Node.viewportHeight
+    const scale = Math.min(sw / vw, sh / vh)
+    this._displayW = vw * scale
+    this._displayH = vh * scale
+    this._cx = sw / 2
+    this._cy = sh / 2
   }
 
   // ── Rendering ─────────────────────────────────────────────────
@@ -223,19 +283,17 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    // Left strip pill (visible in the layer stack widget)
     this._drawStripPill(ctx, this.bounds)
-    // Canvas-space pill with camera selector controls
     this._drawCameraPill(ctx, this.canvasBounds)
+    this._renderHandles(ctx)
   }
 
-  // Slot rows are rendered by the base class; we add the freeze toggle button.
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
     const SLOT_H   = 26
     const SLOT_GAP = 4
-    const BTN_SZ   = SLOT_H - 6   // 20px
+    const BTN_SZ   = SLOT_H - 6
 
     const idx = this.slots.indexOf(this.enableSlot)
     if (idx < 0) return
@@ -254,7 +312,6 @@ export class VideoLayer extends Layer implements ImageSource {
 
     ctx.save()
 
-    // Button background
     if (isActive) {
       ctx.fillStyle = ACCENT + '33'
     } else if (isSuspended) {
@@ -266,7 +323,6 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
     ctx.fill()
 
-    // Border
     ctx.strokeStyle = isActive ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
     ctx.lineWidth   = 1
     if (isSuspended) ctx.setLineDash([2, 2])
@@ -275,7 +331,6 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Freeze/live icon
     const frozen  = this._frozen
     const iconCol = isActive
       ? ACCENT
@@ -290,11 +345,100 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
+  // ── Transform handles ─────────────────────────────────────────
+
+  private _handlePos() {
+    const cos = Math.cos(this._rotation)
+    const sin = Math.sin(this._rotation)
+    return {
+      move: { x: this._cx, y: this._cy },
+      // Fixed offset (SCALE_OX, SCALE_OY) in image-local space, rotated into world space.
+      scale: {
+        x: this._cx + SCALE_OX * cos - SCALE_OY * sin,
+        y: this._cy + SCALE_OX * sin + SCALE_OY * cos,
+      },
+      // ROT_ARM above centre along the rotation axis.
+      rotate: {
+        x: this._cx + ROT_ARM * sin,
+        y: this._cy - ROT_ARM * cos,
+      },
+    }
+  }
+
+  private _renderHandles(ctx: Ctx2D): void {
+    if (this._displayW <= 0) return
+    const cx = this._cx
+    const cy = this._cy
+    const hw = this._displayW / 2
+    const hh = this._displayH / 2
+    const hp = this._handlePos()
+
+    ctx.save()
+    ctx.shadowColor = 'rgba(0,0,0,0.80)'
+    ctx.shadowBlur  = 5
+
+    // Video outline (rotated rectangle, dashed)
+    ctx.save()
+    ctx.translate(cx, cy)
+    ctx.rotate(this._rotation)
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([4, 4])
+    ctx.strokeRect(-hw, -hh, this._displayW, this._displayH)
+    ctx.restore()
+    ctx.setLineDash([])
+
+    // Arms: centre → rotate handle, centre → scale handle
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'
+    ctx.lineWidth   = 1
+    ctx.setLineDash([3, 3])
+    ctx.beginPath()
+    ctx.moveTo(cx, cy); ctx.lineTo(hp.rotate.x, hp.rotate.y)
+    ctx.moveTo(cx, cy); ctx.lineTo(hp.scale.x,  hp.scale.y)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Move handle — circle + crosshair at centre
+    ctx.beginPath()
+    ctx.arc(cx, cy, HANDLE_R, 0, Math.PI * 2)
+    ctx.strokeStyle = '#ffffff'
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+    const cr = HANDLE_R * 0.6
+    ctx.beginPath()
+    ctx.moveTo(cx - cr, cy); ctx.lineTo(cx + cr, cy)
+    ctx.moveTo(cx, cy - cr); ctx.lineTo(cx, cy + cr)
+    ctx.stroke()
+
+    // Scale handle — square at lower-right corner
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(hp.scale.x - HANDLE_SZ, hp.scale.y - HANDLE_SZ, HANDLE_SZ * 2, HANDLE_SZ * 2)
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth   = 1.5
+    ctx.strokeRect(
+      hp.scale.x - HANDLE_SZ + 0.5, hp.scale.y - HANDLE_SZ + 0.5,
+      HANDLE_SZ * 2 - 1, HANDLE_SZ * 2 - 1,
+    )
+
+    // Rotate handle — circle (teal)
+    ctx.beginPath()
+    ctx.arc(hp.rotate.x, hp.rotate.y, HANDLE_R, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = ROT_ACCENT
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+
+    ctx.restore()
+  }
+
   // ── Interaction ───────────────────────────────────────────────
 
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
+    // Capture all events while a handle drag is active.
+    if (this._drag !== null) return this
     // Toggle button (in slot row)
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
@@ -304,10 +448,56 @@ export class VideoLayer extends Layer implements ImageSource {
     // Camera prev / next buttons
     if (this._prevBtnB !== null && boundingBoxContains(this._prevBtnB, point)) return this
     if (this._nextBtnB !== null && boundingBoxContains(this._nextBtnB, point)) return this
+    // Transform handles
+    if (this._displayW > 0) {
+      const hp = this._handlePos()
+      if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
+      if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    }
     return null
   }
 
   handlePointerDown(point: Point): boolean {
+    // Transform handles take priority — they're canvas content, not pill UI.
+    if (this._displayW > 0) {
+      const hp = this._handlePos()
+
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+        this._drag = {
+          type:       'rotate',
+          center:     { x: this._cx, y: this._cy },
+          startAngle: Math.atan2(point.y - this._cy, point.x - this._cx),
+          startRot:   this._rotation,
+        }
+        this._manualTransform = true
+        return true
+      }
+
+      if (ptDist(point, hp.scale) <= HANDLE_HIT) {
+        this._drag = {
+          type:      'scale',
+          center:    { x: this._cx, y: this._cy },
+          startDist: Math.max(1, ptDist(point, { x: this._cx, y: this._cy })),
+          startW:    this._displayW,
+          startH:    this._displayH,
+        }
+        this._manualTransform = true
+        return true
+      }
+
+      if (ptDist(point, hp.move) <= HANDLE_HIT) {
+        this._drag = {
+          type:       'move',
+          startMouse: { ...point },
+          startCX:    this._cx,
+          startCY:    this._cy,
+        }
+        this._manualTransform = true
+        return true
+      }
+    }
+
     if (this._prevBtnB !== null && boundingBoxContains(this._prevBtnB, point)) {
       if (this._devices.length > 1) {
         this._deviceIdx = (this._deviceIdx + this._devices.length - 1) % this._devices.length
@@ -333,7 +523,29 @@ export class VideoLayer extends Layer implements ImageSource {
     return false
   }
 
-  handlePointerUp(): void {}
+  handlePointerMove(point: Point): void {
+    if (this._drag === null) return
+    if (this._drag.type === 'move') {
+      this._cx = this._drag.startCX + point.x - this._drag.startMouse.x
+      this._cy = this._drag.startCY + point.y - this._drag.startMouse.y
+    } else if (this._drag.type === 'scale') {
+      const d      = Math.max(1, ptDist(point, this._drag.center))
+      const factor = d / this._drag.startDist
+      this._displayW = Math.max(MIN_VW, this._drag.startW * factor)
+      this._displayH = Math.max(MIN_VH, this._drag.startH * factor)
+    } else {
+      const angle    = Math.atan2(
+        point.y - this._drag.center.y,
+        point.x - this._drag.center.x,
+      )
+      this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+    }
+    this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._drag = null
+  }
 
   // ── Private helpers ───────────────────────────────────────────
 
@@ -355,7 +567,6 @@ export class VideoLayer extends Layer implements ImageSource {
     return d.label || `Camera ${this._deviceIdx + 1}`
   }
 
-  // Simple strip pill drawn at the given bounds (left widget area).
   private _drawStripPill(ctx: Ctx2D, b: BBox): void {
     const { x, y, width, height } = b
     if (width <= 0 || height <= 0) return
@@ -379,7 +590,6 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  // Camera selector pill drawn in canvas space (right of Stack Widget).
   private _drawCameraPill(ctx: Ctx2D, b: BBox): void {
     const { x, y, width, height } = b
     if (width <= 0 || height <= 0) return
@@ -388,19 +598,16 @@ export class VideoLayer extends Layer implements ImageSource {
 
     ctx.save()
 
-    // Background
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
     ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
     ctx.fill()
 
-    // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     ctx.roundRect(x, y, STRIPE, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // ◀ prev camera button
     const pb: BBox = {
       x:      x + NAV_OX,
       y:      y + (height - NAV_SZ) / 2,
@@ -409,7 +616,6 @@ export class VideoLayer extends Layer implements ImageSource {
     }
     this._prevBtnB = pb
 
-    // ▶ next camera button — right-aligned, leave margin
     const nb: BBox = {
       x:      x + width - NAV_OX - NAV_SZ,
       y:      y + (height - NAV_SZ) / 2,
@@ -423,7 +629,6 @@ export class VideoLayer extends Layer implements ImageSource {
 
     this._drawNavBtn(ctx, pb, '◀', navCol)
 
-    // Camera name — clipped between the two nav buttons
     const nameX = pb.x + pb.width + 4
     const nameW = nb.x - nameX - 4
     if (nameW > 0) {
@@ -444,12 +649,7 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  private _drawNavBtn(
-    ctx:    Ctx2D,
-    b:      BBox,
-    label:  string,
-    colour: string,
-  ): void {
+  private _drawNavBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)

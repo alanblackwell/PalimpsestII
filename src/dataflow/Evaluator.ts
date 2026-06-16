@@ -200,6 +200,11 @@ export class Evaluator {
       // Display mode: plain composite, no depth effects.
       Node.currentLayer = null
       renderTop.renderStack(this.ctx)
+      // The overlay canvas is not cleared by the edit-mode path — clear it
+      // explicitly so pills/handles/widgets don't persist from the last edit frame.
+      if (this._widgetCtx !== null) {
+        this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
+      }
       return
     }
 
