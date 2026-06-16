@@ -210,8 +210,6 @@ type PlacedBtn = { btn: BtnDef; bx: number; by: number; bw: number }
 export class MenuLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
 
-  private readonly _canvasW: number
-  private readonly _canvasH: number
   private readonly _onAdded: (layer: Layer) => void
 
   private _onSave: (() => void) | null = null
@@ -220,10 +218,8 @@ export class MenuLayer extends Layer {
   private _cpBounds:  BBox | null  = null
   private _btnBounds: PlacedBtn[]  = []
 
-  constructor(canvasW: number, canvasH: number, onAdded: (layer: Layer) => void) {
+  constructor(onAdded: (layer: Layer) => void) {
     super()
-    this._canvasW = canvasW
-    this._canvasH = canvasH
     this._onAdded = onAdded
     this.debugName = 'Menu'
   }
@@ -265,9 +261,9 @@ export class MenuLayer extends Layer {
     if (btn.kind === 'save') { this._onSave?.(); return true }
     if (btn.kind === 'load') { this._onLoad?.(); return true }
 
-    const cx       = this._canvasW / 2
-    const cy       = this._canvasH / 2
-    const newLayer = btn.factory!(cx, cy, this._canvasW, this._canvasH)
+    const vw       = Node.viewportWidth
+    const vh       = Node.viewportHeight
+    const newLayer = btn.factory!(vw / 2, vh / 2, vw, vh)
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { ...this.bounds, height: btn.height ?? this.bounds.height }
 

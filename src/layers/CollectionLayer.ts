@@ -10,6 +10,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // CollectionLayer — sub-stack that outputs a composite image
@@ -37,12 +38,19 @@ import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 //   │         drag layers here                │  ← when empty
 //   └─────────────────────────────────────────┘
 
-const ACCENT   = '#7ecf7e'   // Image type colour
-const COLS     = 3
-const TW       = 80          // thumbnail width
-const TH       = 60          // thumbnail height
-const CELL_GAP = 6
-const GRID_PAD = 8
+const ACCENT    = '#7ecf7e'  // Image type colour
+const CELL_GAP  = 6
+const GRID_PAD  = 8
+const MIN_TW    = 60         // minimum thumbnail width (determines max columns)
+const MAX_TW    = 120        // maximum thumbnail width (caps growth on wide screens)
+const TH_RATIO  = 0.75       // height/width ratio (original 60/80)
+const EMPTY_COLS = 3         // column count shown when grid is empty
+
+// _gridBounds() returns this so callers share the same computed layout.
+type GridLayout = {
+  x: number; y: number; width: number; height: number
+  tw: number; th: number; cols: number
+}
 
 export class CollectionLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
@@ -234,28 +242,40 @@ export class CollectionLayer extends Layer implements ImageSource {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _gridBounds(): { x: number; y: number; width: number; height: number } {
-    const { x, y, height } = this.canvasBounds
-    const gridY = y + height + 8
-    const rows  = Math.max(1, Math.ceil(this._layers.length / COLS))
-    const gridH = GRID_PAD * 2 + rows * TH + (rows - 1) * CELL_GAP
-    const gridW = GRID_PAD * 2 + COLS * TW + (COLS - 1) * CELL_GAP
-    return { x, y: gridY, width: gridW, height: gridH }
+  private _gridBounds(): GridLayout {
+    // Use the full available width to the right of the widget strip — this
+    // lets the column count grow on wide screens and shrink on narrow ones,
+    // rather than being capped by the 260px panel pill width.
+    const cw     = Node.canvasWidth
+    const leftX  = contentLeft(cw)
+    const availW = Math.max(MIN_TW + GRID_PAD * 2, cw - leftX - GRID_PAD - 16)
+    const n      = this._layers.length
+
+    // Allow as many columns as fit, but never more than the number of items
+    // (no empty trailing columns). When the grid is empty, use EMPTY_COLS
+    // to size the placeholder background.
+    const maxCols = n > 0 ? n : EMPTY_COLS
+    const cols    = Math.max(1, Math.min(maxCols, Math.floor((availW + CELL_GAP) / (MIN_TW + CELL_GAP))))
+    const tw      = Math.min(MAX_TW, Math.floor((availW - (cols - 1) * CELL_GAP) / cols))
+    const th      = Math.floor(tw * TH_RATIO)
+    const rows    = Math.max(1, Math.ceil(n / cols))
+    const gridW   = GRID_PAD * 2 + cols * tw + (cols - 1) * CELL_GAP
+    const gridH   = GRID_PAD * 2 + rows * th + (rows - 1) * CELL_GAP
+    const cb      = this.canvasBounds
+    return { x: leftX, y: cb.y + cb.height + 8, width: gridW, height: gridH, tw, th, cols }
   }
 
-  private _thumbIndexAt(
-    point: Point,
-    gb: { x: number; y: number; width: number; height: number },
-  ): number {
+  private _thumbIndexAt(point: Point, gb: GridLayout): number {
     const relX = point.x - gb.x - GRID_PAD
     const relY = point.y - gb.y - GRID_PAD
     if (relX < 0 || relY < 0) return -1
-    const col = Math.floor(relX / (TW + CELL_GAP))
-    const row = Math.floor(relY / (TH + CELL_GAP))
-    if (col < 0 || col >= COLS) return -1
-    if (relX % (TW + CELL_GAP) > TW)  return -1
-    if (relY % (TH + CELL_GAP) > TH)  return -1
-    return row * COLS + col
+    const { tw, th, cols } = gb
+    const col = Math.floor(relX / (tw + CELL_GAP))
+    const row = Math.floor(relY / (th + CELL_GAP))
+    if (col < 0 || col >= cols)         return -1
+    if (relX % (tw + CELL_GAP) > tw)    return -1
+    if (relY % (th + CELL_GAP) > th)    return -1
+    return row * cols + col
   }
 
   private _drawHeaderPill(
@@ -297,7 +317,7 @@ export class CollectionLayer extends Layer implements ImageSource {
 
   private _drawGrid(ctx: Ctx2D): void {
     const gb = this._gridBounds()
-    const { x, y, width: gw, height: gh } = gb
+    const { x, y, width: gw, height: gh, tw, th, cols } = gb
 
     ctx.save()
 
@@ -330,19 +350,18 @@ export class CollectionLayer extends Layer implements ImageSource {
       const ch = Node.canvasHeight
 
       for (let i = 0; i < this._layers.length; i++) {
-        const col = i % COLS
-        const row = Math.floor(i / COLS)
-        const tx  = x + GRID_PAD + col * (TW + CELL_GAP)
-        const ty  = y + GRID_PAD + row * (TH + CELL_GAP)
+        const col = i % cols
+        const row = Math.floor(i / cols)
+        const tx  = x + GRID_PAD + col * (tw + CELL_GAP)
+        const ty  = y + GRID_PAD + row * (th + CELL_GAP)
 
-        // Draw thumbnail into a small offscreen, then blit it clipped.
-        const thumb    = new OffscreenCanvas(TW, TH)
+        const thumb    = new OffscreenCanvas(tw, th)
         const thumbCtx = thumb.getContext('2d')!
-        drawLayerThumbnail(thumbCtx, this._layers[i], TW, TH, cw, ch)
+        drawLayerThumbnail(thumbCtx, this._layers[i], tw, th, cw, ch)
 
         ctx.save()
         ctx.beginPath()
-        ctx.roundRect(tx, ty, TW, TH, 4)
+        ctx.roundRect(tx, ty, tw, th, 4)
         ctx.clip()
         ctx.drawImage(thumb, tx, ty)
         ctx.restore()
@@ -352,7 +371,7 @@ export class CollectionLayer extends Layer implements ImageSource {
         ctx.strokeStyle = isSelected ? '#a0a0a0' : typeColor(this._layers[i]) + '88'
         ctx.lineWidth   = isSelected ? 2 : 1
         ctx.beginPath()
-        ctx.roundRect(tx + 0.5, ty + 0.5, TW - 1, TH - 1, 4)
+        ctx.roundRect(tx + 0.5, ty + 0.5, tw - 1, th - 1, 4)
         ctx.stroke()
       }
     }

@@ -4,6 +4,7 @@ import { ValueType }        from '../core/types.js'
 import type { Point, Ctx2D } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from '../interaction/thumbnail.js'
 import type { BackgroundLayer } from './BackgroundLayer.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // DeletionLayer — archive for removed layers
@@ -27,21 +28,36 @@ import type { BackgroundLayer } from './BackgroundLayer.js'
 //   toggle button — switch the grid between the archive ("Deleted")
 //                   and a linked BackgroundLayer's items ("Background")
 
-const ACCENT  = '#9090a0'
-const COLS    = 4
-const TW      = 150
-const TH      = 90
-const GAP     = 8
-const PANEL_X = 308
-const PANEL_Y = 54
-const HEADER  = 28
-const PAD     = 10
-
-const TRASH_SZ = 16     // size of the × button
-const TRASH_M  = 3      // margin from thumbnail top-right corner
-
-const TOGGLE_W = 110    // size of the "Deleted"/"Background" toggle button
+const ACCENT   = '#9090a0'
+const PANEL_Y  = 54
+const HEADER   = 28
+const PAD      = 10
+const GAP      = 8
+const TRASH_SZ = 16     // × button size
+const TRASH_M  = 3      // margin from thumbnail top-right
+const TOGGLE_W = 110    // "Deleted"/"Background" toggle button width
 const TOGGLE_H = 20
+const MAX_COLS = 4
+const TW_MAX   = 180    // max thumbnail width
+const TW_MIN   = 70     // min thumbnail width before dropping a column
+
+// Responsive grid layout — recomputed each render from Node.canvasWidth,
+// then cached here so hit-testing (which runs outside the render loop) uses
+// the same geometry that was last drawn.
+type Layout = {
+  panX: number    // left edge of the grid panel background
+  panW: number    // width of the grid panel background
+  tw: number      // thumbnail cell width
+  th: number      // thumbnail cell height
+  cols: number    // number of columns
+  gy: number      // y of the first thumbnail row
+}
+
+// Default layout matching the original hardcoded values, used before the
+// first render.
+const DEFAULT_LAYOUT: Layout = {
+  panX: 298, panW: 648, tw: 150, th: 90, cols: 4, gy: PANEL_Y + HEADER + PAD,
+}
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -55,9 +71,10 @@ export class DeletionLayer extends Layer {
   private _onPurge:       ((layer: Layer) => void) | null = null
   private _cpBounds:      BBox | null = null
   private _toggleBounds:  BBox | null = null
-  private _selected:      number = -1    // highlighted thumbnail index
+  private _selected:      number = -1
   private _lastClickTime = 0
   private _lastClickIdx  = -1
+  private _layout:        Layout = DEFAULT_LAYOUT
 
   constructor() {
     super()
@@ -231,21 +248,22 @@ export class DeletionLayer extends Layer {
   }
 
   private _cellBounds(i: number): BBox {
-    const gy  = PANEL_Y + HEADER + PAD
-    const col = i % COLS
-    const row = Math.floor(i / COLS)
+    const { panX, tw, th, cols, gy } = this._layout
+    const col = i % cols
+    const row = Math.floor(i / cols)
     return {
-      x:      PANEL_X + col * (TW + GAP),
-      y:      gy      + row * (TH + GAP),
-      width:  TW,
-      height: TH,
+      x:      panX + PAD + col * (tw + GAP),
+      y:      gy        + row * (th + GAP),
+      width:  tw,
+      height: th,
     }
   }
 
   private _trashBounds(i: number): BBox {
-    const c = this._cellBounds(i)
+    const c  = this._cellBounds(i)
+    const tw = this._layout.tw
     return {
-      x:      c.x + TW - TRASH_M - TRASH_SZ,
+      x:      c.x + tw - TRASH_M - TRASH_SZ,
       y:      c.y + TRASH_M,
       width:  TRASH_SZ,
       height: TRASH_SZ,
@@ -274,19 +292,32 @@ export class DeletionLayer extends Layer {
 
   private _drawGrid(ctx: Ctx2D): void {
     const items = this._activeItems()
-    const n    = items.length
-    const rows = Math.max(1, Math.ceil(n / COLS))
-    const gridW = COLS * TW + (COLS - 1) * GAP
-    const gridH = rows * TH + (rows - 1) * GAP
-    const panW  = gridW + PAD * 2
-    const panH  = HEADER + PAD + gridH + PAD
-    const panX  = PANEL_X - PAD
+    const n     = items.length
+
+    // Responsive layout — compute from Node.canvasWidth (viewport width on
+    // desktop during the temp-swap in Evaluator; content width on mobile).
+    const cw      = Node.canvasWidth
+    const leftX   = contentLeft(cw)
+    const panX    = leftX - PAD                // align pill left edge with other panels
+    const availW  = Math.max(TW_MIN + 1, cw - leftX - PAD - 16)
+    const cols    = Math.max(1, Math.min(MAX_COLS, Math.floor((availW + GAP) / (TW_MIN + GAP))))
+    const tw      = Math.min(TW_MAX, Math.floor((availW - (cols - 1) * GAP) / cols))
+    const th      = Math.floor(tw * 0.60)
+    const gy      = PANEL_Y + HEADER + PAD
+
+    const rows    = Math.max(1, Math.ceil(n / cols))
+    const gridW   = cols * tw + (cols - 1) * GAP
+    const gridH   = rows * th + (rows - 1) * GAP
+    const panW    = gridW + PAD * 2
+    const panH    = HEADER + PAD + gridH + PAD
+
+    // Cache layout so hit-testing (outside the render loop) uses the same
+    // geometry that was last drawn.
+    this._layout = { panX, panW, tw, th, cols, gy }
 
     this._cpBounds = n > 0 ? { x: panX, y: PANEL_Y, width: panW, height: panH } : null
 
-    // Toggle button — switches between the archive and the linked
-    // BackgroundLayer's items. Hit-testable independent of _cpBounds, so
-    // it still works when the active list is empty.
+    // Toggle button — right edge of panel header, independent of _cpBounds.
     this._toggleBounds = this._background !== null
       ? { x: panX + panW - TOGGLE_W - PAD, y: PANEL_Y + (HEADER - TOGGLE_H) / 2, width: TOGGLE_W, height: TOGGLE_H }
       : null
@@ -331,7 +362,6 @@ export class DeletionLayer extends Layer {
 
     if (n === 0) { ctx.restore(); return }
 
-    const cw = Node.canvasWidth
     const ch = Node.canvasHeight
 
     for (let i = 0; i < n; i++) {
@@ -343,28 +373,28 @@ export class DeletionLayer extends Layer {
       // Card border / background
       ctx.fillStyle = isSel ? tc + '44' : tc + '1a'
       ctx.beginPath()
-      ctx.roundRect(c.x, c.y, TW, TH, 6)
+      ctx.roundRect(c.x, c.y, tw, th, 6)
       ctx.fill()
 
       ctx.strokeStyle = isSel ? tc : tc + '55'
       ctx.lineWidth   = isSel ? 1.5 : 1
       ctx.beginPath()
-      ctx.roundRect(c.x + 0.5, c.y + 0.5, TW - 1, TH - 1, 6)
+      ctx.roundRect(c.x + 0.5, c.y + 0.5, tw - 1, th - 1, 6)
       ctx.stroke()
 
       // Thumbnail clipped to card
       ctx.save()
       ctx.beginPath()
-      ctx.roundRect(c.x, c.y, TW, TH, 6)
+      ctx.roundRect(c.x, c.y, tw, th, 6)
       ctx.clip()
       ctx.translate(c.x, c.y)
-      drawLayerThumbnail(ctx, layer, TW, TH, cw, ch)
+      drawLayerThumbnail(ctx, layer, tw, th, cw, ch)
       ctx.restore()
 
       // Left accent stripe on top of thumbnail
       ctx.fillStyle = tc + 'cc'
       ctx.beginPath()
-      ctx.roundRect(c.x, c.y, 3, TH, [6, 0, 0, 6])
+      ctx.roundRect(c.x, c.y, 3, th, [6, 0, 0, 6])
       ctx.fill()
 
       // × (trash) button — top-right corner

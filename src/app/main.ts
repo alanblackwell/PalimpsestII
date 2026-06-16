@@ -434,7 +434,7 @@ function insertAboveSelected(newLayer: Layer, selected: Layer): void {
 }
 
 // MenuLayer sits at the very top.
-const menuLayer = new MenuLayer(canvas.width, canvas.height, (newLayer) => {
+const menuLayer = new MenuLayer((newLayer) => {
   postInsertLayer(newLayer)
   refreshStack(menuLayer)
 })
@@ -727,7 +727,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // MaskLayer's shape slots) get a fresh random closed shape in outline
     // mode, instead of the slot type's normal canonical default.
     if (consumer.wantsShapeForSlot(slot)) {
-      const newLayer = randomClosedShapeLayer(canvas.width, canvas.height)
+      const newLayer = randomClosedShapeLayer(Node.viewportWidth, Node.viewportHeight)
       Layer.assignDebugName(newLayer)
       newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
       newLayer.insertAbove(consumer)
@@ -744,7 +744,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     if (slot.type === ValueType.Mask) {
       let shapeLayer = findSuitableMaskShape(consumer)
       if (shapeLayer === null) {
-        shapeLayer = randomClosedShapeLayer(canvas.width, canvas.height)
+        shapeLayer = randomClosedShapeLayer(Node.viewportWidth, Node.viewportHeight)
         Layer.assignDebugName(shapeLayer)
         shapeLayer.bounds = { x: X, y: 24, width: W, height: 36 }
         shapeLayer.insertAbove(consumer)
@@ -769,7 +769,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     const factory = DEFAULT_VALUE_LAYER[slot.type]
     if (factory === undefined) return
 
-    const newLayer = factory(canvas.width, canvas.height)
+    const newLayer = factory(Node.viewportWidth, Node.viewportHeight)
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
     newLayer.insertAbove(consumer)

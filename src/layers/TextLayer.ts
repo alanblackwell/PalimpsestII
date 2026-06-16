@@ -1440,11 +1440,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.font  = this._fontString()
       textWidth = ctx.measureText(this._text).width
     }
-    const halfW = Math.min(textWidth / 2, Node.canvasWidth  / 2)
-    const halfH = Math.min(lineH / 2,     Node.canvasHeight / 2)
+    const vw    = Node.viewportWidth
+    const vh    = Node.viewportHeight
+    const halfW = Math.min(textWidth / 2, vw / 2)
+    const halfH = Math.min(lineH / 2,     vh / 2)
     return {
-      x: halfW + Math.random() * Math.max(0, Node.canvasWidth  - 2 * halfW),
-      y: halfH + Math.random() * Math.max(0, Node.canvasHeight - 2 * halfH),
+      x: halfW + Math.random() * Math.max(0, vw - 2 * halfW),
+      y: halfH + Math.random() * Math.max(0, vh - 2 * halfH),
     }
   }
 

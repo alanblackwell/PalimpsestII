@@ -637,12 +637,10 @@ export class InteractionSystem {
     }
 
     // No interactive hit — pixel-pick to select a layer by rendered content.
-    // Suppressed when: the selected layer sets blockPixelPick, OR on desktop
-    // the click is in the pill zone (which overlays the canvas, not content).
+    // Suppressed only when the selected layer sets blockPixelPick.
     const blocked = selected !== null &&
       (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
-    const inPillZone = vpt !== undefined  // pill zone always passes vpt on desktop
-    if (this._widget !== null && !blocked && !inPillZone) {
+    if (this._widget !== null && !blocked) {
       const picked = this._pickLayerAtPixel(point)
       if (picked !== null) {
         this._widget.selected = picked
