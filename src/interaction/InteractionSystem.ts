@@ -5,7 +5,7 @@ import { SlotState, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 import {
-  classifySwipe, computePinchTransform,
+  classifySwipe, computePinchTransform, computeWheelTransform,
   TAP_MAX_MOVEMENT, TWO_FINGER_TAP_MS, PROMOTE_MS,
   type PinchStart,
 } from './gestures.js'
@@ -641,12 +641,7 @@ export class InteractionSystem {
         [{ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY }],
         { width: window.innerWidth, height: window.innerHeight },
       )
-      this._zoomScale = scale
-      this._panX = panX
-      this._panY = panY
-      this._canvas.style.transform = (scale === 1 && panX === 0 && panY === 0)
-        ? ''
-        : `translate(${panX}px, ${panY}px) scale(${scale})`
+      this._applyCanvasTransform(scale, panX, panY)
 
       // Visual confirmation that the pinch was recognised: a line between
       // the two touch points, in canvas coordinates (post-transform).
@@ -744,11 +739,32 @@ export class InteractionSystem {
     Node.scheduleFrame?.()
   }
 
+  private _applyCanvasTransform(scale: number, panX: number, panY: number): void {
+    this._zoomScale = scale
+    this._panX      = panX
+    this._panY      = panY
+    this._canvas.style.transform = (scale === 1 && panX === 0 && panY === 0)
+      ? ''
+      : `translate(${panX}px, ${panY}px) scale(${scale})`
+  }
+
   private _handleWheel(e: WheelEvent): void {
     if (this._inWidgetStrip(e.clientX)) {
       this._widget?.scrollBy(e.deltaY)
       e.preventDefault()
+      return
     }
+    // Figma/Sketch style: two-finger scroll → pan, ctrl+scroll / trackpad pinch → zoom.
+    e.preventDefault()
+    const { scale, panX, panY } = computeWheelTransform(
+      e.deltaX, e.deltaY, e.deltaMode, e.ctrlKey,
+      e.clientX, e.clientY,
+      this._zoomScale, this._panX, this._panY,
+      this._canvas.clientWidth, this._canvas.clientHeight,
+      { width: Node.viewportWidth, height: Node.viewportHeight },
+    )
+    this._applyCanvasTransform(scale, panX, panY)
+    Node.scheduleFrame?.()
   }
 
   // Returns true if `selected` ingested `src` (consuming the drop).

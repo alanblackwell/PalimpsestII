@@ -69,6 +69,56 @@ function clampPan(pan: number, base: number, box: number, viewport: number): num
   return Math.max(Math.min(pan, Math.max(a, b)), Math.min(a, b))
 }
 
+// Compute a new CSS transform (translate+scale) from a wheel event.
+//   - Without ctrlKey: scroll/pan the canvas by (deltaX, deltaY) in CSS pixels,
+//     clamped so the canvas always covers the viewport when zoomed in and stays
+//     within it when zoomed out.
+//   - With ctrlKey: zoom at the cursor position (trackpad pinch fires as
+//     ctrl+wheel in all major browsers on macOS), snapping to identity near 1×.
+// `canvasClientW/H` — the canvas's natural (un-transformed) CSS size.
+export function computeWheelTransform(
+  deltaX: number,
+  deltaY: number,
+  deltaMode: number,
+  ctrlKey: boolean,
+  clientX: number,
+  clientY: number,
+  currentScale: number,
+  currentPanX: number,
+  currentPanY: number,
+  canvasClientW: number,
+  canvasClientH: number,
+  viewport: { width: number; height: number },
+): { scale: number; panX: number; panY: number } {
+  // Convert wheel delta to CSS pixels (trackpad: mode 0; mouse: mode 1 = lines).
+  const lineH  = 14
+  const lineW  = 14
+  const pxY    = deltaMode === 1 ? deltaY * lineH : deltaMode === 2 ? deltaY * viewport.height : deltaY
+  const pxX    = deltaMode === 1 ? deltaX * lineW : deltaMode === 2 ? deltaX * viewport.width  : deltaX
+
+  if (ctrlKey) {
+    // Zoom at cursor (trackpad pinch fires as ctrlKey+wheel on macOS).
+    const factor   = Math.pow(2, -pxY / 100)
+    let newScale   = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, currentScale * factor))
+    if (Math.abs(newScale - 1) < ZOOM_SNAP_EPS) {
+      return { scale: 1, panX: 0, panY: 0 }
+    }
+    // Keep the canvas-local point under the cursor fixed after the zoom.
+    const lx       = (clientX - currentPanX) / currentScale
+    const ly       = (clientY - currentPanY) / currentScale
+    let panX       = clientX - lx * newScale
+    let panY       = clientY - ly * newScale
+    panX = clampPan(panX, 0, canvasClientW * newScale, viewport.width)
+    panY = clampPan(panY, 0, canvasClientH * newScale, viewport.height)
+    return { scale: newScale, panX, panY }
+  } else {
+    // Pan — subtract delta (positive scroll moves canvas opposite direction).
+    let panX = clampPan(currentPanX - pxX, 0, canvasClientW * currentScale, viewport.width)
+    let panY = clampPan(currentPanY - pxY, 0, canvasClientH * currentScale, viewport.height)
+    return { scale: currentScale, panX, panY }
+  }
+}
+
 // Given a pinch gesture's starting state and the two touch points' current
 // positions (client coords), returns the canvas's new CSS transform
 // (`translate(panX,panY) scale(scale)`, with transform-origin: 0 0):
