@@ -124,17 +124,24 @@ export class VideoLayer extends Layer implements ImageSource {
   private _fillMode        = false   // false = letterbox (contain), true = fill (cover)
   private _drag: DragState | null = null
 
+  // ── Stall detection (camera suspended without track ending) ──────
+  private _prevVideoTime    = -1   // last video.currentTime we observed
+  private _frozenFrameCount = 0    // consecutive recomputes with no new frame
+  private _streamHadFrames  = false // true once we've seen at least one advancing frame
+  private _cameraStalled    = false // shown as overlay in renderSelf
+
   // ── UI hit-test bounds (set during render, read during interaction) ──
-  private _toggleBounds: BBox | null = null
-  private _camBtnB:     BBox | null = null
-  private _screenBtnB:  BBox | null = null
-  private _fileBtnB:    BBox | null = null
-  private _fitBtnB:     BBox | null = null
-  private _prevBtnB:    BBox | null = null
-  private _nextBtnB:    BBox | null = null
-  private _loadBtnB:    BBox | null = null
-  private _playBtnB:    BBox | null = null
-  private _scrubTrackB: BBox | null = null
+  private _toggleBounds:      BBox | null = null
+  private _camBtnB:           BBox | null = null
+  private _screenBtnB:        BBox | null = null
+  private _fileBtnB:          BBox | null = null
+  private _fitBtnB:           BBox | null = null
+  private _prevBtnB:          BBox | null = null
+  private _nextBtnB:          BBox | null = null
+  private _loadBtnB:          BBox | null = null
+  private _playBtnB:          BBox | null = null
+  private _scrubTrackB:       BBox | null = null
+  private _stallRestartBounds: BBox | null = null
 
   // ── Construction ─────────────────────────────────────────────
 
@@ -174,9 +181,8 @@ export class VideoLayer extends Layer implements ImageSource {
       if (document.visibilityState !== 'visible') return
       if (this._sourceType !== 'camera') return
       if (this.outsideStack && !this.inBackground) return
-      const trackEnded = this._stream === null ||
-        this._stream.getVideoTracks().every(t => t.readyState === 'ended')
-      if (!trackEnded) return
+      // Always restart: on mobile suspension the tracks stay 'live' but
+      // stop delivering frames, so a track-state check isn't reliable.
       if (this._devices.length > 0) void this._startCameraStream()
       else void this._startCamera()
     })
@@ -318,6 +324,25 @@ export class VideoLayer extends Layer implements ImageSource {
       if (isFile) this._status = this._playing ? 'playing' : 'paused'
     }
 
+    // Stall detection: track whether video.currentTime is advancing.
+    // A camera stream that has been suspended keeps its tracks 'live' but
+    // stops delivering new frames. After ~30 consecutive recomputes (~0.5 s)
+    // with no change in currentTime, flag the stream as stalled.
+    if (isStream && this._video.readyState >= 2) {
+      const ct = this._video.currentTime
+      if (ct !== this._prevVideoTime) {
+        this._prevVideoTime    = ct
+        this._frozenFrameCount = 0
+        this._streamHadFrames  = true
+      } else if (this._streamHadFrames) {
+        this._frozenFrameCount++
+      }
+    } else if (!isStream) {
+      this._frozenFrameCount = 0
+      this._streamHadFrames  = false
+    }
+    this._cameraStalled = isStream && this._streamHadFrames && this._frozenFrameCount > 30
+
     // Self-perpetuating frame loop.
     const liveStream = isStream
     const liveFile   = this._playing && this._objectUrl !== null
@@ -365,6 +390,10 @@ export class VideoLayer extends Layer implements ImageSource {
       this._stream = null
     }
     this._video.srcObject = null
+    this._prevVideoTime    = -1
+    this._frozenFrameCount = 0
+    this._streamHadFrames  = false
+    this._cameraStalled    = false
 
     const device = this._devices[this._deviceIdx]
     if (!device) return
@@ -513,8 +542,47 @@ export class VideoLayer extends Layer implements ImageSource {
   // ── Rendering ─────────────────────────────────────────────────
 
   renderSelf(ctx: Ctx2D): void {
-    if (this._result === null) return
-    ctx.drawImage(this._result as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
+    if (this._result !== null)
+      ctx.drawImage(this._result as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
+    if (this._cameraStalled) this._renderStalledOverlay(ctx)
+  }
+
+  private _renderStalledOverlay(ctx: Ctx2D): void {
+    const cw = Node.canvasWidth
+    const ch = Node.canvasHeight
+    const cx = cw / 2
+    const cy = ch / 2
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.50)'
+    ctx.fillRect(0, 0, cw, ch)
+
+    ctx.font         = '22px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('camera paused', cx, cy - 30)
+
+    const btnW = 160, btnH = 38
+    const btnX = cx - btnW / 2
+    const btnY = cy + 10
+    this._stallRestartBounds = { x: btnX, y: btnY, width: btnW, height: btnH }
+
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'
+    ctx.beginPath()
+    ctx.roundRect(btnX, btnY, btnW, btnH, 8)
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.roundRect(btnX + 0.5, btnY + 0.5, btnW - 1, btnH - 1, 8)
+    ctx.stroke()
+
+    ctx.font         = '13px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
+    ctx.fillText('↺  restart camera', cx, btnY + btnH / 2)
+
+    ctx.restore()
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -650,6 +718,7 @@ export class VideoLayer extends Layer implements ImageSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._drag !== null) return this
+    if (this._stallRestartBounds !== null && boundingBoxContains(this._stallRestartBounds, point)) return this
     if (this._camBtnB     !== null && boundingBoxContains(this._camBtnB,     point)) return this
     if (this._screenBtnB  !== null && boundingBoxContains(this._screenBtnB,  point)) return this
     if (this._fileBtnB    !== null && boundingBoxContains(this._fileBtnB,    point)) return this
@@ -670,6 +739,12 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    // Stall-restart button (visible in renderSelf overlay, works in any mode)
+    if (this._stallRestartBounds !== null && boundingBoxContains(this._stallRestartBounds, point)) {
+      if (this._devices.length > 0) void this._startCameraStream()
+      else void this._startCamera()
+      return true
+    }
     // Source selector
     if (this._camBtnB !== null && boundingBoxContains(this._camBtnB, point)) {
       if (this._sourceType !== 'camera') void this._startCamera()
