@@ -1,7 +1,7 @@
 import type { Layer }           from '../core/Layer.js'
 import { Node }                 from '../core/Node.js'
 import { ParameterSlot }        from '../core/ParameterSlot.js'
-import { SlotState, type Point } from '../core/types.js'
+import { SlotState, ValueType, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 import {
@@ -153,6 +153,7 @@ export class InteractionSystem {
   private readonly _onWheel:  (e: WheelEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
   private readonly _onPaste:  (e: ClipboardEvent) => void
+  private _getDisplayMode:   () => boolean = () => false
   private _spaceAction:      (() => void) | null = null
   private _deleteAction:     (() => void) | null = null
   private _collectionAction: (() => void) | null = null
@@ -214,6 +215,13 @@ export class InteractionSystem {
   }
 
   // Register a callback invoked when the user presses Space.
+  // Register a getter that returns true when the app is in display mode.
+  // Used to intercept clicks and Return key to fire events instead of
+  // interacting with layers.
+  setDisplayModeGetter(fn: () => boolean): void {
+    this._getDisplayMode = fn
+  }
+
   setSpaceAction(fn: () => void): void {
     this._spaceAction = fn
   }
@@ -442,6 +450,13 @@ export class InteractionSystem {
 
       if (this._stackTop === null) return
 
+      // Display mode: mouse/pen click fires the first event layer at or below
+      // the current layer, and does nothing else.
+      if (this._getDisplayMode()) {
+        this._fireEventAtOrBelow(this._widget?.selected ?? null)
+        return
+      }
+
       // On desktop, clicks in the pill zone use viewport coords (pills are fixed
       // in the viewport overlay); elsewhere use content-canvas coords as usual.
       const useVpt  = this._inPillZone(e.clientX)
@@ -619,6 +634,25 @@ export class InteractionSystem {
     this._canvas.setPointerCapture(e.pointerId)
   }
 
+  // Walk the stack from `from` downward, call fire() on the first layer
+  // that produces ValueType.Event and implements fire(). Returns true if
+  // a layer was found and fired.
+  private _fireEventAtOrBelow(from: Layer | null): boolean {
+    let layer: Layer | null = from ?? this._stackTop
+    while (layer !== null) {
+      if (layer.types.has(ValueType.Event)) {
+        const any = layer as unknown as Record<string, unknown>
+        if (typeof any['fire'] === 'function') {
+          ;(any['fire'] as () => void).call(layer)
+          Node.scheduleFrame?.()
+          return true
+        }
+      }
+      layer = layer.layerBelow
+    }
+    return false
+  }
+
   // A click/tap on an empty area of the main canvas that didn't hit a
   // draggable node: slot-row click takes priority, then pixel-pick.
   // `vpt` is the viewport-space point; provided on desktop for pill-zone clicks
@@ -734,6 +768,11 @@ export class InteractionSystem {
       case 'left':  this._flashGesture('left', 'canvas');  this._deleteAction?.();       break
       case 'right': this._flashGesture('right', 'canvas'); this._backgroundAction?.();   break
       default:
+        // Display mode: tap fires the first event layer, nothing else.
+        if (this._getDisplayMode()) {
+          this._fireEventAtOrBelow(this._widget?.selected ?? null)
+          break
+        }
         // No swipe — a tap. If it landed on a draggable node (button,
         // toggle, slider track, etc.), simulate a click via down+up.
         if (tp.hitNode !== null) {
@@ -821,6 +860,12 @@ export class InteractionSystem {
       if (selected.handleTextEditKey(e)) { e.preventDefault(); return }
     }
 
+    if (e.key === 'Enter') {
+      // Fire the first event layer at or below the current layer.
+      // Skipped when a TextLayer is actively editing (already returned above).
+      if (this._fireEventAtOrBelow(this._widget?.selected ?? null)) e.preventDefault()
+      return
+    }
     if (e.key === ' ') {
       this._closeInspector()
       this._spaceAction?.()

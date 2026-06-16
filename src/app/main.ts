@@ -391,6 +391,7 @@ Node.renderStackWidget = (ctx) => widget.render(ctx, true)
 const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
 interaction.setSpaceAction(() => evaluator.toggleDisplayMode())
+interaction.setDisplayModeGetter(() => evaluator.displayMode)
 
 // Apply any auto-bind rules declared by a newly-added layer.
 // Each rule names a slot and a predicate; we walk down the stack and bind
