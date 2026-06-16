@@ -182,7 +182,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     // the normal dataflow evaluate() loop only visits layers between the
     // root and the selected layer, which may exclude this one.
     if (this._movieMode && !this._recording) {
-      this._result = this._cropToBounds(this._captureComposite(), this._maskBounds())
+      this._result = this._cropToBounds(this._captureComposite(), this._effectiveBounds())
 
       // Keep recomputing every frame while in movie mode (and not yet
       // recording), so the live preview composite stays current.
@@ -446,7 +446,7 @@ export class CaptureLayer extends Layer implements ImageSource {
   }
 
   private _capturePhoto(): void {
-    this._capturedImage = this._cropToBounds(this._captureComposite(), this._maskBounds())
+    this._capturedImage = this._cropToBounds(this._captureComposite(), this._effectiveBounds())
     this._status = 'captured'
     this.markDirty()
   }
@@ -506,7 +506,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
     // Fix the crop for the duration of this recording so every frame is the
     // same size.
-    this._captureBounds = this._maskBounds()
+    this._captureBounds = this._effectiveBounds()
 
     this._result = this._cropToBounds(this._captureComposite(), this._captureBounds)
     this._drawToLiveCanvas(this._result)
@@ -560,18 +560,55 @@ export class CaptureLayer extends Layer implements ImageSource {
     this._recordingFrameId = requestAnimationFrame(() => this._recordingFrame())
   }
 
+  // ── Capture bounds ────────────────────────────────────────────
+
+  // Default crop: the visible viewport, not the grow-only content canvas.
+  // Mask bounds override this when maskSlot is active.
+  private _viewportBounds(): BBox {
+    return { x: 0, y: 0, width: Node.viewportWidth, height: Node.viewportHeight }
+  }
+
+  private _effectiveBounds(): BBox {
+    return this._maskBounds() ?? this._viewportBounds()
+  }
+
   // ── Save ──────────────────────────────────────────────────────
+
+  private _makeFilename(ext: string): string {
+    const d   = new Date()
+    const pad = (n: number, len = 2) => String(n).padStart(len, '0')
+    const ts  = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_` +
+                `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+    return `Palimpsest_${ts}.${ext}`
+  }
 
   private _save(): void {
     if (this._movieMode) {
       if (this._recordedBlob === null) return
       const ext = this._recordedMime.includes('mp4') ? 'mp4' : 'webm'
-      this._downloadBlob(this._recordedBlob, `capture.${ext}`)
+      void this._shareOrDownload(this._recordedBlob, this._makeFilename(ext))
     } else {
       if (this._capturedImage === null) return
       void this._capturedImage.convertToBlob({ type: 'image/png' })
-        .then(blob => this._downloadBlob(blob, 'capture.png'))
+        .then(blob => this._shareOrDownload(blob, this._makeFilename('png')))
     }
+  }
+
+  // Try the Web Share API first (routes to OS share sheet / photo gallery on
+  // Android and iOS). Fall back to <a download> when unavailable or refused.
+  private async _shareOrDownload(blob: Blob, filename: string): Promise<void> {
+    if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
+      const file = new File([blob], filename, { type: blob.type })
+      if (navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: filename })
+          return
+        } catch {
+          // User cancelled or share failed — fall through to download.
+        }
+      }
+    }
+    this._downloadBlob(blob, filename)
   }
 
   private _downloadBlob(blob: Blob, filename: string): void {
