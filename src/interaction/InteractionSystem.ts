@@ -153,6 +153,7 @@ export class InteractionSystem {
   private readonly _onWheel:  (e: WheelEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
   private readonly _onPaste:  (e: ClipboardEvent) => void
+  private _motionPermissionRequested = false
   private _getDisplayMode:   () => boolean = () => false
   private _spaceAction:      (() => void) | null = null
   private _deleteAction:     (() => void) | null = null
@@ -199,6 +200,12 @@ export class InteractionSystem {
     canvas.style.transformOrigin = '0 0'
 
     Node.resetViewTransform = () => this._applyCanvasTransform(1, 0, 0)
+
+    // Shake-to-reset-zoom: start immediately on platforms that don't need
+    // permission (Android); iOS 13+ requires a user-gesture call and is
+    // wired up via _handleDown on the first touch.
+    const DME = DeviceMotionEvent as unknown as { requestPermission?: unknown }
+    if (typeof DME.requestPermission !== 'function') this._startShakeDetection()
   }
 
   // ----------------------------------------------------------
@@ -395,6 +402,18 @@ export class InteractionSystem {
 
     const point = this._point(e)
     const isTouch = e.pointerType === 'touch'
+
+    // iOS 13+ needs DeviceMotion permission from a user gesture — request it
+    // silently on the first touch so shake-to-reset works without a button.
+    if (isTouch && !this._motionPermissionRequested) {
+      this._motionPermissionRequested = true
+      const DME = DeviceMotionEvent as unknown as { requestPermission?: () => Promise<string> }
+      if (typeof DME.requestPermission === 'function') {
+        void DME.requestPermission()
+          .then(perm => { if (perm === 'granted') this._startShakeDetection() })
+          .catch(() => {})
+      }
+    }
 
     // Second touch of a two-finger gesture — pinch-zoom / two-finger tap on
     // the main canvas, or two-finger scroll on the stack widget. Only
@@ -813,6 +832,31 @@ export class InteractionSystem {
     this._canvas.style.transform = (scale === 1 && panX === 0 && panY === 0)
       ? ''
       : `translate(${panX}px, ${panY}px) scale(${scale})`
+  }
+
+  // Register a devicemotion listener that resets the canvas zoom on a shake.
+  // Uses accelerationIncludingGravity delta between frames; a delta > 15 m/s²
+  // is well above normal handling and below a deliberate fast flick.
+  // 1-second cooldown prevents repeated triggers from a single shake event.
+  private _startShakeDetection(): void {
+    let prevX: number | null = null, prevY: number | null = null, prevZ: number | null = null
+    let lastShakeMs = 0
+    window.addEventListener('devicemotion', (e) => {
+      const acc = e.accelerationIncludingGravity
+      if (!acc) return
+      const { x, y, z } = acc
+      if (x === null || y === null || z === null) return
+      if (prevX !== null) {
+        const delta = Math.hypot(x - prevX, y - prevY!, z - prevZ!)
+        const now   = Date.now()
+        if (delta > 15 && now - lastShakeMs > 1000) {
+          lastShakeMs = now
+          this._applyCanvasTransform(1, 0, 0)
+          Node.scheduleFrame?.()
+        }
+      }
+      prevX = x; prevY = y; prevZ = z
+    })
   }
 
   private _handleWheel(e: WheelEvent): void {

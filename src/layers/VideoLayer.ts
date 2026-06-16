@@ -169,6 +169,17 @@ export class VideoLayer extends Layer implements ImageSource {
     this._previewVideo.addEventListener('seeked', () => this._capturePreviewFrame())
 
     graph.register(this)
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return
+      if (this._sourceType !== 'camera') return
+      if (this.outsideStack && !this.inBackground) return
+      const trackEnded = this._stream === null ||
+        this._stream.getVideoTracks().every(t => t.readyState === 'ended')
+      if (!trackEnded) return
+      if (this._devices.length > 0) void this._startCameraStream()
+      else void this._startCamera()
+    })
   }
 
   // ── ImageSource ───────────────────────────────────────────────

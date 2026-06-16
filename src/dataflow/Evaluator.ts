@@ -183,6 +183,7 @@ export class Evaluator {
   // (only rendered canvas content, no controls or layer stack widget).
   toggleDisplayMode(): void {
     this._displayMode = !this._displayMode
+    if (this._displayMode) Node.resetViewTransform?.()
     this.scheduleFrame()
   }
 
