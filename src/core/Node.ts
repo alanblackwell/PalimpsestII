@@ -71,6 +71,12 @@ export abstract class Node {
   static viewportWidth  = 800
   static viewportHeight = 600
 
+  // True on touch-primary devices (pointer: coarse). Set once at startup by
+  // main.ts. Controls whether control pills render on the content canvas
+  // (mobile: pills zoom/pan with canvas) or the widget overlay canvas
+  // (desktop: pills stay fixed in the viewport).
+  static isMobileDevice = false
+
   // The layer the Evaluator is rendering as "current" this frame — the one
   // that floats above the rest with a drop shadow in edit mode (null in
   // display mode, where no layer gets that treatment). Lets a layer's own

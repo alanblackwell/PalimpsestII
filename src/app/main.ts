@@ -329,6 +329,10 @@ container.appendChild(widgetCanvas)
 // ------------------------------------------------------------------
 // Evaluator (drives the render loop)
 // ------------------------------------------------------------------
+// Detect touch-primary devices so Evaluator can decide whether control pills
+// should be fixed in the viewport (desktop) or move with the canvas (mobile).
+Node.isMobileDevice = window.matchMedia('(pointer: coarse)').matches
+
 const evaluator = new Evaluator(canvas, widgetCanvas)
 
 // ------------------------------------------------------------------

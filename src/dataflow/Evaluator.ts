@@ -247,31 +247,56 @@ export class Evaluator {
       }
     }
 
-    // When the widget is visible, clip renderPanel to x ≥ contentLeft (the
-    // left edge of the canvas-space panel area) so strip pills are suppressed.
-    // Canvas-space pills and slot rows start at this boundary and are unaffected.
-    const ww = this._layerStackWidget?.isVisible ? contentLeft(width) : 0
-    if (ww > 0) {
-      this.ctx.save()
-      this.ctx.beginPath()
-      this.ctx.rect(ww, 0, width - ww, height)
-      this.ctx.clip()
-    }
-    renderTop.renderPanel(this.ctx)
-    if (ww > 0) this.ctx.restore()
+    const desktopPills = !Node.isMobileDevice && this._widgetCtx !== null
 
-    // Slot drop-target regions (always shown in edit mode).
-    renderTop.renderSlots(this.ctx)
+    if (desktopPills) {
+      // Desktop: control pills are fixed in the viewport — render them to the
+      // widget overlay canvas (viewport-sized, CSS-transform-independent) so
+      // pan/zoom on the content canvas does not move them.
+      //
+      // Temporarily set Node.canvasWidth to viewportWidth so all per-layer
+      // contentLeft(Node.canvasWidth) calls use viewport dimensions, matching
+      // the widget canvas. Restored immediately after; renderPanel/renderSlots
+      // are synchronous draw-only — no OffscreenCanvas allocations occur here.
+      const wctx = this._widgetCtx!
+      wctx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
+      this._layerStackWidget?.render(wctx)
 
-    // The stack widget renders to its own overlay canvas (viewport-sized,
-    // positioned on top of the content canvas with pointer-events:none).
-    // When no separate widget canvas was provided (legacy / test paths),
-    // fall back to drawing on the main context.
-    const wctx = this._widgetCtx ?? this.ctx
-    if (this._widgetCtx !== null) {
-      this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
+      const vw = Node.viewportWidth
+      const vh = Node.viewportHeight
+      const clipX = this._layerStackWidget?.isVisible ? contentLeft(vw) : 0
+      const savedCW = Node.canvasWidth
+      Node.canvasWidth = vw
+      if (clipX > 0) {
+        wctx.save()
+        wctx.beginPath()
+        wctx.rect(clipX, 0, vw - clipX, vh)
+        wctx.clip()
+      }
+      renderTop.renderPanel(wctx)
+      if (clipX > 0) wctx.restore()
+      renderTop.renderSlots(wctx)
+      Node.canvasWidth = savedCW
+    } else {
+      // Mobile / legacy: pills move with the content canvas (pan/zoom magnifies
+      // them, aiding accessibility on small screens).
+      const ww = this._layerStackWidget?.isVisible ? contentLeft(width) : 0
+      if (ww > 0) {
+        this.ctx.save()
+        this.ctx.beginPath()
+        this.ctx.rect(ww, 0, width - ww, height)
+        this.ctx.clip()
+      }
+      renderTop.renderPanel(this.ctx)
+      if (ww > 0) this.ctx.restore()
+      renderTop.renderSlots(this.ctx)
+
+      const wctx = this._widgetCtx ?? this.ctx
+      if (this._widgetCtx !== null) {
+        this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
+      }
+      this._layerStackWidget?.render(wctx)
     }
-    this._layerStackWidget?.render(wctx)
 
     // Bind-drag cursor overlay — small card following the pointer.
     if (Node.bindDrag.active && Node.bindDrag.source !== null) {

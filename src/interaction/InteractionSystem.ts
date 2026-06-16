@@ -9,7 +9,7 @@ import {
   TAP_MAX_MOVEMENT, TWO_FINGER_TAP_MS, PROMOTE_MS,
   type PinchStart,
 } from './gestures.js'
-import { stackWidgetWidth } from './layout.js'
+import { stackWidgetWidth, contentLeft } from './layout.js'
 
 // ------------------------------------------------------------
 // InteractionSystem — routes canvas pointer events to the stack
@@ -126,9 +126,10 @@ export class InteractionSystem {
   // Optional LayerStackWidget — events within its strip are routed here first.
   private _widget: LayerStackWidget | null = null
 
-  // The node currently handling a drag gesture, and the pointer
-  // that owns it (to support multi-touch correctly).
-  private _active: { node: Draggable; pointerId: number } | null = null
+  // The node currently handling a drag gesture, the pointer that owns it, and
+  // whether it was started with viewport-space coordinates (desktop pill zone)
+  // rather than content-canvas coordinates (canvas content / mobile).
+  private _active: { node: Draggable; pointerId: number; useVpt: boolean } | null = null
 
   // True while a pointer gesture is being handled by the LayerStackWidget.
   private _widgetCapture = false
@@ -316,6 +317,24 @@ export class InteractionSystem {
     return (this._widget?.isVisible ?? false) && clientX < stackWidgetWidth(Node.viewportWidth)
   }
 
+  // Returns true when a click is in the desktop "pill zone" — the canvas-space
+  // control area to the right of the widget strip. On desktop, control pills
+  // are rendered fixed in this viewport region; hit-testing should use
+  // viewport-space (client) coordinates rather than content-canvas coordinates.
+  // Always false on mobile (pills move with the canvas, content-canvas coords apply).
+  private _inPillZone(clientX: number): boolean {
+    return !Node.isMobileDevice &&
+           (this._widget?.isVisible ?? false) &&
+           clientX >= contentLeft(Node.viewportWidth)
+  }
+
+  // Returns the point to use for hit-testing a given event against the current
+  // layer's panel controls: viewport coords on desktop (pills are fixed), content
+  // coords on mobile (pills move with canvas).
+  private _uiPoint(e: PointerEvent | MouseEvent): Point {
+    return this._inPillZone(e.clientX) ? this._viewportPoint(e) : this._point(e)
+  }
+
   private _pickLayerAtPixel(point: Point): Layer | null {
     if (this._stackTop === null) return null
     const w = this._canvas.width, h = this._canvas.height
@@ -421,10 +440,14 @@ export class InteractionSystem {
 
       if (this._stackTop === null) return
 
-      const node = this._hitTest(point)
+      // On desktop, clicks in the pill zone use viewport coords (pills are fixed
+      // in the viewport overlay); elsewhere use content-canvas coords as usual.
+      const useVpt  = this._inPillZone(e.clientX)
+      const testPt  = useVpt ? this._viewportPoint(e) : point
+      const node    = this._hitTest(testPt)
 
       if (node === null || !isDraggable(node)) {
-        this._handleEmptyAreaClick(point)
+        this._handleEmptyAreaClick(point, useVpt ? this._viewportPoint(e) : undefined)
         return
       }
 
@@ -432,17 +455,17 @@ export class InteractionSystem {
       if (!this._isOnCurrentLayer(node)) return
 
       // Let the node decide whether to accept the event.
-      if (!node.handlePointerDown(point)) {
+      if (!node.handlePointerDown(testPt)) {
         // Node declined — still check whether the click landed on a slot dot.
         const sel = this._widget?.selected ?? null
         if (sel !== null) {
-          const slot = sel.hitTestSlot(point)
+          const slot = sel.hitTestSlot(testPt)
           if (slot !== null) this._onSlotClick?.(sel, slot)
         }
         return
       }
 
-      this._active = { node, pointerId: e.pointerId }
+      this._active = { node, pointerId: e.pointerId, useVpt }
       this._canvas.setPointerCapture(e.pointerId)
       this._setCursor('grabbing')
       return
@@ -489,7 +512,7 @@ export class InteractionSystem {
 
     if (tp.hitNode !== null && tp.hitNode.handlePointerDown(point)) {
       this._touchPointers.delete(pointerId)
-      this._active = { node: tp.hitNode, pointerId }
+      this._active = { node: tp.hitNode, pointerId, useVpt: false }
       this._setCursor('grabbing')
       Node.touchDragPoint = point
       Node.scheduleFrame?.()
@@ -523,7 +546,8 @@ export class InteractionSystem {
     if (this._active !== null) {
       // Deliver move to the captured node only.
       if (e.pointerId !== this._active.pointerId) return
-      this._active.node.handlePointerMove?.(point)
+      const movePoint = this._active.useVpt ? this._viewportPoint(e) : point
+      this._active.node.handlePointerMove?.(movePoint)
       if (isTouch) {
         Node.touchDragPoint = point
         Node.scheduleFrame?.()
@@ -595,14 +619,17 @@ export class InteractionSystem {
 
   // A click/tap on an empty area of the main canvas that didn't hit a
   // draggable node: slot-row click takes priority, then pixel-pick.
-  private _handleEmptyAreaClick(point: Point): void {
+  // `vpt` is the viewport-space point; provided on desktop for pill-zone clicks
+  // where slot bounds are stored in viewport coords.
+  private _handleEmptyAreaClick(point: Point, vpt?: Point): void {
     const selected = this._widget?.selected ?? null
+    const testPt   = vpt ?? point
 
     // A click on a parameter-slot row (empty or bound) takes priority
     // over pixel-pick — it either creates+binds a default layer for an
     // empty slot, or selects/restores the layer bound to a filled slot.
     if (selected !== null) {
-      const slot = selected.hitTestSlot(point)
+      const slot = selected.hitTestSlot(testPt)
       if (slot !== null) {
         this._onSlotClick?.(selected, slot)
         return
@@ -610,11 +637,12 @@ export class InteractionSystem {
     }
 
     // No interactive hit — pixel-pick to select a layer by rendered content.
-    // Suppressed when the selected layer sets blockPixelPick (e.g. MaskLayer,
-    // where painting begins in transparent areas).
+    // Suppressed when: the selected layer sets blockPixelPick, OR on desktop
+    // the click is in the pill zone (which overlays the canvas, not content).
     const blocked = selected !== null &&
       (selected as unknown as Record<string, unknown>)['blockPixelPick'] === true
-    if (this._widget !== null && !blocked) {
+    const inPillZone = vpt !== undefined  // pill zone always passes vpt on desktop
+    if (this._widget !== null && !blocked && !inPillZone) {
       const picked = this._pickLayerAtPixel(point)
       if (picked !== null) {
         this._widget.selected = picked
@@ -897,15 +925,16 @@ export class InteractionSystem {
 
   private _handleContextMenu(e: MouseEvent): void {
     e.preventDefault()
-    const point = this._point(e)
+    const point   = this._point(e)
     const selected = this._widget?.selected ?? null
     if (selected === null) return
 
     // Layers that handle their own right-click (e.g. PathLayer deleting a
     // control point) get first refusal before the slot-binding inspector.
+    // Canvas-content right-click always uses content coords.
     if (hasContextMenuHandler(selected) && selected.handleContextMenu(point)) return
 
-    const slot = selected.hitTestSlot(point)
+    const slot = selected.hitTestSlot(this._uiPoint(e))
     if (slot === null || slot.state === SlotState.Unbound) return
     const bl = BindingLayer.findForSlot(slot)
     if (bl === null) return
@@ -1033,7 +1062,8 @@ export class InteractionSystem {
       this._setCursor('default')
       return
     }
-    const node = this._hitTest(point)
+    const testPt = this._uiPoint(e)
+    const node   = this._hitTest(testPt)
     if (node !== null && isDraggable(node) && isInteractive(node) && this._isOnCurrentLayer(node)) {
       this._setCursor('pointer')
     } else {
