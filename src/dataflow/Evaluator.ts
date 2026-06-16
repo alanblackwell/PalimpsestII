@@ -30,6 +30,8 @@ const GESTURE_FLASH_MS = 350
 export class Evaluator {
   private readonly canvas: HTMLCanvasElement
   private readonly ctx: CanvasRenderingContext2D
+  private readonly _widgetCanvas: HTMLCanvasElement | null = null
+  private readonly _widgetCtx: CanvasRenderingContext2D | null = null
 
   private _stackTop:         Layer | null  = null
   private _clock:            Clock | null  = null
@@ -44,16 +46,57 @@ export class Evaluator {
   private _lastFpsTime = 0
   fps = 0
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, widgetCanvas?: HTMLCanvasElement) {
     this.canvas = canvas
     const ctx = canvas.getContext('2d')
     if (ctx === null) throw new Error('Could not get 2D context from canvas')
     this.ctx = ctx
 
+    if (widgetCanvas !== undefined) {
+      this._widgetCanvas = widgetCanvas
+      const wctx = widgetCanvas.getContext('2d')
+      if (wctx === null) throw new Error('Could not get 2D context from widget canvas')
+      this._widgetCtx = wctx
+    }
+
     // Wire up the static hook so any Node.markDirty() triggers a frame.
-    Node.scheduleFrame = () => this.scheduleFrame()
-    Node.canvasWidth  = canvas.width
-    Node.canvasHeight = canvas.height
+    Node.scheduleFrame    = () => this.scheduleFrame()
+    Node.canvasWidth      = canvas.width
+    Node.canvasHeight     = canvas.height
+    Node.viewportWidth    = canvas.width
+    Node.viewportHeight   = canvas.height
+  }
+
+  // ----------------------------------------------------------
+  // Viewport / content canvas sizing
+  // ----------------------------------------------------------
+
+  // The content canvas only ever grows — shrinking the window does not reduce
+  // it. The widget canvas always matches the current viewport exactly.
+  setViewport(width: number, height: number): void {
+    Node.viewportWidth  = width
+    Node.viewportHeight = height
+    if (this._widgetCanvas !== null) {
+      this._widgetCanvas.width  = width
+      this._widgetCanvas.height = height
+    }
+    const newW = Math.max(this.canvas.width,  width)
+    const newH = Math.max(this.canvas.height, height)
+    if (newW !== this.canvas.width || newH !== this.canvas.height) {
+      this.canvas.width  = newW
+      this.canvas.height = newH
+      Node.canvasWidth   = newW
+      Node.canvasHeight  = newH
+    }
+    this.scheduleFrame()
+  }
+
+  get contentWidth():  number { return this.canvas.width  }
+  get contentHeight(): number { return this.canvas.height }
+
+  // Legacy alias kept for any call sites that set both dimensions simultaneously.
+  resize(width: number, height: number): void {
+    this.setViewport(width, height)
   }
 
   // ----------------------------------------------------------
@@ -219,7 +262,16 @@ export class Evaluator {
 
     // Slot drop-target regions (always shown in edit mode).
     renderTop.renderSlots(this.ctx)
-    this._layerStackWidget?.render(this.ctx)
+
+    // The stack widget renders to its own overlay canvas (viewport-sized,
+    // positioned on top of the content canvas with pointer-events:none).
+    // When no separate widget canvas was provided (legacy / test paths),
+    // fall back to drawing on the main context.
+    const wctx = this._widgetCtx ?? this.ctx
+    if (this._widgetCtx !== null) {
+      this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
+    }
+    this._layerStackWidget?.render(wctx)
 
     // Bind-drag cursor overlay — small card following the pointer.
     if (Node.bindDrag.active && Node.bindDrag.source !== null) {
@@ -393,15 +445,6 @@ export class Evaluator {
   // ----------------------------------------------------------
   // Resize handling
   // ----------------------------------------------------------
-
-  // Call this when the canvas element is resized (e.g. from a ResizeObserver).
-  resize(width: number, height: number): void {
-    this.canvas.width  = width
-    this.canvas.height = height
-    Node.canvasWidth   = width
-    Node.canvasHeight  = height
-    this.scheduleFrame()
-  }
 
   // ----------------------------------------------------------
   // FPS

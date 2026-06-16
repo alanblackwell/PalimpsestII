@@ -304,20 +304,32 @@ const DEFAULT_VALUE_HEIGHT: Partial<Record<ValueType, number>> = {
 // Canvas setup
 // ------------------------------------------------------------------
 const app = document.getElementById('app')!
+const container = document.createElement('div')
+container.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden'
+app.appendChild(container)
+
+// Content canvas: CSS-transformed for pan/zoom; always at least as large as
+// the viewport (never shrinks). touch-action:none prevents the browser from
+// intercepting swipe/pinch gestures before InteractionSystem sees them.
 const canvas = document.createElement('canvas')
 canvas.width  = window.innerWidth
 canvas.height = window.innerHeight
-// Without this, browsers intercept single/two-finger touch gestures for
-// native page scroll/pinch-zoom — firing pointercancel as soon as the
-// gesture is recognised (well under InteractionSystem's swipe threshold),
-// so our swipe/pinch handling never sees the full gesture.
-canvas.style.touchAction = 'none'
-app.appendChild(canvas)
+canvas.style.cssText = 'position:absolute;top:0;left:0;touch-action:none;transform-origin:0 0'
+container.appendChild(canvas)
+
+// Widget canvas: always viewport-sized, overlaid with pointer-events:none so
+// touches pass through to the content canvas. The LayerStackWidget renders
+// here so it stays fixed even while the content canvas is panned/zoomed.
+const widgetCanvas = document.createElement('canvas')
+widgetCanvas.width  = window.innerWidth
+widgetCanvas.height = window.innerHeight
+widgetCanvas.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none'
+container.appendChild(widgetCanvas)
 
 // ------------------------------------------------------------------
 // Evaluator (drives the render loop)
 // ------------------------------------------------------------------
-const evaluator = new Evaluator(canvas)
+const evaluator = new Evaluator(canvas, widgetCanvas)
 
 // ------------------------------------------------------------------
 // Initial stack: Root → MenuLayer  (DeletionLayer added on first deletion)
@@ -358,7 +370,7 @@ deletionLayer.setBackgroundLayer(backgroundLayer)
 // ------------------------------------------------------------------
 // Widget, interaction, helpers
 // ------------------------------------------------------------------
-const widget = new LayerStackWidget(canvas)
+const widget = new LayerStackWidget(widgetCanvas)
 widget.setVisible(false)   // hidden at startup; revealed when a mode is chosen
 evaluator.setLayerStackWidget(widget)
 
@@ -1135,6 +1147,11 @@ interaction.setImagePasteAction((file) => createImageLayerFromFile(file))
 // Resize
 // ------------------------------------------------------------------
 window.addEventListener('resize', () => {
-  evaluator.resize(window.innerWidth, window.innerHeight)
-  root.resize(window.innerWidth, window.innerHeight)
+  const w = window.innerWidth, h = window.innerHeight
+  const prevCW = evaluator.contentWidth, prevCH = evaluator.contentHeight
+  evaluator.setViewport(w, h)
+  // Only resize root when the content canvas actually grew (it never shrinks).
+  if (evaluator.contentWidth !== prevCW || evaluator.contentHeight !== prevCH) {
+    root.resize(evaluator.contentWidth, evaluator.contentHeight)
+  }
 })

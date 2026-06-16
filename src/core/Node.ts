@@ -65,6 +65,12 @@ export abstract class Node {
   static canvasWidth  = 800
   static canvasHeight = 600
 
+  // Current viewport dimensions — updated by Evaluator.setViewport(). Distinct
+  // from canvasWidth/Height when the window is smaller than the content canvas
+  // (canvas only ever grows; viewport tracks the actual browser window size).
+  static viewportWidth  = 800
+  static viewportHeight = 600
+
   // The layer the Evaluator is rendering as "current" this frame — the one
   // that floats above the rest with a drop shadow in edit mode (null in
   // display mode, where no layer gets that treatment). Lets a layer's own

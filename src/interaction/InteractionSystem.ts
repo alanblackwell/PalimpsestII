@@ -9,6 +9,7 @@ import {
   TAP_MAX_MOVEMENT, TWO_FINGER_TAP_MS, PROMOTE_MS,
   type PinchStart,
 } from './gestures.js'
+import { stackWidgetWidth } from './layout.js'
 
 // ------------------------------------------------------------
 // InteractionSystem — routes canvas pointer events to the stack
@@ -302,6 +303,19 @@ export class InteractionSystem {
     }
   }
 
+  // Returns the event position in viewport (client) coordinates — used for
+  // interactions with the widget overlay canvas, which is always viewport-sized.
+  private _viewportPoint(e: { clientX: number; clientY: number }): Point {
+    return { x: e.clientX, y: e.clientY }
+  }
+
+  // Returns true when a client-space x coordinate falls within the widget strip.
+  // Mirrors LayerStackWidget.inBounds but works in viewport coords so it stays
+  // correct even when the content canvas is panned/zoomed.
+  private _inWidgetStrip(clientX: number): boolean {
+    return (this._widget?.isVisible ?? false) && clientX < stackWidgetWidth(Node.viewportWidth)
+  }
+
   private _pickLayerAtPixel(point: Point): Layer | null {
     if (this._stackTop === null) return null
     const w = this._canvas.width, h = this._canvas.height
@@ -367,7 +381,7 @@ export class InteractionSystem {
         x: point.x, y: point.y, startX: point.x, startY: point.y,
         clientX: e.clientX, clientY: e.clientY,
         startTime: performance.now(),
-        inWidget: this._widget?.inBounds(point) ?? false,
+        inWidget: this._inWidgetStrip(e.clientX),
         hitNode: null, promoteTimer: null,
       })
       this._canvas.setPointerCapture(e.pointerId)
@@ -396,8 +410,8 @@ export class InteractionSystem {
 
     if (!isTouch) {
       // Mouse/pen: immediate handling, unchanged.
-      if (this._widget !== null && this._widget.inBounds(point)) {
-        if (this._widget.handlePointerDown(point)) {
+      if (this._widget !== null && this._inWidgetStrip(e.clientX)) {
+        if (this._widget.handlePointerDown(this._viewportPoint(e))) {
           this._widgetCapture = true
           this._canvas.setPointerCapture(e.pointerId)
           this._setCursor('grabbing')
@@ -441,7 +455,7 @@ export class InteractionSystem {
     // those, including over MaskLayer's paint/erase tools (which would
     // otherwise claim every touch immediately) and over node handles (which
     // would otherwise claim _active before a second finger can start a pinch).
-    const inWidget = this._widget?.inBounds(point) ?? false
+    const inWidget = this._inWidgetStrip(e.clientX)
     let hitNode: Draggable | null = null
     if (!inWidget && this._stackTop !== null) {
       const node = this._hitTest(point)
@@ -460,8 +474,9 @@ export class InteractionSystem {
     const point = { x: tp.x, y: tp.y }
 
     if (tp.inWidget) {
-      const armed = (this._widget?.armRaisedDrag(point) ?? false) ||
-                    (this._widget?.handlePointerDown(point) ?? false)
+      const vpt = { x: tp.clientX, y: tp.clientY }
+      const armed = (this._widget?.armRaisedDrag(vpt) ?? false) ||
+                    (this._widget?.handlePointerDown(vpt) ?? false)
       if (armed) {
         this._touchPointers.delete(pointerId)
         this._widgetCapture = true
@@ -493,8 +508,8 @@ export class InteractionSystem {
     const isTouch = e.pointerType === 'touch'
 
     if (this._widgetCapture) {
-      this._widget?.handlePointerMove(point)
-      // Keep drag overlay position current
+      this._widget?.handlePointerMove(this._viewportPoint(e))
+      // Keep drag overlay position current (content-canvas coords for the overlay).
       if (Node.bindDrag.active) {
         Node.bindDrag.x = point.x
         Node.bindDrag.y = point.y
@@ -548,7 +563,7 @@ export class InteractionSystem {
           }
         }
       } else {
-        this._widget?.handlePointerUp(point)
+        this._widget?.handlePointerUp(this._viewportPoint(e))
       }
       this._widgetCapture = false
       this._updateHoverCursor(e)
@@ -730,9 +745,8 @@ export class InteractionSystem {
   }
 
   private _handleWheel(e: WheelEvent): void {
-    const point = this._point(e)
-    if (this._widget?.inBounds(point)) {
-      this._widget.scrollBy(e.deltaY)
+    if (this._inWidgetStrip(e.clientX)) {
+      this._widget?.scrollBy(e.deltaY)
       e.preventDefault()
     }
   }
@@ -995,7 +1009,7 @@ export class InteractionSystem {
 
   private _updateHoverCursor(e: PointerEvent): void {
     const point = this._point(e)
-    if (this._widget !== null && this._widget.inBounds(point)) {
+    if (this._widget !== null && this._inWidgetStrip(e.clientX)) {
       this._setCursor('pointer')
       return
     }
