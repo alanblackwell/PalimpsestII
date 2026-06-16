@@ -438,6 +438,13 @@ export class InteractionSystem {
     if (this._active !== null || this._widgetCapture || this._touchPointers.size > 0) return
 
     if (!isTouch) {
+      // Display mode: all mouse/pen clicks fire the first event layer,
+      // regardless of where on the canvas they land (widget strip included).
+      if (this._getDisplayMode()) {
+        this._fireEventAtOrBelow(this._widget?.selected ?? null)
+        return
+      }
+
       // Mouse/pen: immediate handling, unchanged.
       if (this._widget !== null && this._inWidgetStrip(e.clientX)) {
         if (this._widget.handlePointerDown(this._viewportPoint(e))) {
@@ -449,13 +456,6 @@ export class InteractionSystem {
       }
 
       if (this._stackTop === null) return
-
-      // Display mode: mouse/pen click fires the first event layer at or below
-      // the current layer, and does nothing else.
-      if (this._getDisplayMode()) {
-        this._fireEventAtOrBelow(this._widget?.selected ?? null)
-        return
-      }
 
       // On desktop, clicks in the pill zone use viewport coords (pills are fixed
       // in the viewport overlay); elsewhere use content-canvas coords as usual.
