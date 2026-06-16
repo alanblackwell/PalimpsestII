@@ -700,8 +700,9 @@ export class VideoLayer extends Layer implements ImageSource {
     }
     // Fit/fill toggle — clears manualTransform and resets view pan/zoom
     if (this._fitBtnB !== null && boundingBoxContains(this._fitBtnB, point)) {
-      this._fillMode       = !this._fillMode
+      this._fillMode        = !this._fillMode
       this._manualTransform = false
+      this._rotation        = 0
       Node.resetViewTransform?.()
       this.markDirty()
       return true
