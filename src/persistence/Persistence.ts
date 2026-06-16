@@ -41,7 +41,6 @@ import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
 import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
-import { MediaLayer }        from '../layers/MediaLayer.js'
 import { CaptureLayer }      from '../layers/CaptureLayer.js'
 import { VideoLayer }        from '../layers/VideoLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
@@ -152,7 +151,7 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   ClipTextLayer:    () => new ClipTextLayer(),
   ClipDrawingLayer: () => new ClipDrawingLayer(),
   RotateLayer:      () => new RotateLayer(),
-  MediaLayer:       () => new MediaLayer(),
+  MediaLayer:       () => new VideoLayer(),   // migration alias for old saves
   CaptureLayer:     () => new CaptureLayer(),
   VideoLayer:       () => new VideoLayer(),
   TutorialLayer:    () => new TutorialLayer(),

@@ -33,7 +33,6 @@ import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
 import { FlashLayer }      from './FlashLayer.js'
 import { VideoLayer }      from './VideoLayer.js'
-import { MediaLayer }      from './MediaLayer.js'
 import { CaptureLayer }    from './CaptureLayer.js'
 import { TutorialLayer }   from './TutorialLayer.js'
 import { StrokeLayer }     from './StrokeLayer.js'
@@ -146,7 +145,6 @@ const COLUMNS: ColDef[] = [
     name: 'Media',
     top: [
       { label: 'Image',   colour: '#7ecf7e',              factory: ()          => new ImageLayer() },
-      { label: 'Media',     colour: '#7ecf7e', factory: ()          => new MediaLayer() },
       { label: 'Video',   colour: '#7ecf7e',              factory: ()          => new VideoLayer() },
       { label: 'Capture', colour: '#7ecf7e',              factory: ()          => new CaptureLayer() },
       { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },

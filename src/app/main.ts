@@ -12,7 +12,7 @@ import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
-import { MediaLayer }        from '../layers/MediaLayer.js'
+import { VideoLayer }        from '../layers/VideoLayer.js'
 import { RateLayer }         from '../layers/RateLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer, rndShape } from '../layers/MenuLayer.js'
@@ -852,7 +852,7 @@ refreshStack(startupLayer)
 
 // ------------------------------------------------------------------
 // Drag-and-drop media loading — always creates a new ImageLayer (for
-// image files) or MediaLayer (for video files)
+// image files) or VideoLayer (for video files)
 // ------------------------------------------------------------------
 //
 // Placement rules:
@@ -870,7 +870,7 @@ refreshStack(startupLayer)
 
 // Placeholder layer for a drag currently hovering the stack widget — not
 // yet linked into the live stack (outsideStack) until the drop commits.
-let fileDragGhost: ImageLayer | MediaLayer | null = null
+let fileDragGhost: ImageLayer | VideoLayer | null = null
 
 // During dragover, DataTransferItem.type carries the file's MIME type
 // (the File object itself is only available on drop).
@@ -892,7 +892,7 @@ canvas.addEventListener('dragover', (e) => {
       Node.scheduleFrame?.()
     }
     if (fileDragGhost === null) {
-      fileDragGhost = isVideoDrag(e) ? new MediaLayer() : new ImageLayer()
+      fileDragGhost = isVideoDrag(e) ? new VideoLayer() : new ImageLayer()
       Layer.assignDebugName(fileDragGhost)
       fileDragGhost.bounds = { ...menuLayer.bounds }
       widget.beginExternalDrag(fileDragGhost, pt)
@@ -951,8 +951,8 @@ canvas.addEventListener('drop', (e) => {
   const dropPoint  = { x: e.offsetX, y: e.offsetY }
   const selected   = widget.selected
 
-  const newLayer: ImageLayer | MediaLayer = file.type.startsWith('video/')
-    ? new MediaLayer()
+  const newLayer: ImageLayer | VideoLayer = file.type.startsWith('video/')
+    ? new VideoLayer()
     : new ImageLayer()
   Layer.assignDebugName(newLayer)
   newLayer.bounds    = { ...menuLayer.bounds }
