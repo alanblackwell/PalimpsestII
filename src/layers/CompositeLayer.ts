@@ -516,8 +516,10 @@ export class CompositeLayer extends Layer implements ImageSource {
   private _widgetBounds() {
     const width  = WIDGET_PAD * 2 + THUMB * 2 + 16 + SLIDER_W
     const height = WIDGET_PAD * 2 + THUMB + ROW_GAP + SWAP_BTN_H
-    const cx = Node.canvasWidth  / 2
-    const cy = Node.canvasHeight / 2
+    // Centre within the visible viewport, not the full content canvas —
+    // the canvas may be wider than the viewport on mobile.
+    const cx = Math.min(Node.canvasWidth,  Node.viewportWidth)  / 2
+    const cy = Math.min(Node.canvasHeight, Node.viewportHeight) / 2
     return { x: cx - width / 2, y: cy - height / 2, width, height }
   }
 

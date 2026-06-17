@@ -103,6 +103,18 @@ export class FlashLayer extends Layer implements EventSource {
   }
 
   // ----------------------------------------------------------
+  // Default bindings
+  // ----------------------------------------------------------
+
+  // Move the image source to Background so it stops rendering to the canvas
+  // while this layer manages its visibility via the flash gate.
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
+    return [
+      { slot: this.imageSlot, accepts: (l: Layer) => l.types.has(ValueType.Image), sendToBackgroundAfterBind: true },
+    ]
+  }
+
+  // ----------------------------------------------------------
   // Node
   // ----------------------------------------------------------
 
@@ -116,13 +128,15 @@ export class FlashLayer extends Layer implements EventSource {
       }
     }
 
-    // Keep frames running during any flash so the progress bar animates.
-    // Also handles fast-mode expiry (slow mode is ended by the setTimeout callback).
+    // Keep frames running during any flash so the progress bar animates and
+    // fast-mode expiry is detected. markDirty() inside recompute() is a no-op
+    // because _dirty is still true at that point; queueMicrotask fires after
+    // evaluate() clears _dirty, so the next rAF finds the node dirty again.
     if (this._flashStart !== null) {
       if (this._isFast && performance.now() >= this._flashEndTime) {
         this._flashStart = null
       } else {
-        this.markDirty()
+        queueMicrotask(() => { if (this._flashStart !== null) this.forceDirty() })
       }
     }
   }
