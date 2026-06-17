@@ -233,8 +233,15 @@ export class CompositeLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    const w = this._result.width
-    const h = this._result.height
+    // Always match the grow-only content canvas — sources (VideoLayer,
+    // ImageLayer, etc.) all produce canvasWidth×canvasHeight images, so
+    // the result must be the same size to blit them at 1:1 without scaling.
+    const cw = Node.canvasWidth
+    const ch = Node.canvasHeight
+    if (this._result.width !== cw || this._result.height !== ch) {
+      this._result = new OffscreenCanvas(cw, ch)
+      this._temp   = new OffscreenCanvas(cw, ch)
+    }
 
     const left    = this._leftSlot.isActive
       ? (this._leftSlot.source as ImageSource).getImage()    : null
@@ -254,13 +261,13 @@ export class CompositeLayer extends Layer implements ImageSource {
     const opacity = this._amount
 
     const rctx = this._result.getContext('2d')!
-    rctx.clearRect(0, 0, w, h)
+    rctx.clearRect(0, 0, cw, ch)
 
     // Draw left
     if (left !== null) {
       rctx.globalCompositeOperation = 'source-over'
       rctx.globalAlpha = 1
-      rctx.drawImage(left as CanvasImageSource, 0, 0, w, h)
+      rctx.drawImage(left as CanvasImageSource, 0, 0)
     }
 
     if (right === null) return
@@ -270,15 +277,15 @@ export class CompositeLayer extends Layer implements ImageSource {
     if (mask !== null) {
       // 1. Draw right onto temp canvas
       const tctx = this._temp.getContext('2d')!
-      tctx.clearRect(0, 0, w, h)
+      tctx.clearRect(0, 0, cw, ch)
       tctx.globalCompositeOperation = 'source-over'
       tctx.globalAlpha = 1
-      tctx.drawImage(right as CanvasImageSource, 0, 0, w, h)
+      tctx.drawImage(right as CanvasImageSource, 0, 0)
 
       // 2. Apply mask — keep only where mask is opaque (white)
       tctx.globalCompositeOperation = 'destination-in'
       tctx.globalAlpha = 1
-      tctx.drawImage(mask as CanvasImageSource, 0, 0, w, h)
+      tctx.drawImage(mask as CanvasImageSource, 0, 0)
 
       // 3. Composite masked right onto result
       rctx.globalCompositeOperation = mode.op
@@ -288,7 +295,7 @@ export class CompositeLayer extends Layer implements ImageSource {
       // No mask — composite right directly
       rctx.globalCompositeOperation = mode.op
       rctx.globalAlpha = opacity
-      rctx.drawImage(right as CanvasImageSource, 0, 0, w, h)
+      rctx.drawImage(right as CanvasImageSource, 0, 0)
     }
 
     rctx.globalCompositeOperation = 'source-over'
