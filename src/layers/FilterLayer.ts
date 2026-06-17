@@ -681,14 +681,14 @@ export class FilterLayer extends Layer implements ImageSource {
   }
 
   private _pillsPerCol(): number {
-    return Math.max(1, Math.floor((Node.canvasHeight - PY0) / (PH + PGAP)))
+    return Math.max(1, Math.floor((Node.viewportHeight - PY0) / (PH + PGAP)))
   }
 
   // Pills are centred in the space right of the LayerStackWidget, shrinking
   // width (down to PW_MIN) if there isn't room for all columns at PW_MAX —
   // same general approach as MenuLayer._layout().
   private _layout(): { panX: number; pillW: number; ppc: number } {
-    const canvasW = Node.canvasWidth
+    const canvasW = Node.viewportWidth
     const left    = contentLeft(canvasW)
     const availW  = Math.max(PW_MIN, canvasW - left - RIGHT_MARGIN)
 
