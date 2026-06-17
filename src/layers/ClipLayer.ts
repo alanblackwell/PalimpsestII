@@ -350,8 +350,8 @@ export class ClipLayer extends Layer implements ImageSource {
   // the bottom edge of the canvas, recomputed every frame so it tracks
   // window resizes.
   private _replaceLayout(): { x0: number; btnW: number; y: number } {
-    const canvasW = Node.canvasWidth
-    const canvasH = Node.canvasHeight
+    const canvasW = Node.viewportWidth
+    const canvasH = Node.viewportHeight
     const left    = contentLeft(canvasW)
     const availW  = Math.max(BTN_W_MIN, canvasW - left - RIGHT_MARGIN)
 
