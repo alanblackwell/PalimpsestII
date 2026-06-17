@@ -7,18 +7,21 @@ import type { Ctx2D, Point } from '../core/types.js'
 // StartupLayer — first screen shown on launch
 // ------------------------------------------------------------
 //
-// Renders two large square buttons centred in the visible canvas
-// area (right of the StackWidget). Clicking "Menu" or "Tutorial"
-// fires the corresponding callback provided at construction;
-// main.ts is responsible for inserting the chosen layer, removing
-// this layer, and calling refreshStack.
+// Renders two large square buttons centred in the full viewport.
+// The StackWidget is hidden at startup, so centering uses the
+// entire screen rather than just the content-area strip.
+// Clicking "Menu" or "Tutorial" fires the corresponding callback
+// provided at construction; main.ts is responsible for inserting
+// the chosen layer, removing this layer, and calling refreshStack.
 //
-// Button graphics are text-only for now; the owner can replace
-// them with artwork in a future iteration.
+// On very narrow viewports (< 304 px) the buttons stack vertically.
 
 const BTN_SZ  = 140   // side length of each square button (px)
 const BTN_GAP = 24    // gap between the two buttons (px)
 const BTN_R   = 16    // corner radius
+
+// Minimum content-area width required for horizontal (side-by-side) layout.
+const HORIZ_MIN = BTN_SZ * 2 + BTN_GAP  // 304 px
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -47,11 +50,10 @@ export class StartupLayer extends Layer {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    const cw = Node.canvasWidth
-    const ch = Node.canvasHeight
+    const { menu, tutorial } = this._bounds()
     ctx.save()
-    this._drawButton(ctx, this._menuBounds(cw, ch),     'Menu')
-    this._drawButton(ctx, this._tutorialBounds(cw, ch), 'Tutorial')
+    this._drawButton(ctx, menu,     'Menu')
+    this._drawButton(ctx, tutorial, 'Tutorial')
     ctx.restore()
   }
 
@@ -64,18 +66,15 @@ export class StartupLayer extends Layer {
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
-    const cw = Node.canvasWidth
-    const ch = Node.canvasHeight
-    if (this._hit(point, this._menuBounds(cw, ch)))     return this
-    if (this._hit(point, this._tutorialBounds(cw, ch))) return this
+    const { menu, tutorial } = this._bounds()
+    if (this._hit(point, menu) || this._hit(point, tutorial)) return this
     return null
   }
 
   handlePointerDown(point: Point): boolean {
-    const cw = Node.canvasWidth
-    const ch = Node.canvasHeight
-    if (this._hit(point, this._menuBounds(cw, ch)))     { this._onMenu();     return true }
-    if (this._hit(point, this._tutorialBounds(cw, ch))) { this._onTutorial(); return true }
+    const { menu, tutorial } = this._bounds()
+    if (this._hit(point, menu))     { this._onMenu();     return true }
+    if (this._hit(point, tutorial)) { this._onTutorial(); return true }
     return false
   }
 
@@ -85,27 +84,26 @@ export class StartupLayer extends Layer {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _centreX(cw: number): number {
-    return Math.round(cw / 2)
-  }
+  // Compute button bounding boxes centred in the full viewport.
+  // The StackWidget is hidden at startup so the entire screen is available.
+  private _bounds(): { menu: BBox; tutorial: BBox } {
+    const vw = Node.viewportWidth
+    const vh = Node.viewportHeight
+    const cx = Math.round(vw / 2)
+    const cy = Math.round(vh / 2)
 
-  private _menuBounds(cw: number, ch: number): BBox {
-    const cx = this._centreX(cw)
-    return {
-      x:      cx - BTN_GAP / 2 - BTN_SZ,
-      y:      Math.round(ch / 2 - BTN_SZ / 2),
-      width:  BTN_SZ,
-      height: BTN_SZ,
+    if (vw < HORIZ_MIN) {
+      // Very narrow viewport: stack buttons vertically, centred on screen.
+      return {
+        menu:     { x: cx - BTN_SZ / 2, y: cy - BTN_GAP / 2 - BTN_SZ, width: BTN_SZ, height: BTN_SZ },
+        tutorial: { x: cx - BTN_SZ / 2, y: cy + BTN_GAP / 2,           width: BTN_SZ, height: BTN_SZ },
+      }
     }
-  }
 
-  private _tutorialBounds(cw: number, ch: number): BBox {
-    const cx = this._centreX(cw)
+    // Horizontal layout: centre side by side in the full viewport.
     return {
-      x:      cx + BTN_GAP / 2,
-      y:      Math.round(ch / 2 - BTN_SZ / 2),
-      width:  BTN_SZ,
-      height: BTN_SZ,
+      menu:     { x: cx - BTN_GAP / 2 - BTN_SZ, y: cy - BTN_SZ / 2, width: BTN_SZ, height: BTN_SZ },
+      tutorial: { x: cx + BTN_GAP / 2,           y: cy - BTN_SZ / 2, width: BTN_SZ, height: BTN_SZ },
     }
   }
 

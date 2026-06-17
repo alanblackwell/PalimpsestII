@@ -311,9 +311,15 @@ app.appendChild(container)
 // Content canvas: CSS-transformed for pan/zoom; always at least as large as
 // the viewport (never shrinks). touch-action:none prevents the browser from
 // intercepting swipe/pinch gestures before InteractionSystem sees them.
+//
+// On small viewports (mobile) the canvas starts larger than the viewport so
+// the startup/menu/tutorial content can be laid out at full size; the user
+// can pinch-to-zoom and pan to reach content that extends off-screen.
+const MIN_CANVAS_W = 800   // enough for 4 menu columns at full width
+const MIN_CANVAS_H = 600   // enough for all menu rows / tutorial content
 const canvas = document.createElement('canvas')
-canvas.width  = window.innerWidth
-canvas.height = window.innerHeight
+canvas.width  = Math.max(window.innerWidth,  MIN_CANVAS_W)
+canvas.height = Math.max(window.innerHeight, MIN_CANVAS_H)
 canvas.style.cssText = 'position:absolute;top:0;left:0;touch-action:none;transform-origin:0 0'
 container.appendChild(canvas)
 
@@ -334,6 +340,10 @@ container.appendChild(widgetCanvas)
 Node.isMobileDevice = window.matchMedia('(pointer: coarse)').matches
 
 const evaluator = new Evaluator(canvas, widgetCanvas)
+// Correct viewport — canvas may be larger than the viewport on mobile.
+// This also resizes the widget canvas to the actual viewport size so it
+// stays viewport-sized rather than matching the oversized content canvas.
+evaluator.setViewport(window.innerWidth, window.innerHeight)
 
 // ------------------------------------------------------------------
 // Initial stack: Root → MenuLayer  (DeletionLayer added on first deletion)

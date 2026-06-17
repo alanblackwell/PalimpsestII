@@ -2,6 +2,7 @@ import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ValueType }     from '../core/types.js'
 import type { Ctx2D, Point } from '../core/types.js'
+import { contentLeft }   from '../interaction/layout.js'
 import { EllipseLayer }  from './EllipseLayer.js'
 import { RectLayer }     from './RectLayer.js'
 import { TextLayer }     from './TextLayer.js'
@@ -17,7 +18,6 @@ import { AnimPathLayer } from './AnimPathLayer.js'
 // TutorialLayer — guided tour with text + layer-creation buttons
 // ------------------------------------------------------------
 
-const PANEL_X  = 300
 const PANEL_Y  = 50
 const PANEL_W  = 460
 const PAD      = 20
@@ -271,6 +271,11 @@ export class TutorialLayer extends Layer {
     const page = PAGES[this._page]!
     ctx.save()
 
+    // On small viewports the canvas is wider than the viewport so the user can
+    // scroll to see everything. Anchor the panel to the content-area left edge
+    // (which uses the viewport width) so it starts in the visible area.
+    const panX = contentLeft(Math.min(Node.canvasWidth, Node.viewportWidth))
+
     // Measure text to determine panel height
     ctx.font = FONT
     const textW = PANEL_W - PAD * 2
@@ -291,13 +296,13 @@ export class TutorialLayer extends Layer {
     // Panel background
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, PANEL_Y, PANEL_W, panH, 10)
+    ctx.roundRect(panX, PANEL_Y, PANEL_W, panH, 10)
     ctx.fill()
 
     // Accent stripe
     ctx.fillStyle = '#a0a4b8'
     ctx.beginPath()
-    ctx.roundRect(PANEL_X, PANEL_Y, 4, panH, [4, 0, 0, 4])
+    ctx.roundRect(panX, PANEL_Y, 4, panH, [4, 0, 0, 4])
     ctx.fill()
 
     let cy = PANEL_Y + PAD
@@ -307,7 +312,7 @@ export class TutorialLayer extends Layer {
     ctx.fillStyle    = 'rgba(255,255,255,0.90)'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'top'
-    ctx.fillText(page.title, PANEL_X + PAD, cy)
+    ctx.fillText(page.title, panX + PAD, cy)
     cy += titleH + PAD / 2
 
     // Body paragraphs
@@ -315,7 +320,7 @@ export class TutorialLayer extends Layer {
     ctx.fillStyle = 'rgba(255,255,255,0.75)'
     for (let pi = 0; pi < wrappedParas.length; pi++) {
       for (const line of wrappedParas[pi]!) {
-        ctx.fillText(line, PANEL_X + PAD, cy)
+        ctx.fillText(line, panX + PAD, cy)
         cy += LINE_H
       }
       if (pi < wrappedParas.length - 1) cy += LINE_H * 0.5
@@ -329,7 +334,7 @@ export class TutorialLayer extends Layer {
         const btn = page.buttons[i]!
         const col = i % BTN_COLS
         const row = Math.floor(i / BTN_COLS)
-        const bx  = PANEL_X + PAD + col * (BTN_W + BTN_GAP)
+        const bx  = panX + PAD + col * (BTN_W + BTN_GAP)
         const by  = cy + row * (BTN_H + BTN_GAP)
         this._btnBounds.push({ x: bx, y: by, width: BTN_W, height: BTN_H })
 
@@ -361,13 +366,13 @@ export class TutorialLayer extends Layer {
     this._nextBounds = null
 
     if (this._page > 0) {
-      const pb: BBox = { x: PANEL_X + PAD, y: navY, width: NAV_SZ, height: NAV_SZ }
+      const pb: BBox = { x: panX + PAD, y: navY, width: NAV_SZ, height: NAV_SZ }
       this._prevBounds = pb
       this._drawNavBtn(ctx, pb, '◀')
     }
 
     if (this._page < PAGES.length - 1) {
-      const nb: BBox = { x: PANEL_X + PANEL_W - PAD - NAV_SZ, y: navY, width: NAV_SZ, height: NAV_SZ }
+      const nb: BBox = { x: panX + PANEL_W - PAD - NAV_SZ, y: navY, width: NAV_SZ, height: NAV_SZ }
       this._nextBounds = nb
       this._drawNavBtn(ctx, nb, '▶')
     }
@@ -378,7 +383,7 @@ export class TutorialLayer extends Layer {
       ctx.fillStyle    = 'rgba(255,255,255,0.45)'
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'middle'
-      ctx.fillText(`${this._page + 1} / ${PAGES.length}`, PANEL_X + PANEL_W / 2, navY + NAV_SZ / 2)
+      ctx.fillText(`${this._page + 1} / ${PAGES.length}`, panX + PANEL_W / 2, navY + NAV_SZ / 2)
     }
 
     ctx.restore()

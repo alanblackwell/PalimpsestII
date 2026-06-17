@@ -15,7 +15,7 @@ import { graph } from '../dataflow/Graph.js'
 
 const ACCENT  = '#7ecf7e'   // Image type colour
 const STRIPE  = 4
-const BTN     = 22
+const BTN     = 20   // 20 to fit 6 buttons with adequate status text room
 const BTN_GAP = 4
 const BTN_M   = 6
 
@@ -109,6 +109,7 @@ export class CaptureLayer extends Layer implements ImageSource {
   private _modeBtnB:    BBox | null = null
   private _shutterBtnB: BBox | null = null
   private _saveBtnB:    BBox | null = null
+  private _shareBtnB:   BBox | null = null
   private _playBtnB:    BBox | null = null
   private _scrubB:      BBox | null = null
 
@@ -582,33 +583,42 @@ export class CaptureLayer extends Layer implements ImageSource {
     return `Palimpsest_${ts}.${ext}`
   }
 
-  private _save(): void {
+  // Share button: invoke the OS share sheet. Does not fall back to download —
+  // the save (💾) button handles file downloads separately.
+  private _share(): void {
     if (this._movieMode) {
       if (this._recordedBlob === null) return
       const ext = this._recordedMime.includes('mp4') ? 'mp4' : 'webm'
-      void this._shareOrDownload(this._recordedBlob, this._makeFilename(ext))
+      void this._shareBlob(this._recordedBlob, this._makeFilename(ext))
     } else {
       if (this._capturedImage === null) return
       void this._capturedImage.convertToBlob({ type: 'image/png' })
-        .then(blob => this._shareOrDownload(blob, this._makeFilename('png')))
+        .then(blob => this._shareBlob(blob, this._makeFilename('png')))
     }
   }
 
-  // Try the Web Share API first (routes to OS share sheet / photo gallery on
-  // Android and iOS). Fall back to <a download> when unavailable or refused.
-  private async _shareOrDownload(blob: Blob, filename: string): Promise<void> {
-    if (typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
-      const file = new File([blob], filename, { type: blob.type })
-      if (navigator.canShare({ files: [file] })) {
-        try {
-          await navigator.share({ files: [file], title: filename })
-          return
-        } catch {
-          // User cancelled or share failed — fall through to download.
-        }
-      }
+  private async _shareBlob(blob: Blob, filename: string): Promise<void> {
+    if (typeof navigator.share !== 'function' || typeof navigator.canShare !== 'function') return
+    const file = new File([blob], filename, { type: blob.type })
+    if (!navigator.canShare({ files: [file] })) return
+    try {
+      await navigator.share({ files: [file], title: filename })
+    } catch {
+      // User cancelled or share failed — nothing to do.
     }
-    this._downloadBlob(blob, filename)
+  }
+
+  // Save button: download the captured image/movie directly as a file.
+  private _download(): void {
+    if (this._movieMode) {
+      if (this._recordedBlob === null) return
+      const ext = this._recordedMime.includes('mp4') ? 'mp4' : 'webm'
+      this._downloadBlob(this._recordedBlob, this._makeFilename(ext))
+    } else {
+      if (this._capturedImage === null) return
+      void this._capturedImage.convertToBlob({ type: 'image/png' })
+        .then(blob => this._downloadBlob(blob, this._makeFilename('png')))
+    }
   }
 
   private _downloadBlob(blob: Blob, filename: string): void {
@@ -722,11 +732,13 @@ export class CaptureLayer extends Layer implements ImageSource {
     ctx.roundRect(x, y, STRIPE, height, [4, 0, 0, 4])
     ctx.fill()
 
-    const saveB:    BBox = { x: x + width - BTN_M - BTN, y: y + (height - BTN) / 2, width: BTN, height: BTN }
-    const shutterB: BBox = { x: saveB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
-    const modeB:    BBox = { x: shutterB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
-    const editB:    BBox = { x: modeB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
-    const stackB:   BBox = { x: editB.x - BTN_GAP - BTN, y: saveB.y, width: BTN, height: BTN }
+    const shareB:   BBox = { x: x + width - BTN_M - BTN,   y: y + (height - BTN) / 2, width: BTN, height: BTN }
+    const saveB:    BBox = { x: shareB.x  - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
+    const shutterB: BBox = { x: saveB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
+    const modeB:    BBox = { x: shutterB.x - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
+    const editB:    BBox = { x: modeB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
+    const stackB:   BBox = { x: editB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
+    this._shareBtnB   = shareB
     this._saveBtnB    = saveB
     this._shutterBtnB = shutterB
     this._modeBtnB    = modeB
@@ -780,9 +792,11 @@ export class CaptureLayer extends Layer implements ImageSource {
       ctx.restore()
     }
 
-    // Save — dimmed until there's something to save.
     const hasResult = this._movieMode ? this._recordedBlob !== null : this._capturedImage !== null
+    // Save (download) — dimmed until there's something to save.
     this._drawBtn(ctx, saveB, '💾', hasResult ? ACCENT : 'rgba(255,255,255,0.20)')
+    // Share — dimmed until there's something to share.
+    this._drawShareIcon(ctx, shareB, hasResult)
 
     ctx.restore()
   }
@@ -999,6 +1013,51 @@ export class CaptureLayer extends Layer implements ImageSource {
     }
   }
 
+  // Standard share icon — upward arrow rising from an open-top tray.
+  private _drawShareIcon(ctx: Ctx2D, b: BBox, active: boolean): void {
+    this._drawBtnBg(ctx, b)
+    const colour = active ? ACCENT : 'rgba(255,255,255,0.20)'
+    ctx.save()
+    ctx.strokeStyle = colour
+    ctx.fillStyle   = colour
+    ctx.lineWidth   = 1.5
+    ctx.lineCap     = 'round'
+    ctx.lineJoin    = 'round'
+
+    const cx    = b.x + b.width  / 2
+    const tipY  = b.y + b.height * 0.16
+    const headH = b.height * 0.22
+    const headW = b.width  * 0.27
+
+    // Filled arrowhead
+    ctx.beginPath()
+    ctx.moveTo(cx,         tipY)
+    ctx.lineTo(cx - headW, tipY + headH)
+    ctx.lineTo(cx + headW, tipY + headH)
+    ctx.closePath()
+    ctx.fill()
+
+    // Arrow shaft
+    const shaftY = b.y + b.height * 0.54
+    ctx.beginPath()
+    ctx.moveTo(cx, tipY + headH - 1)
+    ctx.lineTo(cx, shaftY)
+    ctx.stroke()
+
+    // Open-top tray (left side, bottom, right side)
+    const tw = b.width  * 0.60
+    const th = b.height * 0.26
+    const tx = cx - tw / 2
+    ctx.beginPath()
+    ctx.moveTo(tx,      shaftY)
+    ctx.lineTo(tx,      shaftY + th)
+    ctx.lineTo(tx + tw, shaftY + th)
+    ctx.lineTo(tx + tw, shaftY)
+    ctx.stroke()
+
+    ctx.restore()
+  }
+
   private _drawBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
     this._drawBtnBg(ctx, b)
     ctx.font         = '13px monospace'
@@ -1016,6 +1075,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     if (this._modeBtnB    !== null && boundingBoxContains(this._modeBtnB, point))    return this
     if (this._shutterBtnB !== null && boundingBoxContains(this._shutterBtnB, point)) return this
     if (this._saveBtnB    !== null && boundingBoxContains(this._saveBtnB, point))    return this
+    if (this._shareBtnB   !== null && boundingBoxContains(this._shareBtnB, point))   return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB, point))    return this
     if (this._scrubB      !== null && boundingBoxContains(this._scrubB, point))      return this
     return null
@@ -1039,7 +1099,11 @@ export class CaptureLayer extends Layer implements ImageSource {
       return true
     }
     if (this._saveBtnB !== null && boundingBoxContains(this._saveBtnB, point)) {
-      this._save()
+      this._download()
+      return true
+    }
+    if (this._shareBtnB !== null && boundingBoxContains(this._shareBtnB, point)) {
+      this._share()
       return true
     }
     if (this._playBtnB !== null && boundingBoxContains(this._playBtnB, point)) {

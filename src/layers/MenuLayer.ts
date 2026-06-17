@@ -283,7 +283,12 @@ export class MenuLayer extends Layer {
   // button width until everything fits, minimum 1 column.
   private _layout(): { cols: number; btnW: number; panX: number; panW: number } {
     const canvasW = Node.canvasWidth
-    const left    = contentLeft(canvasW)
+    const vw      = Node.viewportWidth
+    // Use the smaller of canvas and viewport so the panel left edge matches
+    // the widget boundary on small viewports where canvas > viewport.
+    const left    = contentLeft(Math.min(canvasW, vw))
+    // Available width is based on the full canvas so all columns always fit
+    // even when the canvas is wider than the viewport; the user can scroll.
     const availW  = Math.max(BTN_W_MIN + PAD * 2, canvasW - left - RIGHT_MARGIN)
 
     let cols = COLUMNS.length
@@ -297,7 +302,11 @@ export class MenuLayer extends Layer {
 
     const gridW = cols * btnW + (cols - 1) * BTN_GAP
     const panW  = gridW + PAD * 2
-    const panX  = left + Math.max(0, (availW - panW) / 2)
+    // When canvas is wider than viewport, anchor panel to the left edge so
+    // column 1 is immediately visible; otherwise centre as usual.
+    const panX  = canvasW > vw
+      ? left + PAD
+      : left + Math.max(0, (availW - panW) / 2)
 
     return { cols, btnW, panX, panW }
   }

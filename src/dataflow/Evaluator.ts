@@ -286,7 +286,12 @@ export class Evaluator {
     } else {
       // Mobile / legacy: pills move with the content canvas (pan/zoom magnifies
       // them, aiding accessibility on small screens).
-      const ww = this._layerStackWidget?.isVisible ? contentLeft(width) : 0
+      // When the content canvas is wider than the viewport (small-screen
+      // minimum-size expansion), base the clip on the viewport width so the
+      // widget/content gap matches the actual widget size rather than the
+      // oversized canvas width.
+      const clipW = Math.min(width, Node.viewportWidth)
+      const ww = this._layerStackWidget?.isVisible ? contentLeft(clipW) : 0
       if (ww > 0) {
         this.ctx.save()
         this.ctx.beginPath()
