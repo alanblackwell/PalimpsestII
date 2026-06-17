@@ -83,7 +83,7 @@ export class ImageLayer extends Layer implements ImageSource {
   private _drag:           DragState | null = null
 
   // Resolved values (updated in recompute)
-  private _position: Point  = { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+  private _position: Point  = { x: Node.viewportWidth / 2, y: Node.viewportHeight / 2 }
   private _opacity:  number = 1.0
   private _scale:    number = 1.0
 
@@ -173,7 +173,7 @@ export class ImageLayer extends Layer implements ImageSource {
   protected recompute(): void {
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
-      : this._manualPosition ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+      : this._manualPosition ?? { x: Node.viewportWidth / 2, y: Node.viewportHeight / 2 }
 
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount

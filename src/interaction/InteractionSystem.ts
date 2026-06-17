@@ -361,7 +361,7 @@ export class InteractionSystem {
     const ctx = offscreen.getContext('2d')!
     let layer: Layer | null = this._stackTop
     while (layer !== null) {
-      if (!layer.isInfrastructure) {
+      if (!layer.isInfrastructure && layer.layerBelow !== null) {
         ctx.clearRect(0, 0, w, h)
         try { layer.renderSelf(ctx) } catch { /* skip */ }
         const alpha = ctx.getImageData(px, py, 1, 1).data[3] ?? 0
