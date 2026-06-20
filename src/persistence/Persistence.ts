@@ -23,7 +23,7 @@ import { DirectionLayer }    from '../layers/DirectionLayer.js'
 import { MathLayer }         from '../layers/MathLayer.js'
 import { TextLayer }         from '../layers/TextLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
-import { EdgePathLayer }     from '../layers/EdgePathLayer.js'
+import { TraceLayer }        from '../layers/TraceLayer.js'
 import { MaskLayer }         from '../layers/MaskLayer.js'
 import { CompositeLayer }    from '../layers/CompositeLayer.js'
 import { FilterLayer }       from '../layers/FilterLayer.js'
@@ -133,7 +133,8 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   MathLayer:        () => new MathLayer(),
   TextLayer:        () => new TextLayer(),
   ImageLayer:       () => new ImageLayer(),
-  EdgePathLayer:    () => new EdgePathLayer(),
+  TraceLayer:       () => new TraceLayer(),
+  EdgePathLayer:    () => new TraceLayer(),   // backward-compat alias for saved sessions
   MaskLayer:        () => new MaskLayer(),
   CompositeLayer:   () => new CompositeLayer(Node.canvasWidth, Node.canvasHeight),
   FilterLayer:      () => new FilterLayer(),

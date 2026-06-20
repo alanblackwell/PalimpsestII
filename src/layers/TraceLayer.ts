@@ -14,7 +14,7 @@ import { SliderRegion }   from '../regions/SliderRegion.js'
 import { detectContour }  from './contourTrace.js'
 
 // ------------------------------------------------------------
-// EdgePathLayer — closed path traced from the boundary of a mask
+// TraceLayer — closed path traced from the boundary of a mask
 // (or, when no mask is supplied, the largest connected region in
 // a thresholded grayscale image).
 // ------------------------------------------------------------
@@ -70,9 +70,9 @@ function sampleSpline(t: number, pts: Point[]): Point {
   return { x: catmullRom(u,p0.x,p1.x,p2.x,p3.x), y: catmullRom(u,p0.y,p1.y,p2.y,p3.y) }
 }
 
-// ── EdgePathLayer ────────────────────────────────────────────────
+// ── TraceLayer ────────────────────────────────────────────────────
 
-export class EdgePathLayer extends Layer implements PointSource {
+export class TraceLayer extends Layer implements PointSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
   readonly imageSlot: ParameterSlot
@@ -106,8 +106,15 @@ export class EdgePathLayer extends Layer implements PointSource {
     const initV = (DEF_POINTS - MIN_POINTS) / (MAX_POINTS - MIN_POINTS)
     this._numPtsSlider = new SliderRegion(this, initV)
     this.slots.push(this.imageSlot, this.maskSlot, this.phaseSlot)
-    this.debugName = 'EdgePath'
+    this.debugName = 'Trace'
     graph.register(this)
+  }
+
+  override autoBindRules(): ReturnType<Layer['autoBindRules']> {
+    return [
+      { slot: this.imageSlot, accepts: (l: Layer) => l.types.has(ValueType.Image) },
+      { slot: this.maskSlot,  accepts: (l: Layer) => l.types.has(ValueType.Mask)  },
+    ]
   }
 
   getPoint(): Point {

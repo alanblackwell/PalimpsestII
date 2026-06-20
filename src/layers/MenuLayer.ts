@@ -19,7 +19,7 @@ import { DirectionLayer }  from './DirectionLayer.js'
 import { MathLayer }       from './MathLayer.js'
 import { TextLayer }       from './TextLayer.js'
 import { ImageLayer }      from './ImageLayer.js'
-import { EdgePathLayer }   from './EdgePathLayer.js'
+import { TraceLayer }      from './TraceLayer.js'
 import { MaskLayer }       from './MaskLayer.js'
 import { CompositeLayer }  from './CompositeLayer.js'
 import { FilterLayer }     from './FilterLayer.js'
@@ -167,7 +167,7 @@ const COLUMNS: ColDef[] = [
       { label: 'Sequencer', colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
       // Not yet assigned to a column — move to the appropriate place:
       { label: 'Math',      colour: '#4a8fe8', factory: ()          => new MathLayer(2) },
-      { label: 'EdgePath',  colour: '#cf9f7e', factory: ()          => new EdgePathLayer() },
+      { label: 'Trace',     colour: '#cf9f7e', factory: ()          => new TraceLayer() },
       { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer() },
     ],
     bottom: [
