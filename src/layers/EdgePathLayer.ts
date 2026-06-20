@@ -9,8 +9,9 @@ import {
   type Point, type PointSource,
   type Ctx2D,
 } from '../core/types.js'
-import { graph }        from '../dataflow/Graph.js'
-import { SliderRegion } from '../regions/SliderRegion.js'
+import { graph }          from '../dataflow/Graph.js'
+import { SliderRegion }   from '../regions/SliderRegion.js'
+import { detectContour }  from './contourTrace.js'
 
 // ------------------------------------------------------------
 // EdgePathLayer — closed path traced from the boundary of a mask
@@ -34,20 +35,18 @@ import { SliderRegion } from '../regions/SliderRegion.js'
 //   maskSlot  (Mask)   — optional; preferred shape source
 //   phaseSlot (Amount) — position along perimeter [0, 1]
 
-const ACCENT      = '#cf9f7e'
-const MIN_POINTS  = 4
-const MAX_POINTS  = 32
-const DEF_POINTS  = 10
-const PROC_SIZE   = 400
-const FINDER_SIZE = 128
-const RENDER_PTS  = 200
-const LABEL_W     = 46
-const BTN_W       = 54
-const BTN_H       = 22
-const BTN_M       = 6
-const CP_R        = 6    // control-point handle radius
-const HIT_R       = 14   // pointer hit radius
-const ROT_OFF     = 24   // rotate handle offset beyond max radius
+const ACCENT     = '#cf9f7e'
+const MIN_POINTS = 4
+const MAX_POINTS = 32
+const DEF_POINTS = 10
+const RENDER_PTS = 200
+const LABEL_W    = 46
+const BTN_W      = 54
+const BTN_H      = 22
+const BTN_M      = 6
+const CP_R       = 6    // control-point handle radius
+const HIT_R      = 14   // pointer hit radius
+const ROT_OFF    = 24   // rotate handle offset beyond max radius
 
 // ── Geometry helpers ────────────────────────────────────────────
 
@@ -70,8 +69,6 @@ function sampleSpline(t: number, pts: Point[]): Point {
   const p0=pts[(i-1+n)%n], p1=pts[i], p2=pts[(i+1)%n], p3=pts[(i+2)%n]
   return { x: catmullRom(u,p0.x,p1.x,p2.x,p3.x), y: catmullRom(u,p0.y,p1.y,p2.y,p3.y) }
 }
-
-type Px = { x: number; y: number }
 
 // ── EdgePathLayer ────────────────────────────────────────────────
 
@@ -182,229 +179,8 @@ export class EdgePathLayer extends Layer implements PointSource {
     maskSrc:  MaskValue,
     numPts:   number,
   ): void {
-
-    // ── 1. Determine crop region from mask bbox ───────────────────
-    let cropX = 0, cropY = 0, cropW = imageSrc.width, cropH = imageSrc.height
-    if (maskSrc !== null) {
-      const bb = this._maskBbox(maskSrc)
-      if (bb !== null) {
-        const pad = Math.max(bb.w, bb.h) * 0.05
-        cropX = Math.max(0,              Math.floor(bb.x - pad))
-        cropY = Math.max(0,              Math.floor(bb.y - pad))
-        cropW = Math.min(imageSrc.width,  Math.ceil(bb.x + bb.w + pad)) - cropX
-        cropH = Math.min(imageSrc.height, Math.ceil(bb.y + bb.h + pad)) - cropY
-      }
-    }
-
-    const aspect = cropW / cropH
-    const pw = aspect >= 1 ? PROC_SIZE : Math.round(PROC_SIZE * aspect)
-    const ph = aspect >= 1 ? Math.round(PROC_SIZE / aspect) : PROC_SIZE
-
-    let binary: Uint8Array
-
-    if (maskSrc !== null) {
-      // ── 2a. Mask path: downsample alpha channel → binary ──────────
-      const mOsc = new OffscreenCanvas(pw, ph)
-      const mCtx = mOsc.getContext('2d')!
-      mCtx.drawImage(maskSrc, cropX, cropY, cropW, cropH, 0, 0, pw, ph)
-      const mPx = mCtx.getImageData(0, 0, pw, ph).data
-      binary = new Uint8Array(pw * ph)
-      for (let i = 0; i < pw * ph; i++) binary[i] = mPx[i * 4 + 3] > 0 ? 1 : 0
-    } else {
-      // ── 2b. No-mask path: grayscale → blur → Otsu → largest blob ─
-      const iOsc = new OffscreenCanvas(pw, ph)
-      const iCtx = iOsc.getContext('2d')!
-      iCtx.drawImage(imageSrc, cropX, cropY, cropW, cropH, 0, 0, pw, ph)
-      const iPx = iCtx.getImageData(0, 0, pw, ph).data
-      const gray = new Float32Array(pw * ph)
-      for (let i = 0; i < pw * ph; i++)
-        gray[i] = (0.299*iPx[i*4] + 0.587*iPx[i*4+1] + 0.114*iPx[i*4+2]) / 255
-      const blurred = this._gaussBlur(gray, pw, ph)
-      const thresh  = this._otsuThreshold(blurred, pw * ph)
-      const raw = new Uint8Array(pw * ph)
-      for (let i = 0; i < pw * ph; i++) raw[i] = blurred[i] > thresh ? 1 : 0
-      binary = this._largestComponent(raw, pw, ph)
-    }
-
-    // ── 3. Moore's boundary trace → resample → canvas coords ────────
-    const chain = this._traceBoundary(binary, pw, ph)
-    if (chain.length < 3) { this._controlPoints = []; return }
-
-    const resampled = this._uniformResample(chain, numPts)
-    const sx = cropW / pw, sy = cropH / ph
-    this._controlPoints = this._smoothPoints(
-      resampled.map(p => ({ x: cropX + p.x * sx, y: cropY + p.y * sy })), 1)
-  }
-
-  // ── Mask bounding box (fast downscale scan) ──────────────────────
-
-  private _maskBbox(mask: OffscreenCanvas): { x:number; y:number; w:number; h:number } | null {
-    const F = FINDER_SIZE
-    const fOsc = new OffscreenCanvas(F, F)
-    const fCtx = fOsc.getContext('2d')!
-    fCtx.drawImage(mask, 0, 0, F, F)
-    const d = fCtx.getImageData(0, 0, F, F).data
-    let x1=F, y1=F, x2=-1, y2=-1
-    for (let y=0; y<F; y++) for (let x=0; x<F; x++)
-      if (d[(y*F+x)*4+3] > 10) {
-        if (x<x1)x1=x; if (y<y1)y1=y; if (x>x2)x2=x; if (y>y2)y2=y
-      }
-    if (x2 < x1) return null
-    return {
-      x: Math.floor(x1/F * mask.width),  y: Math.floor(y1/F * mask.height),
-      w: Math.ceil((x2-x1+1)/F * mask.width), h: Math.ceil((y2-y1+1)/F * mask.height),
-    }
-  }
-
-  // ── Moore's boundary tracing ────────────────────────────────────
-  // Traces the exterior perimeter of the foreground region in
-  // `binary` (1=foreground, 0=background) in clockwise order,
-  // returning an ordered chain of boundary pixel coordinates.
-
-  private _traceBoundary(binary: Uint8Array, W: number, H: number): Px[] {
-    // Find topmost, leftmost foreground pixel (guaranteed boundary).
-    let sx = -1, sy = -1
-    outer: for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        if (binary[y * W + x]) { sx = x; sy = y; break outer }
-      }
-    }
-    if (sx < 0) return []
-
-    // 8-connected clockwise direction table (E, SE, S, SW, W, NW, N, NE).
-    const DX = [ 1,  1,  0, -1, -1, -1,  0,  1]
-    const DY = [ 0,  1,  1,  1,  0, -1, -1, -1]
-
-    const path: Px[] = []
-    let bx = sx, by = sy
-    // Entry backtrack direction: W (4), because s is the leftmost pixel
-    // in its row so the pixel to the left is background (or out of bounds).
-    let iterDir = 4
-
-    const maxIter = W * H * 2
-    for (let iter = 0; iter < maxIter; iter++) {
-      path.push({ x: bx, y: by })
-
-      let foundDir = -1, lastBgDir = iterDir
-      for (let k = 0; k < 8; k++) {
-        const d = (iterDir + k) % 8
-        const nx = bx + DX[d], ny = by + DY[d]
-        const fg = nx >= 0 && ny >= 0 && nx < W && ny < H && binary[ny * W + nx] !== 0
-        if (fg) { foundDir = d; break }
-        lastBgDir = d
-      }
-
-      if (foundDir < 0) break // isolated pixel
-
-      const nx = bx + DX[foundDir], ny = by + DY[foundDir]
-      if (nx === sx && ny === sy && path.length > 1) break // closed loop
-
-      // New entry direction for the next pixel.
-      // lastBgDir is always one clockwise step before foundDir, so
-      // (DX[lastBgDir]-DX[foundDir], DY[lastBgDir]-DY[foundDir]) is
-      // always a valid 8-direction.
-      const ex = DX[lastBgDir] - DX[foundDir]
-      const ey = DY[lastBgDir] - DY[foundDir]
-      let newDir = 0
-      for (let i = 0; i < 8; i++) {
-        if (DX[i] === ex && DY[i] === ey) { newDir = i; break }
-      }
-
-      bx = nx; by = ny; iterDir = newDir
-    }
-
-    return path
-  }
-
-  // ── Otsu threshold (returns value in [0,1]) ───────────────────────
-
-  private _otsuThreshold(gray: Float32Array, N: number): number {
-    const hist = new Float32Array(256)
-    for (let i = 0; i < N; i++) hist[Math.min(255, gray[i] * 255 | 0)]++
-    let sumAll = 0
-    for (let i = 0; i < 256; i++) sumAll += i * hist[i]
-    let sumB = 0, wB = 0, maxVar = 0, thresh = 128
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t]; if (wB === 0) continue
-      const wF = N - wB; if (wF === 0) break
-      sumB += t * hist[t]
-      const mB = sumB / wB, mF = (sumAll - sumB) / wF
-      const v = wB * wF * (mB - mF) * (mB - mF)
-      if (v > maxVar) { maxVar = v; thresh = t }
-    }
-    return thresh / 255
-  }
-
-  // ── Largest 4-connected foreground component ─────────────────────
-
-  private _largestComponent(binary: Uint8Array, W: number, H: number): Uint8Array {
-    const N = W * H
-    const label = new Int32Array(N)
-    let nextLabel = 1, bestLabel = 0, bestSize = 0
-    const sizes: number[] = [0]
-    for (let i = 0; i < N; i++) {
-      if (!binary[i] || label[i]) continue
-      const lbl = nextLabel++; sizes.push(0)
-      const q = [i]; label[i] = lbl; let qi = 0
-      while (qi < q.length) {
-        const idx = q[qi++]; sizes[lbl]++
-        const x = idx % W, y = (idx / W) | 0
-        for (const n of [y > 0 ? idx-W : -1, y < H-1 ? idx+W : -1,
-                          x > 0 ? idx-1 : -1, x < W-1 ? idx+1 : -1]) {
-          if (n >= 0 && binary[n] && !label[n]) { label[n] = lbl; q.push(n) }
-        }
-      }
-      if ((sizes[lbl] ?? 0) > bestSize) { bestSize = sizes[lbl] ?? 0; bestLabel = lbl }
-    }
-    const out = new Uint8Array(N)
-    if (bestLabel > 0) for (let i = 0; i < N; i++) out[i] = label[i] === bestLabel ? 1 : 0
-    return out
-  }
-
-  // ── Gaussian blur (5-tap separable) ─────────────────────────────
-
-  private _gaussBlur(src: Float32Array, W: number, H: number): Float32Array {
-    const k=[0.0545,0.2442,0.4026,0.2442,0.0545]
-    const tmp=new Float32Array(W*H), out=new Float32Array(W*H)
-    for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-      let s=0; for (let d=-2;d<=2;d++) s+=src[y*W+Math.max(0,Math.min(W-1,x+d))]*k[d+2]; tmp[y*W+x]=s }
-    for (let y=0;y<H;y++) for (let x=0;x<W;x++) {
-      let s=0; for (let d=-2;d<=2;d++) s+=tmp[Math.max(0,Math.min(H-1,y+d))*W+x]*k[d+2]; out[y*W+x]=s }
-    return out
-  }
-
-  // ── Uniform arc-length resampler ────────────────────────────────
-
-  private _uniformResample(pts: Px[], n: number): Px[] {
-    if (pts.length<2) return pts.length===0?[]:Array(n).fill(pts[0])
-    const len=[0]
-    for (let i=1;i<pts.length;i++) {
-      const dx=pts[i].x-pts[i-1].x, dy=pts[i].y-pts[i-1].y
-      len.push(len[i-1]+Math.sqrt(dx*dx+dy*dy))
-    }
-    const total=len[len.length-1]; if (total===0) return pts.slice(0,n)
-    const out: Px[]=[]
-    let j=0
-    for (let i=0;i<n;i++) {
-      const tgt=(i/n)*total
-      while (j<len.length-2&&len[j+1]<tgt) j++
-      const sp=len[j+1]-len[j], t=sp>0?(tgt-len[j])/sp:0
-      out.push({x:pts[j].x+t*(pts[j+1].x-pts[j].x),y:pts[j].y+t*(pts[j+1].y-pts[j].y)})
-    }
-    return out
-  }
-
-  private _smoothPoints(pts: Point[], passes: number): Point[] {
-    let cur=pts.slice()
-    for (let p=0;p<passes;p++) {
-      const n=cur.length, next: Point[]=[]
-      for (let i=0;i<n;i++) {
-        const a=cur[(i-1+n)%n],b=cur[i],c=cur[(i+1)%n]
-        next.push({x:(a.x+2*b.x+c.x)/4,y:(a.y+2*b.y+c.y)/4})
-      }
-      cur=next
-    }
-    return cur
+    const pts = detectContour(imageSrc, maskSrc as OffscreenCanvas | null, numPts)
+    this._controlPoints = pts ?? []
   }
 
   // ── Rendering ────────────────────────────────────────────────────

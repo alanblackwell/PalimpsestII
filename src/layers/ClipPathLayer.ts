@@ -8,6 +8,9 @@ import {
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
 import type { MaskLayer } from './MaskLayer.js'
+import { detectContour } from './contourTrace.js'
+
+const INIT_PTS = 10
 
 // ------------------------------------------------------------
 // ClipPathLayer — a PathLayer that renders a clipped image
@@ -27,8 +30,9 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   readonly imageSlot: ParameterSlot
   readonly maskSlot:  ParameterSlot
 
-  private _offscreen: OffscreenCanvas
-  private _maskTracker: MaskLayer | null = null
+  private _offscreen:       OffscreenCanvas
+  private _maskTracker:     MaskLayer | null = null
+  private _pathInitialized: boolean = false
 
   constructor() {
     super(undefined, Node.canvasWidth / 2, Node.canvasHeight / 2)
@@ -65,6 +69,16 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override recompute(): void {
+    // One-shot: trace the image contour to replace the default random points.
+    if (!this._pathInitialized && this.imageSlot.isActive) {
+      const img = (this.imageSlot.source as ImageSource).getImage()
+      if (img !== null) {
+        const pts = detectContour(img as OffscreenCanvas, null, INIT_PTS)
+        if (pts !== null) this._points = pts
+        this._pathInitialized = true
+      }
+    }
+
     super.recompute()   // geometry, this._maskCanvas, rotationSlot, etc.
 
     const w = Node.canvasWidth

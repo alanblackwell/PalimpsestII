@@ -93,7 +93,7 @@ const MIN_POINTS = 3   // smallest closed spline we allow (a triangle)
 export class PathLayer extends ShapeLayer {
   // types inherited from ShapeLayer: Set([ValueType.Point])
 
-  private _points:          Point[]
+  protected _points:        Point[]
   private _dragIndex:       number = -1
   private _specialDrag:     'center' | 'size' | 'rotate' | null = null
   private _dragStartPtr:    Point = { x: 0, y: 0 }
