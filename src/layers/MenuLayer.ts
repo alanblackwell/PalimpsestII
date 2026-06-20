@@ -37,6 +37,7 @@ import { CaptureLayer }    from './CaptureLayer.js'
 import { TutorialLayer }   from './TutorialLayer.js'
 import { StrokeLayer }     from './StrokeLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
+import { LineLayer }       from './LineLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -114,6 +115,7 @@ const COLUMNS: ColDef[] = [
       { label: 'Rect',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
       { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer() },
       { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer() },
+      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer() },
       { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
     ],
     bottom: [

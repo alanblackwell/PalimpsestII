@@ -35,6 +35,7 @@ import { SequencerLayer }    from '../layers/SequencerLayer.js'
 import { ClipLayer }         from '../layers/ClipLayer.js'
 import { TileLayer }         from '../layers/TileLayer.js'
 import { StrokeLayer }       from '../layers/StrokeLayer.js'
+import { LineLayer }         from '../layers/LineLayer.js'
 import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
 import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
@@ -146,6 +147,7 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   ClipLayer:        () => new ClipLayer(),
   TileLayer:        () => new TileLayer(),
   StrokeLayer:      () => new StrokeLayer(),
+  LineLayer:        () => new LineLayer(),
   ClipRectLayer:    () => new ClipRectLayer(),
   ClipEllipseLayer: () => new ClipEllipseLayer(),
   ClipPathLayer:    () => new ClipPathLayer(),
