@@ -110,6 +110,12 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // re-enabled: snaps the manual angle/magnitude to the given values and
   // suspends any active slots that were overriding those values, so the snap
   // takes effect rather than being immediately overridden by a live source.
+  protected override receiveValue(type: ValueType | null, val: Point | number | Direction): void {
+    if (type !== ValueType.Direction || typeof val !== 'object' || !('angle' in val)) return
+    const d = val as Direction
+    this.setAngleMagnitude(d.angle, d.magnitude)
+  }
+
   setAngleMagnitude(angle: number, magnitude: number): void {
     if (this._handleSlot.state    === SlotState.Bound) BindingLayer.findForSlot(this._handleSlot)?.toggle()
     if (this._magnitudeSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._magnitudeSlot)?.toggle()

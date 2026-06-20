@@ -9,9 +9,8 @@ import {
   type Point,  type PointSource,
   type Ctx2D,
 } from '../core/types.js'
-import { graph }           from '../dataflow/Graph.js'
-import { BindingLayer }    from './BindingLayer.js'
-import { DirectionLayer }  from './DirectionLayer.js'
+import { graph }         from '../dataflow/Graph.js'
+import { BindingLayer }  from './BindingLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -79,12 +78,6 @@ export class LineLayer extends Layer {
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
   private _canvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
-  // Tracks whether directionSlot was active on the previous recompute, so we
-  // can detect the inactive→active transition and sync the DirectionLayer.
-  // Initialised true so that deserialised sessions with an already-active
-  // directionSlot don't trigger a spurious sync on first recompute.
-  private _prevDirectionActive = true
-
   // Active drag
   private _drag:             HandleDrag | null  = null
   private _dragStartMouse:   Point | null       = null
@@ -117,9 +110,8 @@ export class LineLayer extends Layer {
       x: (m + Math.random() * (1 - 2 * m)) * W,
       y: (m + Math.random() * (1 - 2 * m)) * H,
     }
-    this._renderedStart      = { ...this._start }
-    this._renderedEnd        = { ...this._end }
-    this._prevDirectionActive = false  // new layer: sync fires on first direction bind
+    this._renderedStart = { ...this._start }
+    this._renderedEnd   = { ...this._end }
 
     this.startSlot     = new ParameterSlot(ValueType.Point,     this, 'start')
     this.endSlot       = new ParameterSlot(ValueType.Point,     this, 'end')
@@ -152,9 +144,6 @@ export class LineLayer extends Layer {
     if (state.colour && typeof state.colour === 'object') this._colour = state.colour as Colour
     if (typeof state.arrowStart === 'boolean')            this._arrowStart = state.arrowStart
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
-    // Bindings are restored after deserializeState; treat any already-active
-    // directionSlot as "was already active" so the re-enable sync doesn't fire.
-    this._prevDirectionActive = true
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
@@ -178,22 +167,8 @@ export class LineLayer extends Layer {
     if (this.endSlot.isActive)    this._end   = (this.endSlot.source    as PointSource).getPoint()
     if (this.widthSlot.isActive)  this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * MAX_STROKE_W)
     if (this.colourSlot.isActive) this._colour = (this.colourSlot.source as ColourSource).getColour()
-    const nowActive = this.directionSlot.isActive
-    if (nowActive && !this._prevDirectionActive) this._syncDirectionOnEnable()
-    this._prevDirectionActive = nowActive
     this._computeRenderedPoints()
     this._updateCanvas()
-  }
-
-  // When the directionSlot transitions from inactive to active, snap the
-  // DirectionLayer's angle/magnitude to match the current visual line so
-  // there's no jump, and suspend any of its own controlling bindings.
-  private _syncDirectionOnEnable(): void {
-    const source = this.directionSlot.source
-    if (!(source instanceof DirectionLayer)) return
-    const dx = this._end.x - this._start.x
-    const dy = this._end.y - this._start.y
-    source.setAngleMagnitude(Math.atan2(dy, dx), 1)
   }
 
   // Computes _renderedStart/_renderedEnd from _start/_end plus optional directionSlot.

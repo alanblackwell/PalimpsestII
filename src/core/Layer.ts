@@ -339,6 +339,27 @@ export abstract class Layer extends Node {
     return null
   }
 
+  // Called by BindingLayer.toggle() when a suspended binding is re-enabled.
+  // Reads this layer's current manual value for the slot via getSlotDefault
+  // and pushes it to the source layer so the re-enabled binding starts from
+  // the manually-set value rather than jumping to whatever the source last held.
+  // Source layers that can receive a pushed value must override receiveValue.
+  pushResumedValue(slot: ParameterSlot): void {
+    const val = this.getSlotDefault(slot)
+    if (val === null) return
+    const src = slot.source
+    if (!(src instanceof Layer)) return
+    src.receiveValue(slot.type, val)
+  }
+
+  // Override in source layer types to accept a value pushed back by a consumer
+  // whose binding was just re-enabled.  The implementation should:
+  //   1. Suspend any of this layer's own active controlling bindings.
+  //   2. Apply val as the new manual value and mark dirty.
+  // Default is a no-op; only source layers with controllable outputs need it.
+  // Do not call directly — use pushResumedValue on the consumer.
+  protected receiveValue(_type: ValueType | null, _val: Point | number | Direction): void {}
+
   // True if `slot` is conventionally filled with a freshly-created closed
   // shape (Rect/Ellipse/Path, in outline mode) via the slot-click-to-create
   // gesture, rather than the slot type's canonical default layer — e.g. an

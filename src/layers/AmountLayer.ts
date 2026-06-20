@@ -5,7 +5,7 @@ import {
   ValueType, SlotState,
   type Amount, type AmountSource,
   type PointSource,
-  type Ctx2D, type Point,
+  type Ctx2D, type Point, type Direction,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { SliderRegion, registerPromotionFactory } from '../regions/SliderRegion.js'
@@ -72,6 +72,13 @@ export class AmountLayer extends Layer implements AmountSource {
 
   setValue(v: Amount): void {
     this._value = v
+    this.markDirty()
+  }
+
+  protected override receiveValue(type: ValueType | null, val: Point | number | Direction): void {
+    if (type !== ValueType.Amount || typeof val !== 'number') return
+    this._suspendActiveSlots()
+    this._value = val as Amount
     this.markDirty()
   }
 

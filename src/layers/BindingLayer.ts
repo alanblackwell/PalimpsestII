@@ -162,6 +162,10 @@ export class BindingLayer extends Layer
       graph.suspend(this._slot)
     } else {
       graph.resume(this._slot)
+      // Push the consumer's current manual value to the source so it doesn't
+      // jump when the binding resumes.  No-op if getSlotDefault returns null
+      // or the source doesn't override receiveValue.
+      ;(this._slot.owner as Layer).pushResumedValue(this._slot)
     }
     this._enabled = !this._enabled
     this.markDirty()
