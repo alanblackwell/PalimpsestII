@@ -544,6 +544,12 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._dragStartAngle = this._angle
 
     // Pre-compute the local angle of the rotation handle for smooth rotation
+    if (best === H_CENTER) {
+      if (this.positionSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.positionSlot)?.toggle()
+      }
+    }
+
     if (best === H_ROTATE) {
       if (this.rotationSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.rotationSlot)?.toggle()

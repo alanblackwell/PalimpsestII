@@ -243,6 +243,7 @@ export class PointLayer extends Layer implements PointSource {
     if (type !== ValueType.Point || typeof val !== 'object' || !('x' in val)) return
     if (this._slot.state === SlotState.Bound) BindingLayer.findForSlot(this._slot)?.toggle()
     this._point = { ...(val as Point) }
+    this._region.setPoint(this._point)
     this.markDirty()
   }
 

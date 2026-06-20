@@ -6,9 +6,11 @@ import {
   type Point,
   type PointSource,
   type DirectionSource,
+  type Direction,
   type Ctx2D,
 } from '../core/types.js'
 import { BindingLayer } from './BindingLayer.js'
+import { ParameterSlot } from '../core/ParameterSlot.js'
 
 // ------------------------------------------------------------
 // PathLayer — a closed Catmull-Rom spline shape layer
@@ -148,6 +150,11 @@ export class PathLayer extends ShapeLayer {
     if (Array.isArray(state.points)) this._points = state.points as Point[]
   }
 
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this.positionSlot) return { ...this._centroid() }
+    return super.getSlotDefault(slot)
+  }
+
   // ----------------------------------------------------------
   // ShapeLayer contract
   // ----------------------------------------------------------
@@ -250,6 +257,9 @@ export class PathLayer extends ShapeLayer {
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) {
+      if (this.positionSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.positionSlot)?.toggle()
+      }
       this._specialDrag     = 'center'
       this._dragStartPtr    = { ...point }
       this._dragStartPts    = this._points.map(p => ({ ...p }))
