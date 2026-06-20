@@ -5,11 +5,13 @@ import {
   ValueType, SlotState,
   type Colour, type ColourSource,
   type AmountSource,
+  type Direction, type DirectionSource,
   type Point,  type PointSource,
   type Ctx2D,
 } from '../core/types.js'
-import { graph }         from '../dataflow/Graph.js'
-import { BindingLayer }  from './BindingLayer.js'
+import { graph }           from '../dataflow/Graph.js'
+import { BindingLayer }    from './BindingLayer.js'
+import { DirectionLayer }  from './DirectionLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -33,7 +35,7 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 // ensures the drop-shadow applied by the Evaluator in edit mode is computed
 // from the composite shape rather than from each element separately.
 //
-// Slots: start (Point), end (Point), width (Amount), colour (Colour).
+// Slots: start (Point), end (Point), direction (Direction), width (Amount), colour (Colour).
 
 const ACCENT      = '#e87e7e'    // Line layer accent colour
 const AM_COL      = '#4a8fe8'    // Amount type accent (width slot)
@@ -57,13 +59,17 @@ function ptDist(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y -
 export class LineLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
 
-  readonly startSlot:  ParameterSlot
-  readonly endSlot:    ParameterSlot
-  readonly widthSlot:  ParameterSlot
-  readonly colourSlot: ParameterSlot
+  readonly startSlot:     ParameterSlot
+  readonly endSlot:       ParameterSlot
+  readonly directionSlot: ParameterSlot
+  readonly widthSlot:     ParameterSlot
+  readonly colourSlot:    ParameterSlot
 
   private _start: Point
   private _end:   Point
+  // Rendered endpoints — derived from _start/_end plus directionSlot in recompute().
+  private _renderedStart: Point
+  private _renderedEnd:   Point
   private _strokeWidth = 3
   private _colour: Colour = { r: 0.5, g: 0.5, b: 0.5, a: 1 }  // mid grey default
   private _arrowStart = false
@@ -73,10 +79,25 @@ export class LineLayer extends Layer {
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
   private _canvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
+  // Tracks whether directionSlot was active on the previous recompute, so we
+  // can detect the inactive→active transition and sync the DirectionLayer.
+  // Initialised true so that deserialised sessions with an already-active
+  // directionSlot don't trigger a spurious sync on first recompute.
+  private _prevDirectionActive = true
+
   // Active drag
-  private _drag:           HandleDrag | null = null
-  private _dragStartMouse: Point | null      = null
-  private _dragStartPt:    Point | null      = null
+  private _drag:             HandleDrag | null  = null
+  private _dragStartMouse:   Point | null       = null
+  // In translate-both mode (_dragStartOtherPt !== null):
+  //   _dragStartPt      = _start at drag begin  (always)
+  //   _dragStartOtherPt = _end   at drag begin  (always)
+  // Both are translated by the same pointer delta regardless of which handle
+  // the user clicked (_drag tracks that for switch detection only).
+  private _dragStartPt:      Point | null       = null
+  private _dragStartOtherPt: Point | null       = null
+  // Tracks which handle was last used while direction is active with neither
+  // point bound, so that switching to the other handle disables direction.
+  private _lastDraggedHandle: HandleDrag | null = null
   private _sliderDrag = false
 
   // Button bounds written in renderPanel, read in hitTestSelf
@@ -96,12 +117,16 @@ export class LineLayer extends Layer {
       x: (m + Math.random() * (1 - 2 * m)) * W,
       y: (m + Math.random() * (1 - 2 * m)) * H,
     }
+    this._renderedStart      = { ...this._start }
+    this._renderedEnd        = { ...this._end }
+    this._prevDirectionActive = false  // new layer: sync fires on first direction bind
 
-    this.startSlot  = new ParameterSlot(ValueType.Point,  this, 'start')
-    this.endSlot    = new ParameterSlot(ValueType.Point,  this, 'end')
-    this.widthSlot  = new ParameterSlot(ValueType.Amount, this, 'width')
-    this.colourSlot = new ParameterSlot(ValueType.Colour, this, 'colour')
-    this.slots.push(this.startSlot, this.endSlot, this.widthSlot, this.colourSlot)
+    this.startSlot     = new ParameterSlot(ValueType.Point,     this, 'start')
+    this.endSlot       = new ParameterSlot(ValueType.Point,     this, 'end')
+    this.directionSlot = new ParameterSlot(ValueType.Direction, this, 'direction')
+    this.widthSlot     = new ParameterSlot(ValueType.Amount,    this, 'width')
+    this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
+    this.slots.push(this.startSlot, this.endSlot, this.directionSlot, this.widthSlot, this.colourSlot)
     graph.register(this)
   }
 
@@ -127,12 +152,20 @@ export class LineLayer extends Layer {
     if (state.colour && typeof state.colour === 'object') this._colour = state.colour as Colour
     if (typeof state.arrowStart === 'boolean')            this._arrowStart = state.arrowStart
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
+    // Bindings are restored after deserializeState; treat any already-active
+    // directionSlot as "was already active" so the re-enable sync doesn't fire.
+    this._prevDirectionActive = true
   }
 
-  override getSlotDefault(slot: ParameterSlot): Point | number | null {
-    if (slot === this.startSlot) return { ...this._start }
-    if (slot === this.endSlot)   return { ...this._end   }
-    if (slot === this.widthSlot) return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this.startSlot)     return { ...this._start }
+    if (slot === this.endSlot)       return { ...this._end   }
+    if (slot === this.widthSlot)     return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))
+    if (slot === this.directionSlot) {
+      const dx = this._end.x - this._start.x
+      const dy = this._end.y - this._start.y
+      return { angle: Math.atan2(dy, dx), magnitude: 1 }
+    }
     return null
   }
 
@@ -145,7 +178,82 @@ export class LineLayer extends Layer {
     if (this.endSlot.isActive)    this._end   = (this.endSlot.source    as PointSource).getPoint()
     if (this.widthSlot.isActive)  this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * MAX_STROKE_W)
     if (this.colourSlot.isActive) this._colour = (this.colourSlot.source as ColourSource).getColour()
+    const nowActive = this.directionSlot.isActive
+    if (nowActive && !this._prevDirectionActive) this._syncDirectionOnEnable()
+    this._prevDirectionActive = nowActive
+    this._computeRenderedPoints()
     this._updateCanvas()
+  }
+
+  // When the directionSlot transitions from inactive to active, snap the
+  // DirectionLayer's angle/magnitude to match the current visual line so
+  // there's no jump, and suspend any of its own controlling bindings.
+  private _syncDirectionOnEnable(): void {
+    const source = this.directionSlot.source
+    if (!(source instanceof DirectionLayer)) return
+    const dx = this._end.x - this._start.x
+    const dy = this._end.y - this._start.y
+    source.setAngleMagnitude(Math.atan2(dy, dx), 1)
+  }
+
+  // Computes _renderedStart/_renderedEnd from _start/_end plus optional directionSlot.
+  //
+  // Behaviours:
+  //   directionSlot inactive        → rendered endpoints equal raw _start/_end.
+  //   Both point slots active       → angle ignored; magnitude retracts both ends equally.
+  //   Only endSlot active           → end anchored; direction angle + magnitude place start.
+  //   Only startSlot active         → start anchored; direction angle + magnitude place end.
+  //   Neither point slot active,
+  //     _lastDraggedHandle === 'end' → end is master anchor; start follows direction.
+  //   Neither point slot active,
+  //     otherwise                   → start is master anchor; end follows direction.
+  private _computeRenderedPoints(): void {
+    if (!this.directionSlot.isActive) {
+      this._renderedStart = this._start
+      this._renderedEnd   = this._end
+      return
+    }
+
+    const dir         = (this.directionSlot.source as DirectionSource).getDirection()
+    const startActive = this.startSlot.isActive
+    const endActive   = this.endSlot.isActive
+    const dx          = this._end.x - this._start.x
+    const dy          = this._end.y - this._start.y
+    const definedLen  = Math.hypot(dx, dy)
+
+    if (definedLen < 0.5) {
+      this._renderedStart = this._start
+      this._renderedEnd   = this._end
+      return
+    }
+
+    const mag = Math.max(0, Math.min(1, dir.magnitude))
+
+    if (startActive && endActive) {
+      // Both bound: angle has no effect; magnitude scales how much of the
+      // defined length is rendered, retracting each end by an equal amount.
+      const udx     = dx / definedLen
+      const udy     = dy / definedLen
+      const retract = (1 - mag) * definedLen / 2
+      this._renderedStart = { x: this._start.x + udx * retract, y: this._start.y + udy * retract }
+      this._renderedEnd   = { x: this._end.x   - udx * retract, y: this._end.y   - udy * retract }
+    } else if (endActive || (!startActive && this._lastDraggedHandle === 'end')) {
+      // End anchored (endSlot active, or neither bound and end was last touched).
+      const rendLen = mag * definedLen
+      this._renderedEnd   = this._end
+      this._renderedStart = {
+        x: this._end.x - Math.cos(dir.angle) * rendLen,
+        y: this._end.y - Math.sin(dir.angle) * rendLen,
+      }
+    } else {
+      // Start anchored (startSlot active, or neither bound and start is default).
+      const rendLen = mag * definedLen
+      this._renderedStart = this._start
+      this._renderedEnd   = {
+        x: this._start.x + Math.cos(dir.angle) * rendLen,
+        y: this._start.y + Math.sin(dir.angle) * rendLen,
+      }
+    }
   }
 
   // ----------------------------------------------------------
@@ -178,8 +286,10 @@ export class LineLayer extends Layer {
   }
 
   private _drawLineContent(ctx: OffscreenCanvasRenderingContext2D): void {
-    const dx  = this._end.x - this._start.x
-    const dy  = this._end.y - this._start.y
+    const start = this._renderedStart
+    const end   = this._renderedEnd
+    const dx  = end.x - start.x
+    const dy  = end.y - start.y
     const len = Math.hypot(dx, dy)
     if (len < 0.5) return
 
@@ -200,8 +310,8 @@ export class LineLayer extends Layer {
       // Simple case: single round-capped stroke → one draw call, one shadow.
       ctx.lineCap = 'round'
       ctx.beginPath()
-      ctx.moveTo(this._start.x, this._start.y)
-      ctx.lineTo(this._end.x,   this._end.y)
+      ctx.moveTo(start.x, start.y)
+      ctx.lineTo(end.x,   end.y)
       ctx.stroke()
       return
     }
@@ -215,20 +325,20 @@ export class LineLayer extends Layer {
     //   3. Fill each arrowhead triangle so its base meets the body end.
 
     // Body endpoints: trimmed to arrowhead base positions.
-    const bsx = this._start.x + udx * aLen
-    const bsy = this._start.y + udy * aLen
-    const bex = this._end.x   - udx * aLen
-    const bey = this._end.y   - udy * aLen
+    const bsx = start.x + udx * aLen
+    const bsy = start.y + udy * aLen
+    const bex = end.x   - udx * aLen
+    const bey = end.y   - udy * aLen
 
     // Extend body 1px under arrowheads to avoid AA gaps at the junction.
     const OVERLAP = 1
     const lineS = {
-      x: this._arrowStart ? bsx - udx * OVERLAP : this._start.x,
-      y: this._arrowStart ? bsy - udy * OVERLAP : this._start.y,
+      x: this._arrowStart ? bsx - udx * OVERLAP : start.x,
+      y: this._arrowStart ? bsy - udy * OVERLAP : start.y,
     }
     const lineE = {
-      x: this._arrowEnd ? bex + udx * OVERLAP : this._end.x,
-      y: this._arrowEnd ? bey + udy * OVERLAP : this._end.y,
+      x: this._arrowEnd ? bex + udx * OVERLAP : end.x,
+      y: this._arrowEnd ? bey + udy * OVERLAP : end.y,
     }
 
     ctx.lineCap = 'butt'
@@ -240,21 +350,21 @@ export class LineLayer extends Layer {
     // Round caps at non-arrowhead ends (full circle = round lineCap equivalent).
     if (!this._arrowStart) {
       ctx.beginPath()
-      ctx.arc(this._start.x, this._start.y, r, 0, Math.PI * 2)
+      ctx.arc(start.x, start.y, r, 0, Math.PI * 2)
       ctx.fill()
     }
     if (!this._arrowEnd) {
       ctx.beginPath()
-      ctx.arc(this._end.x, this._end.y, r, 0, Math.PI * 2)
+      ctx.arc(end.x, end.y, r, 0, Math.PI * 2)
       ctx.fill()
     }
 
     // Arrowhead triangles.
     // Both use +/- perp of the main axis for their wing points; the tip
-    // is exactly at _end / _start and the base center is at (bex/bsx, bey/bsy).
+    // is exactly at end/start and the base center is at (bex/bsx, bey/bsy).
     if (this._arrowEnd) {
       ctx.beginPath()
-      ctx.moveTo(this._end.x, this._end.y)
+      ctx.moveTo(end.x, end.y)
       ctx.lineTo(bex + nx * hw, bey + ny * hw)
       ctx.lineTo(bex - nx * hw, bey - ny * hw)
       ctx.closePath()
@@ -262,7 +372,7 @@ export class LineLayer extends Layer {
     }
     if (this._arrowStart) {
       ctx.beginPath()
-      ctx.moveTo(this._start.x, this._start.y)
+      ctx.moveTo(start.x, start.y)
       ctx.lineTo(bsx + nx * hw, bsy + ny * hw)
       ctx.lineTo(bsx - nx * hw, bsy - ny * hw)
       ctx.closePath()
@@ -371,26 +481,35 @@ export class LineLayer extends Layer {
   }
 
   private _drawHandles(ctx: Ctx2D): void {
-    ctx.save()
-    this._drawHandle(ctx, this._start, this.startSlot.isActive, this.startSlot.state === SlotState.SuspendedBound)
-    this._drawHandle(ctx, this._end,   this.endSlot.isActive,   this.endSlot.state   === SlotState.SuspendedBound)
-    ctx.restore()
+    const dirMode = this._dirTranslateMode
+    this._drawHandle(ctx, dirMode ? this._renderedStart : this._start, this.startSlot.isActive)
+    this._drawHandle(ctx, dirMode ? this._renderedEnd   : this._end,   this.endSlot.isActive)
   }
 
-  private _drawHandle(ctx: Ctx2D, pt: Point, bound: boolean, suspended: boolean): void {
-    const alpha = bound ? 0.45 : suspended ? 0.60 : 0.85
-    ctx.strokeStyle = `rgba(255,255,255,${alpha})`
-    ctx.fillStyle   = `rgba(255,255,255,${alpha * 0.25})`
-    ctx.lineWidth   = 1.5
+  private _drawHandle(ctx: Ctx2D, pt: Point, bound: boolean): void {
+    const glow = bound ? '#666688' : '#ffffff'
+    // Filled white circle with coloured glow
+    ctx.save()
+    ctx.shadowColor = glow
+    ctx.shadowBlur  = 14
     ctx.beginPath()
     ctx.arc(pt.x, pt.y, HANDLE_R, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'
     ctx.fill()
-    ctx.stroke()
-    ctx.lineWidth   = 1
-    ctx.strokeStyle = `rgba(255,255,255,${alpha * 0.75})`
+    ctx.restore()
+    // Dark outline (no shadow)
     ctx.beginPath()
-    ctx.moveTo(pt.x - HANDLE_R + 2, pt.y); ctx.lineTo(pt.x + HANDLE_R - 2, pt.y)
-    ctx.moveTo(pt.x, pt.y - HANDLE_R + 2); ctx.lineTo(pt.x, pt.y + HANDLE_R - 2)
+    ctx.arc(pt.x, pt.y, HANDLE_R, 0, Math.PI * 2)
+    ctx.strokeStyle = 'rgba(0,0,0,0.65)'
+    ctx.lineWidth   = 1.5
+    ctx.stroke()
+    // Crosshair
+    const cr = HANDLE_R - 2
+    ctx.strokeStyle = 'rgba(0,0,0,0.80)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.moveTo(pt.x - cr, pt.y); ctx.lineTo(pt.x + cr, pt.y)
+    ctx.moveTo(pt.x, pt.y - cr); ctx.lineTo(pt.x, pt.y + cr)
     ctx.stroke()
   }
 
@@ -400,12 +519,12 @@ export class LineLayer extends Layer {
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.colourSlot], this.panelBottom)
+    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.directionSlot, this.colourSlot], this.panelBottom)
     this._drawWidthPill(ctx)
   }
 
   private _widthPillBounds(): BBox {
-    const mainH = 3 * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    const mainH = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP
     return {
       x:      contentLeft(Node.canvasWidth),
       y:      this.panelBottom + mainH + 8,
@@ -510,13 +629,21 @@ export class LineLayer extends Layer {
 
   get isInteractive(): boolean { return true }
 
+  // True when direction defines the end position and neither raw point is bound.
+  // In this mode the visual handles live at the rendered endpoints, not the raw
+  // _start/_end, and dragging either handle translates the whole line.
+  private get _dirTranslateMode(): boolean {
+    return this.directionSlot.isActive && !this.startSlot.isActive && !this.endSlot.isActive
+  }
+
   protected override hitTestSelf(point: Point): this | null {
     if (this._drag !== null || this._sliderDrag) return this
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
     if (this._arrowEndBounds   !== null && this._inBox(point, this._arrowEndBounds))   return this
     if (this._inBox(point, this._widthSliderRowBounds())) return this
-    if (ptDist(point, this._start) <= HANDLE_HIT) return this
-    if (ptDist(point, this._end)   <= HANDLE_HIT) return this
+    const dirMode = this._dirTranslateMode
+    if (ptDist(point, dirMode ? this._renderedStart : this._start) <= HANDLE_HIT) return this
+    if (ptDist(point, dirMode ? this._renderedEnd   : this._end)   <= HANDLE_HIT) return this
     return null
   }
 
@@ -546,19 +673,52 @@ export class LineLayer extends Layer {
       return true
     }
 
-    if (ptDist(point, this._start) <= HANDLE_HIT) {
+    const dirMode = this._dirTranslateMode
+
+    if (ptDist(point, dirMode ? this._renderedStart : this._start) <= HANDLE_HIT) {
+      if (dirMode) {
+        if (this._lastDraggedHandle === 'end') {
+          // Handle switch: snap _end to its rendered position so the line stays
+          // in place after direction is suspended, then let the user drag start.
+          this._end = { ...this._renderedEnd }
+          BindingLayer.findForSlot(this.directionSlot)?.toggle()
+          this._lastDraggedHandle = null
+          this._drag = 'start'; this._dragStartMouse = { ...point }
+          this._dragStartPt = { ...this._start }; this._dragStartOtherPt = null
+          return true
+        }
+        this._lastDraggedHandle = 'start'
+        this._drag = 'start'; this._dragStartMouse = { ...point }
+        // translate-both: _dragStartPt = _start, _dragStartOtherPt = _end (always)
+        this._dragStartPt = { ...this._start }; this._dragStartOtherPt = { ...this._end }
+        return true
+      }
       if (this.startSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.startSlot)?.toggle()
-      this._drag = 'start'
-      this._dragStartMouse = { ...point }
-      this._dragStartPt    = { ...this._start }
+      this._drag = 'start'; this._dragStartMouse = { ...point }
+      this._dragStartPt = { ...this._start }; this._dragStartOtherPt = null
       return true
     }
 
-    if (ptDist(point, this._end) <= HANDLE_HIT) {
+    if (ptDist(point, dirMode ? this._renderedEnd : this._end) <= HANDLE_HIT) {
+      if (dirMode) {
+        if (this._lastDraggedHandle === 'start') {
+          // Handle switch: snap _end so the line stays in place after suspension.
+          this._end = { ...this._renderedEnd }
+          BindingLayer.findForSlot(this.directionSlot)?.toggle()
+          this._lastDraggedHandle = null
+          this._drag = 'end'; this._dragStartMouse = { ...point }
+          this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
+          return true
+        }
+        this._lastDraggedHandle = 'end'
+        this._drag = 'end'; this._dragStartMouse = { ...point }
+        // translate-both: _dragStartPt = _start, _dragStartOtherPt = _end (always)
+        this._dragStartPt = { ...this._start }; this._dragStartOtherPt = { ...this._end }
+        return true
+      }
       if (this.endSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.endSlot)?.toggle()
-      this._drag = 'end'
-      this._dragStartMouse = { ...point }
-      this._dragStartPt    = { ...this._end }
+      this._drag = 'end'; this._dragStartMouse = { ...point }
+      this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
       return true
     }
 
@@ -571,19 +731,28 @@ export class LineLayer extends Layer {
       return
     }
     if (this._drag === null || this._dragStartMouse === null || this._dragStartPt === null) return
-    const newPt = {
-      x: this._dragStartPt.x + point.x - this._dragStartMouse.x,
-      y: this._dragStartPt.y + point.y - this._dragStartMouse.y,
+    const dx = point.x - this._dragStartMouse.x
+    const dy = point.y - this._dragStartMouse.y
+    if (this._dragStartOtherPt !== null) {
+      // Translate-both: _dragStartPt = _start at begin, _dragStartOtherPt = _end at begin.
+      // Apply the same delta to both regardless of which handle (_drag) was clicked.
+      this._start = { x: this._dragStartPt.x + dx, y: this._dragStartPt.y + dy }
+      this._end   = { x: this._dragStartOtherPt.x + dx, y: this._dragStartOtherPt.y + dy }
+    } else {
+      const newPt = { x: this._dragStartPt.x + dx, y: this._dragStartPt.y + dy }
+      if (this._drag === 'start') this._start = newPt
+      else                        this._end   = newPt
     }
-    if (this._drag === 'start') this._start = newPt
-    else                        this._end   = newPt
     this.markDirty()
   }
 
   handlePointerUp(): void {
-    this._drag           = null
-    this._dragStartMouse = null
-    this._dragStartPt    = null
-    this._sliderDrag     = false
+    this._drag             = null
+    this._dragStartMouse   = null
+    this._dragStartPt      = null
+    this._dragStartOtherPt = null
+    this._sliderDrag       = false
+    // _lastDraggedHandle intentionally kept: it persists across drag sessions so
+    // that switching to the other handle on a subsequent drag disables direction.
   }
 }

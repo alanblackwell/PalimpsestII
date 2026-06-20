@@ -106,6 +106,18 @@ export class DirectionLayer extends Layer implements DirectionSource {
   getDialPosition(): Point { return { ...this._position } }
   getHandlePosition(): Point { return this._rotateHandlePos() }
 
+  // Called by a consumer (e.g. LineLayer) when its direction binding is
+  // re-enabled: snaps the manual angle/magnitude to the given values and
+  // suspends any active slots that were overriding those values, so the snap
+  // takes effect rather than being immediately overridden by a live source.
+  setAngleMagnitude(angle: number, magnitude: number): void {
+    if (this._handleSlot.state    === SlotState.Bound) BindingLayer.findForSlot(this._handleSlot)?.toggle()
+    if (this._magnitudeSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._magnitudeSlot)?.toggle()
+    this._angle     = angle
+    this._magnitude = Math.max(0, Math.min(1, magnitude))
+    this.markDirty()
+  }
+
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the manual control, so the binding starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
