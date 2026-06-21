@@ -210,6 +210,9 @@ export class TraceLayer extends Layer implements PointSource {
     this._drawPill(ctx,this.bounds)
     const cp={x:300,y:50,width:260,height:this.bounds.height}
     this._cpBounds=cp; this._drawPill(ctx,cp)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
   }
 

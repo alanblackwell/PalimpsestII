@@ -277,6 +277,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, this.canvasBounds)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     if (this.phaseSlot.isActive) {
       this._drawPhaseIndicator(ctx)

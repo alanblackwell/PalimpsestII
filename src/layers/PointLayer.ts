@@ -778,7 +778,9 @@ export class PointLayer extends Layer implements PointSource {
       ctx.restore()
     }
 
-    // ── Draggable handle (anywhere on canvas) ─────────────
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._region.renderSelf(ctx)
   }
 

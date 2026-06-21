@@ -206,6 +206,9 @@ export class PathLayer extends ShapeLayer {
   override renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, this.canvasBounds)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
     if (this.phaseSlot.isActive) this._drawPhaseIndicator(ctx)
   }

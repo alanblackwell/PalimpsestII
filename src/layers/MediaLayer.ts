@@ -341,7 +341,9 @@ export class MediaLayer extends Layer implements ImageSource {
     this._drawMediaPill(ctx, this.canvasBounds)
     // Playback control bar across the bottom of the canvas
     this._renderControlBar(ctx)
-    // Transform handles (position / scale / rotation)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
   }
 

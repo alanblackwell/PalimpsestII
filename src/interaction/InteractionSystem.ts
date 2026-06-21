@@ -473,6 +473,20 @@ export class InteractionSystem {
 
       // Mouse/pen: immediate handling, unchanged.
       if (this._widget !== null && this._inWidgetStrip(e.clientX)) {
+        // Before routing to the widget, check whether the selected layer's
+        // overlay handles are hit. Handles are drawn in content-canvas coords,
+        // so use content-canvas coords (point) for the test.
+        if (this._stackTop !== null) {
+          const node = this._hitTest(point)
+          if (node !== null && isDraggable(node) && this._isOnCurrentLayer(node)) {
+            if (node.handlePointerDown(point)) {
+              this._active = { node, pointerId: e.pointerId, useVpt: false }
+              this._canvas.setPointerCapture(e.pointerId)
+              this._setCursor('grabbing')
+              return
+            }
+          }
+        }
         if (this._widget.handlePointerDown(this._viewportPoint(e))) {
           this._widgetCapture = true
           this._canvas.setPointerCapture(e.pointerId)

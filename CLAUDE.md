@@ -70,6 +70,8 @@ Extends Node. Adds:
 - `renderSelf(ctx)` — layer content, called for every layer in the stack
 - `renderPanel(ctx)` — control UI, called **only for the selected layer**
 - `renderSlots(ctx)` — parameter drop-target rows, called after renderPanel
+- `renderOverlay(ctx)` — canvas-space handles/dials/paths, drawn **after** the
+  StackWidget and without any clip, so they appear on top of thumbnails
 - `hitTestSelf(point)` — override to respond to pointer events
 - `panelBottom` — y-coordinate of the bottom of the panel strip; slot rows start here
 - `thumbnailOnlyWhenSelected: boolean` — hides the layer's `LayerStackWidget` card
@@ -127,7 +129,8 @@ Provides cycle detection at bind time — `graph.canBind(source, consumer)`.
 4. Declare `ParameterSlot` fields, push them onto `this.slots[]` in the constructor
 5. Call `graph.register(this)` at the end of the constructor
 6. Implement `protected recompute(): void` — reads slot sources, updates internal state
-7. Implement `renderSelf(ctx)` for canvas content, `renderPanel(ctx)` for the control strip
+7. Implement `renderSelf(ctx)` for canvas content, `renderPanel(ctx)` for the control strip,
+   and `renderOverlay(ctx)` for canvas-space drag handles (see "renderOverlay" below)
 8. Override `hitTestSelf` and add `handlePointerDown/Move/Up` if the layer is interactive
 9. Add an entry to the `BUTTONS` array in `src/layers/MenuLayer.ts`
 10. Export from `src/layers/index.ts`
@@ -157,12 +160,15 @@ Standard elements:
 The canvas-space panel below the strip (slot rows) starts at `this.panelBottom`
 (default: `50 + bounds.height + 8`) at `x: 300, width: 260`.
 
-**IMPORTANT — canvas-space pill rule:** Any interactive controls that a layer needs
-(camera selector, shape handles, colour pickers, etc.) **must** be drawn in a second
-pill at `{ x: 300, y: 50, width: 260, height: bounds.height }` inside `renderPanel`,
-*not* only in `this.bounds`. The Stack Widget covers roughly `x: 0–295`, so controls
-drawn only in `this.bounds` will be hidden behind it. See `ShapeLayer` and `VideoLayer`
-for the canonical two-pill `renderPanel` pattern.
+**IMPORTANT — canvas-space pill rule:** Fixed control pills (camera selector,
+colour pickers, readout labels, etc.) **must** be drawn in a second pill at
+`{ x: 300, y: 50, width: 260, height: bounds.height }` inside `renderPanel`,
+*not* only in `this.bounds`. The Stack Widget covers roughly `x: 0–295`, so
+controls drawn only in `this.bounds` will be hidden behind it. See `ShapeLayer`
+and `VideoLayer` for the canonical two-pill `renderPanel` pattern.
+
+**Drag handles** (move/scale/rotate circles, control-point dots, dials, splines)
+go in `renderOverlay` instead — see "renderOverlay — canvas-space handles" below.
 
 Toggle buttons for event slots (freeze/fill-mode/invert/etc.) go in `override
 renderSlots` at `PANEL_X + PANEL_W - BTN_SZ - 3` in the corresponding slot row
@@ -276,16 +282,31 @@ offscreen canvas that `renderSelf`/`getImage()` use.
 exposable via the hidden-helper click gesture above. `autoBindRules()` binds
 `imageSlot` to the nearest `Image` below (excluding hidden helpers).
 
-### Transform handles are panel-only
+### renderOverlay — canvas-space handles
 
-`ImageLayer`, `ClipLayer`, `TextLayer`, and `StrokeLayer` draw move/scale/rotate
-handles in `renderPanel` (selected layer, edit mode only) — never in
-`renderSelf`, which is composited for every layer and in display mode. All
-four, plus the `ShapeLayer` family (`RectLayer`/`EllipseLayer`/`PathLayer`,
-via their `H_ROTATE` handle), also have a `rotationSlot` (Direction): when
-active it overwrites `_rotation`/`_angle` each `recompute()`; dragging the
-rotate handle while the slot is `Bound` suspends it first (suspend-on-touch);
-the handle dims when the slot is active.
+`Layer.renderOverlay(ctx)` is called after `renderSlots` and after the
+StackWidget renders, with **no clip rect**. This makes handles visible anywhere
+on the canvas, including over the StackWidget thumbnail strip. Clicks on
+handles in the widget-strip area are intercepted by `InteractionSystem` before
+the widget sees them.
+
+Layers that use `renderOverlay`: `ImageLayer`, `ClipLayer`, `TextLayer`,
+`StrokeLayer`, `VideoLayer`, `MediaLayer`, `TransformLayer`, `ShapeLayer`
+(and its subclasses `PathLayer`), `LineLayer`, `PointLayer`, `DirectionLayer`,
+`AnimationPathLayer`, `TraceLayer`, `SelectLayer`.
+
+**Rule**: any canvas-space handle, dial, spline, or interactive overlay goes in
+`renderOverlay`; the panel-pill background (fixed at `canvasBounds`) stays in
+`renderPanel`. Never draw drag handles in `renderPanel` — they would be clipped
+to the content area when the StackWidget is visible.
+
+`ImageLayer`, `ClipLayer`, `TextLayer`, and `StrokeLayer` have move/scale/rotate
+handles — never in `renderSelf`, which is composited for every layer and in
+display mode. All four, plus the `ShapeLayer` family (`RectLayer`/`EllipseLayer`/
+`PathLayer`, via their `H_ROTATE` handle), also have a `rotationSlot`
+(Direction): when active it overwrites `_rotation`/`_angle` each `recompute()`;
+dragging the rotate handle while the slot is `Bound` suspends it first
+(suspend-on-touch); the handle dims when the slot is active.
 
 ### Right-click binding inspector / drag-to-replace
 

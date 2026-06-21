@@ -477,6 +477,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   renderPanel(ctx: Ctx2D): void {
     this._drawPill(ctx, this.bounds)
     this._drawPill(ctx, this.canvasBounds)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     if (this._hasStroke && !this._drawMode) {
       this._renderHandles(ctx)
     }

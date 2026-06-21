@@ -472,8 +472,6 @@ export class TransformLayer extends Layer implements ImageSource {
   // ── Stack panel ─────────────────────────────────────────────
 
   renderPanel(ctx: Ctx2D): void {
-    this._renderHandles(ctx)
-
     const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
 
@@ -528,6 +526,10 @@ export class TransformLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    this._renderHandles(ctx)
   }
 
   // Standard slot-row pill, then an opacity slider pill directly below it.

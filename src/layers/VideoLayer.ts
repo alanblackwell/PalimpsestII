@@ -589,6 +589,9 @@ export class VideoLayer extends Layer implements ImageSource {
     this._drawStripPill(ctx, this.bounds)
     this._drawSourcePill(ctx, this.canvasBounds)
     if (this._sourceType === 'file') this._renderControlBar(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     if (this._sourceType !== 'none') this._renderHandles(ctx)
   }
 

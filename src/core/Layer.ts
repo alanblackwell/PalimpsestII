@@ -144,6 +144,11 @@ export abstract class Layer extends Node {
   // Render just this layer's panel UI. Subclasses may override.
   renderPanel(_ctx: Ctx2D): void {}
 
+  // Render canvas-space overlays (drag handles, paths, dials) on top of
+  // everything — called after renderSlots and the StackWidget, without any
+  // clipping rect. Subclasses with canvas-space handles override this.
+  renderOverlay(_ctx: Ctx2D): void {}
+
   // Render the panel UI for this layer and all layers below it.
   renderPanelStack(ctx: Ctx2D): void {
     this.layerBelow?.renderPanelStack(ctx)

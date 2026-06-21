@@ -194,6 +194,9 @@ export class AnimationPathLayer extends Layer implements PointSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._renderLabel(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderPath(ctx)
   }
 

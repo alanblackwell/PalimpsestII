@@ -289,8 +289,6 @@ export class ClipLayer extends Layer implements ImageSource {
   }
 
   renderPanel(ctx: Ctx2D): void {
-    this._renderHandles(ctx)
-
     const { x, y, width, height } = this.canvasBounds
     if (width <= 0 || height <= 0) return
     const midY = y + height / 2
@@ -338,6 +336,10 @@ export class ClipLayer extends Layer implements ImageSource {
     ctx.restore()
 
     this._renderReplaceButtons(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    this._renderHandles(ctx)
   }
 
   // ----------------------------------------------------------

@@ -282,6 +282,7 @@ export class Evaluator {
       renderTop.renderPanel(wctx)
       if (clipX > 0) wctx.restore()
       renderTop.renderSlots(wctx)
+      renderTop.renderOverlay(wctx)
       Node.canvasWidth = savedCW
     } else {
       // Mobile / legacy: pills move with the content canvas (pan/zoom magnifies
@@ -307,6 +308,7 @@ export class Evaluator {
         this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
       }
       this._layerStackWidget?.render(wctx)
+      renderTop.renderOverlay(this.ctx)
     }
 
     // Bind-drag cursor overlay — small card following the pointer.

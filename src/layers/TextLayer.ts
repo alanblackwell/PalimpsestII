@@ -900,6 +900,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._updateEditHover()
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
     this._renderEditOverlay(ctx)
   }

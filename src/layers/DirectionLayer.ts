@@ -233,6 +233,9 @@ export class DirectionLayer extends Layer implements DirectionSource {
   renderPanel(ctx: Ctx2D): void {
     const { x, y, width, height } = this.canvasBounds
     if (width > 0 && height > 0) this._drawPill(ctx, { x, y, width, height })
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderDial(ctx)
   }
 

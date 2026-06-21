@@ -373,6 +373,9 @@ export class LineLayer extends Layer {
   renderPanel(ctx: Ctx2D): void {
     this._drawSimplePill(ctx, this.bounds)
     this._drawCanvasPill(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
   }
 

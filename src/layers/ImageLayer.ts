@@ -341,6 +341,9 @@ export class ImageLayer extends Layer implements ImageSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._renderPanelImpl(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
   }
 

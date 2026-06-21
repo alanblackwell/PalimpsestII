@@ -108,6 +108,9 @@ export class SelectLayer extends Layer implements ImageSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._drawStripPill(ctx, this.bounds)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
     this._renderOverlay(ctx)
   }
 
