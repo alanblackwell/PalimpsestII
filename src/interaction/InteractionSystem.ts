@@ -160,6 +160,7 @@ export class InteractionSystem {
   private _collectionAction: (() => void) | null = null
   private _backgroundAction: (() => void) | null = null
   private _menuFocusAction:  (() => void) | null = null
+  private _pauseClockAction: (() => void) | null = null
   private _pasteAction:      ((text: string) => void) | null = null
   private _imagePasteAction: ((file: File) => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
@@ -252,6 +253,11 @@ export class InteractionSystem {
   // Register a callback invoked when the user presses 'm' (bring Menu to current layer).
   setMenuFocusAction(fn: () => void): void {
     this._menuFocusAction = fn
+  }
+
+  // Register a callback invoked when the user presses 'p' (pause/resume the clock).
+  setPauseClockAction(fn: () => void): void {
+    this._pauseClockAction = fn
   }
 
   // Register a callback invoked on a system paste (Cmd/Ctrl+V) when no layer
@@ -959,6 +965,11 @@ export class InteractionSystem {
     }
     if (e.key === 'm' && !e.ctrlKey && !e.metaKey) {
       this._menuFocusAction?.()
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'p' && !e.ctrlKey && !e.metaKey) {
+      this._pauseClockAction?.()
       e.preventDefault()
       return
     }

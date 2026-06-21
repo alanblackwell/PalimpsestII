@@ -2,11 +2,13 @@ import { ShapeLayer } from './ShapeLayer.js'
 import {
   ValueType,
   SlotState,
+  boundingBoxContains,
   type Colour,
   type Point,
   type PointSource,
   type DirectionSource,
   type Direction,
+  type AmountSource,
   type Ctx2D,
 } from '../core/types.js'
 import { BindingLayer } from './BindingLayer.js'
@@ -25,18 +27,27 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 //                instead of the bbox handles used by Rect/Ellipse
 
 // ------------------------------------------------------------------
-// Catmull-Rom spline
+// Catmull-Rom spline (Hermite form with parameterised handle length)
 // ------------------------------------------------------------------
+// r = 0    → straight line segments between control points
+// r = 0.5  → standard Catmull-Rom (tangent = 0.5*(P2-P0))
+// r > 0.5  → extended handles; can produce loops
 
-function catmullRom(P0: Point, P1: Point, P2: Point, P3: Point, t: number): Point {
+function catmullRom(P0: Point, P1: Point, P2: Point, P3: Point, t: number, r: number): Point {
   const t2 = t * t, t3 = t2 * t
   return {
-    x: 0.5 * ((-P0.x + 3*P1.x - 3*P2.x + P3.x)*t3 + (2*P0.x - 5*P1.x + 4*P2.x - P3.x)*t2 + (-P0.x + P2.x)*t + 2*P1.x),
-    y: 0.5 * ((-P0.y + 3*P1.y - 3*P2.y + P3.y)*t3 + (2*P0.y - 5*P1.y + 4*P2.y - P3.y)*t2 + (-P0.y + P2.y)*t + 2*P1.y),
+    x: (-r*P0.x + (2-r)*P1.x + (r-2)*P2.x + r*P3.x)*t3
+     + (2*r*P0.x + (r-3)*P1.x + (3-2*r)*P2.x - r*P3.x)*t2
+     + r*(-P0.x + P2.x)*t
+     + P1.x,
+    y: (-r*P0.y + (2-r)*P1.y + (r-2)*P2.y + r*P3.y)*t3
+     + (2*r*P0.y + (r-3)*P1.y + (3-2*r)*P2.y - r*P3.y)*t2
+     + r*(-P0.y + P2.y)*t
+     + P1.y,
   }
 }
 
-function samplePath(points: Point[], t: number): Point {
+function samplePath(points: Point[], t: number, r: number): Point {
   const n = points.length
   if (n === 0) return { x: 0, y: 0 }
   if (n === 1) return { ...points[0]! }
@@ -50,6 +61,7 @@ function samplePath(points: Point[], t: number): Point {
     points[(i + 1) % n]!,
     points[(i + 2) % n]!,
     u,
+    r,
   )
 }
 
@@ -82,11 +94,19 @@ function defaultPoints(cx: number, cy: number): Point[] {
 
 const ACCENT     = '#e8a04a'
 const DIR_ACCENT = '#7ecfcf'
+const AM_COL     = '#4a8fe8'
 const CP_R       = 6
 const HIT_R      = 14
 const ROT_OFF    = 24
 const SAMPLES    = 200
 const MIN_POINTS = 3   // smallest closed spline we allow (a triangle)
+
+// Radius slider geometry — mirrors ShapeLayer's stroke-width pill layout
+const SLOT_H      = 26
+const SLOT_GAP    = 4
+const MAX_RADIUS  = 0.8   // slider maps [0, MAX_RADIUS]
+const RAD_LABEL_W = 78
+const RAD_VALUE_W = 38
 
 // ------------------------------------------------------------------
 // PathLayer
@@ -103,10 +123,16 @@ export class PathLayer extends ShapeLayer {
   private _dragStartCenter: Point = { x: 0, y: 0 }
   private _dragStartAngle:  number = 0
 
+  private _radius          = 0.5
+  private _radiusSliderDrag = false
+  readonly radiusSlot:     ParameterSlot
+
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
     super(cx, cy, 1, 1, colour)
-    this._points = points ?? defaultPoints(cx, cy)
+    this._points    = points ?? defaultPoints(cx, cy)
+    this.radiusSlot = new ParameterSlot(ValueType.Amount, this, 'spline radius')
+    this.slots.push(this.radiusSlot)
   }
 
   // ----------------------------------------------------------
@@ -117,6 +143,9 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   protected override recompute(): void {
+    if (this.radiusSlot.isActive) {
+      this._radius = (this.radiusSlot.source as AmountSource).getAmount() * MAX_RADIUS
+    }
     if (this.rotationSlot.isActive) {
       const newAngle = (this.rotationSlot.source as DirectionSource).getDirection().angle
       const delta = newAngle - this._angle
@@ -142,16 +171,18 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { ...super.serializeState(), points: this._points }
+    return { ...super.serializeState(), points: this._points, radius: this._radius }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     super.deserializeState(state)
-    if (Array.isArray(state.points)) this._points = state.points as Point[]
+    if (Array.isArray(state.points))        this._points = state.points as Point[]
+    if (typeof state.radius === 'number')   this._radius = state.radius
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this.positionSlot) return { ...this._centroid() }
+    if (slot === this.radiusSlot)   return Math.max(0, Math.min(1, this._radius / MAX_RADIUS))
     return super.getSlotDefault(slot)
   }
 
@@ -177,7 +208,7 @@ export class PathLayer extends ShapeLayer {
 
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
-      const pt = samplePath(this._points, i / SAMPLES)
+      const pt = samplePath(this._points, i / SAMPLES, this._radius)
       if (i === 0) ctx.moveTo(pt.x, pt.y)
       else         ctx.lineTo(pt.x, pt.y)
     }
@@ -196,7 +227,117 @@ export class PathLayer extends ShapeLayer {
 
   /** Sample a point on the spline perimeter. */
   samplePerimeter(t: number): Point {
-    return samplePath(this._points, t)
+    return samplePath(this._points, t, this._radius)
+  }
+
+  // ----------------------------------------------------------
+  // Slot rendering — radius pill appended below the stroke pill
+  // ----------------------------------------------------------
+
+  // Override to exclude radiusSlot from the standard-slot count so the
+  // stroke pill is positioned correctly when computing standardH.
+  protected override _strokePillBounds() {
+    const cb = this.canvasBounds
+    const standardSlots = this.slots.filter(
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.radiusSlot
+    )
+    const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 3 * SLOT_H + 2 * SLOT_GAP }
+  }
+
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const standardSlots = this.slots.filter(
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.radiusSlot
+    )
+    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    this._drawStrokePill(ctx)
+    this._drawRadiusPill(ctx)
+  }
+
+  private _radiusPillBounds() {
+    const spb = this._strokePillBounds()
+    const cb  = this.canvasBounds
+    return { x: cb.x, y: spb.y + spb.height + 8, width: cb.width, height: 2 * SLOT_H + SLOT_GAP }
+  }
+
+  private _radiusRowBounds() {
+    const pb = this._radiusPillBounds()
+    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
+  }
+
+  private _radiusBindRowBounds() {
+    const pb = this._radiusPillBounds()
+    return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
+  }
+
+  private _radiusSliderGeom() {
+    const b = this._radiusRowBounds()
+    const midY       = b.y + b.height / 2
+    const labelX     = b.x + 12
+    const indX       = b.x + b.width - 8
+    const valueRight = indX - 14
+    const sld0       = labelX + RAD_LABEL_W
+    const sldR       = valueRight - RAD_VALUE_W - 6
+    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  }
+
+  private _radiusSliderHit(point: Point): boolean {
+    return boundingBoxContains(this._radiusRowBounds(), point)
+  }
+
+  private _setRadiusFromPointer(px: number): void {
+    if (this.radiusSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.radiusSlot)?.toggle()
+    }
+    const g = this._radiusSliderGeom()
+    const thumbR = 5
+    const lo     = g.sld0 + thumbR
+    const hi     = g.sldR - thumbR
+    const range  = Math.max(1e-6, hi - lo)
+    this._radius = Math.max(0, Math.min(1, (px - lo) / range)) * MAX_RADIUS
+    this.markDirty()
+  }
+
+  private _drawRadiusPill(ctx: Ctx2D): void {
+    this._drawRadiusSlider(ctx)
+    this.renderSlotGroup(ctx, [this.radiusSlot], this._radiusBindRowBounds().y)
+  }
+
+  private _drawRadiusSlider(ctx: Ctx2D): void {
+    const g = this._radiusSliderGeom()
+    const { x, y, width, height } = g.b
+
+    const active = this.radiusSlot.isActive
+    const colour = active ? AM_COL : ACCENT
+    const v01    = Math.max(0, Math.min(1, this._radius / MAX_RADIUS))
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, 6)
+    ctx.fill()
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('spline radius', g.labelX, g.midY)
+
+    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(this._radius.toFixed(2), g.valueRight, g.midY)
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -224,6 +365,7 @@ export class PathLayer extends ShapeLayer {
           point.y >= b.y && point.y <= b.y + b.height) return this
     }
     if (this._strokeSliderHit(point)) return this
+    if (this._radiusSliderHit(point)) return this
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) return this
@@ -254,6 +396,12 @@ export class PathLayer extends ShapeLayer {
     if (this._strokeSliderHit(point)) {
       this._strokeSliderDrag = true
       this._setStrokeWidthFromPointer(point.x)
+      this.markDirty()
+      return true
+    }
+    if (this._radiusSliderHit(point)) {
+      this._radiusSliderDrag = true
+      this._setRadiusFromPointer(point.x)
       this.markDirty()
       return true
     }
@@ -326,6 +474,10 @@ export class PathLayer extends ShapeLayer {
       this._setStrokeWidthFromPointer(point.x)
       return
     }
+    if (this._radiusSliderDrag) {
+      this._setRadiusFromPointer(point.x)
+      return
+    }
     if (this._specialDrag === 'center') {
       const dx = point.x - this._dragStartPtr.x
       const dy = point.y - this._dragStartPtr.y
@@ -362,9 +514,10 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerUp(): void {
-    this._specialDrag = null
-    this._dragIndex   = -1
+    this._specialDrag     = null
+    this._dragIndex       = -1
     this._strokeSliderDrag = false
+    this._radiusSliderDrag = false
     this.markDirty()
   }
 
@@ -417,7 +570,7 @@ export class PathLayer extends ShapeLayer {
     let bestT = 0, bestD2 = Infinity, bestPos: Point = { x: 0, y: 0 }
     for (let i = 0; i <= SAMPLES; i++) {
       const t  = (i / SAMPLES) % 1
-      const pt = samplePath(this._points, t)
+      const pt = samplePath(this._points, t, this._radius)
       const d2 = (p.x - pt.x) ** 2 + (p.y - pt.y) ** 2
       if (d2 < bestD2) { bestD2 = d2; bestT = t; bestPos = pt }
     }
@@ -483,7 +636,7 @@ export class PathLayer extends ShapeLayer {
     // Spline outline (edit-mode overlay)
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
-      const pt = samplePath(this._points, i / SAMPLES)
+      const pt = samplePath(this._points, i / SAMPLES, this._radius)
       if (i === 0) ctx.moveTo(pt.x, pt.y)
       else         ctx.lineTo(pt.x, pt.y)
     }

@@ -128,6 +128,11 @@ export class LayerStackWidget {
 
   // Handle a key press. Returns true if the key was consumed.
   handleKey(key: string): boolean {
+    // Let the selected layer claim ArrowLeft/Right first (e.g. TutorialLayer page nav).
+    if (key === 'ArrowLeft' || key === 'ArrowRight') {
+      const sel = this.selected as any
+      if (typeof sel?.handlePageNavKey === 'function' && sel.handlePageNavKey(key)) return true
+    }
     if (key === 'Shift+ArrowUp')   { this.moveUp();      return true }
     if (key === 'Shift+ArrowDown') { this.moveDown();    return true }
     if (key === 'ArrowUp')         { this.navigateUp();  return true }

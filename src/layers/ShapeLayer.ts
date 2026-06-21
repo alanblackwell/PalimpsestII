@@ -300,7 +300,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return 50 + this.bounds.height + 8
   }
 
-  private _strokePillBounds(): BBox {
+  protected _strokePillBounds(): BBox {
     const cb = this.canvasBounds
     const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
@@ -333,7 +333,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return { b, midY, labelX, sld0, sldR, valueRight, indX }
   }
 
-  private _drawStrokePill(ctx: Ctx2D): void {
+  protected _drawStrokePill(ctx: Ctx2D): void {
     // Row 1 — "outline mode" toggle, moved here from the standard slot pill.
     this.renderSlotGroup(ctx, [this.fillModeSlot], this._outlineRowBounds().y)
     this._drawOutlineToggle(ctx)
@@ -429,7 +429,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
+  protected _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
     const thumbR = 5
     const lo = x0 + thumbR
     const hi = x1 - thumbR

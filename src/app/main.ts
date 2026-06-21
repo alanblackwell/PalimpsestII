@@ -569,6 +569,9 @@ interaction.setMenuFocusAction(() => {
   refreshStack(menuLayer)
 })
 
+// 'p' key — pause/resume the singleton ClockLayer.
+interaction.setPauseClockAction(() => { clock.togglePause() })
+
 // 'c' key — collect the layer below into a CollectionLayer.
 //
 // First press: create a Collection above the selected layer, ingest the

@@ -29,9 +29,11 @@ const NAV_SZ   = 34   // prev/next arrow button size
 const LINE_H   = 19   // line height for body text
 const FONT     = '13px monospace'
 const TITLE_FONT = 'bold 14px monospace'
+const SHORTCUT_KEY_W = 130  // key-column width in the shortcut reference table
 
-type TutBtnDef = { label: string; colour: string; factory: () => Layer }
-type TutPage   = { title: string; paragraphs: string[]; buttons: TutBtnDef[] }
+type TutBtnDef    = { label: string; colour: string; factory: () => Layer }
+type ShortcutRow  = { key: string; desc: string }
+type TutPage      = { title: string; paragraphs: string[]; buttons: TutBtnDef[]; shortcuts?: ShortcutRow[] }
 
 function rndColour() {
   const h = Math.random() * 360
@@ -157,6 +159,27 @@ const PAGES: TutPage[] = [
       },
     ],
   },
+  {
+    title: 'Shortcut Keys',
+    paragraphs: [
+      'These keys work globally when Palimpsest has focus. On this tutorial page, ← / → also navigate between pages.',
+    ],
+    buttons: [],
+    shortcuts: [
+      { key: '↑ / ↓',         desc: 'Select layer above / below' },
+      { key: 'Shift+↑ / ↓',   desc: 'Move layer up / down in stack' },
+      { key: 'Del / Bksp',    desc: 'Delete selected layer' },
+      { key: 'h',             desc: 'Show / hide layer panel' },
+      { key: 'Space',         desc: 'Toggle display / edit mode' },
+      { key: 'Enter',         desc: 'Fire Event at selected layer' },
+      { key: 'p',             desc: 'Pause / resume Clock' },
+      { key: 'b',             desc: 'Send layer to Background' },
+      { key: 'm',             desc: 'Move Menu to current layer' },
+      { key: 'c',             desc: 'Add layer to Collection' },
+      { key: '⌘C / Ctrl+C',  desc: 'Copy canvas to clipboard' },
+      { key: '⌘V / Ctrl+V',  desc: 'Paste image or text' },
+    ],
+  },
 ]
 
 type BBox = { x: number; y: number; width: number; height: number }
@@ -173,6 +196,9 @@ export class TutorialLayer extends Layer {
   private _btnBounds: BBox[] = []
   private _prevBounds: BBox | null = null
   private _nextBounds: BBox | null = null
+
+  // Cached uniform panel height (computed once on first render from all pages).
+  private _cachedPanelH: number | null = null
 
   constructor() {
     super()
@@ -192,7 +218,9 @@ export class TutorialLayer extends Layer {
   }
 
   override deserializeState(state: Record<string, unknown>): void {
-    if (typeof state.page === 'number') this._page = state.page
+    if (typeof state.page === 'number') {
+      this._page = Math.max(0, Math.min(PAGES.length - 1, state.page))
+    }
   }
 
   protected recompute(): void {}
@@ -243,6 +271,21 @@ export class TutorialLayer extends Layer {
 
   handlePointerUp(): void {}
 
+  // Keyboard page navigation — called duck-typed by LayerStackWidget.handleKey.
+  handlePageNavKey(key: string): boolean {
+    if (key === 'ArrowLeft' && this._page > 0) {
+      this._page--
+      Node.scheduleFrame?.()
+      return true
+    }
+    if (key === 'ArrowRight' && this._page < PAGES.length - 1) {
+      this._page++
+      Node.scheduleFrame?.()
+      return true
+    }
+    return false
+  }
+
   // ----------------------------------------------------------
   // Drawing
   // ----------------------------------------------------------
@@ -276,22 +319,12 @@ export class TutorialLayer extends Layer {
     // (which uses the viewport width) so it starts in the visible area.
     const panX = contentLeft(Math.min(Node.canvasWidth, Node.viewportWidth))
 
-    // Measure text to determine panel height
+    // All pages share the same panel height so nav buttons stay in one place.
+    const panH = this._uniformPanelH(ctx)
+
     ctx.font = FONT
     const textW = PANEL_W - PAD * 2
-
     const wrappedParas = page.paragraphs.map(p => this._wrapText(ctx, p, textW))
-    const textLines    = wrappedParas.reduce((n, lines) => n + lines.length, 0)
-    const paraGaps     = page.paragraphs.length - 1
-
-    const btnRows = Math.ceil(page.buttons.length / BTN_COLS)
-    const btnH    = btnRows * BTN_H + (btnRows - 1) * BTN_GAP
-
-    // Title + para text + gap + buttons + gap + nav
-    const titleH  = 22
-    const contentH = titleH + PAD / 2 + textLines * LINE_H + paraGaps * (LINE_H * 0.5) +
-                     (page.buttons.length > 0 ? PAD + btnH : 0) + PAD + NAV_SZ + PAD
-    const panH = Math.max(contentH, 120)
 
     // Panel background
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
@@ -313,7 +346,7 @@ export class TutorialLayer extends Layer {
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'top'
     ctx.fillText(page.title, panX + PAD, cy)
-    cy += titleH + PAD / 2
+    cy += 22 + PAD / 2
 
     // Body paragraphs
     ctx.font      = FONT
@@ -330,6 +363,8 @@ export class TutorialLayer extends Layer {
     this._btnBounds = []
     if (page.buttons.length > 0) {
       cy += PAD
+      const btnRows = Math.ceil(page.buttons.length / BTN_COLS)
+      const btnH    = btnRows * BTN_H + (btnRows - 1) * BTN_GAP
       for (let i = 0; i < page.buttons.length; i++) {
         const btn = page.buttons[i]!
         const col = i % BTN_COLS
@@ -338,19 +373,16 @@ export class TutorialLayer extends Layer {
         const by  = cy + row * (BTN_H + BTN_GAP)
         this._btnBounds.push({ x: bx, y: by, width: BTN_W, height: BTN_H })
 
-        // Button bg
         ctx.fillStyle = 'rgba(255,255,255,0.07)'
         ctx.beginPath()
         ctx.roundRect(bx, by, BTN_W, BTN_H, 5)
         ctx.fill()
 
-        // Colour stripe
         ctx.fillStyle = btn.colour + 'cc'
         ctx.beginPath()
         ctx.roundRect(bx, by, 3, BTN_H, [5, 0, 0, 5])
         ctx.fill()
 
-        // Label
         ctx.fillStyle    = 'rgba(255,255,255,0.85)'
         ctx.font         = '11px monospace'
         ctx.textAlign    = 'left'
@@ -360,7 +392,22 @@ export class TutorialLayer extends Layer {
       cy += btnH
     }
 
-    // Navigation arrows
+    // Shortcut key reference table
+    if (page.shortcuts && page.shortcuts.length > 0) {
+      cy += PAD
+      ctx.font         = FONT
+      ctx.textBaseline = 'top'
+      for (const row of page.shortcuts) {
+        ctx.fillStyle = 'rgba(255,220,150,0.90)'
+        ctx.textAlign = 'left'
+        ctx.fillText(row.key, panX + PAD, cy)
+        ctx.fillStyle = 'rgba(255,255,255,0.70)'
+        ctx.fillText(row.desc, panX + PAD + SHORTCUT_KEY_W, cy)
+        cy += LINE_H
+      }
+    }
+
+    // Navigation arrows (always at the same y, pinned to panel bottom)
     const navY = PANEL_Y + panH - PAD - NAV_SZ
     this._prevBounds = null
     this._nextBounds = null
@@ -377,7 +424,7 @@ export class TutorialLayer extends Layer {
       this._drawNavBtn(ctx, nb, '▶')
     }
 
-    // Page indicator (only if more than one page)
+    // Page indicator
     if (PAGES.length > 1) {
       ctx.font         = '11px monospace'
       ctx.fillStyle    = 'rgba(255,255,255,0.45)'
@@ -387,6 +434,33 @@ export class TutorialLayer extends Layer {
     }
 
     ctx.restore()
+  }
+
+  // Returns the uniform panel height — max across all pages, cached after first render.
+  private _uniformPanelH(ctx: Ctx2D): number {
+    if (this._cachedPanelH !== null) return this._cachedPanelH
+    this._cachedPanelH = Math.max(...PAGES.map(p => this._computePageHeight(ctx, p)))
+    return this._cachedPanelH
+  }
+
+  // Computes the natural height of a single page (same formula as the original per-page height).
+  private _computePageHeight(ctx: Ctx2D, page: TutPage): number {
+    ctx.font = FONT
+    const textW      = PANEL_W - PAD * 2
+    const wrappedParas = page.paragraphs.map(p => this._wrapText(ctx, p, textW))
+    const textLines  = wrappedParas.reduce((n, lines) => n + lines.length, 0)
+    const paraGaps   = Math.max(0, page.paragraphs.length - 1)
+    const btnRows    = page.buttons.length > 0 ? Math.ceil(page.buttons.length / BTN_COLS) : 0
+    const btnH       = btnRows > 0 ? btnRows * BTN_H + (btnRows - 1) * BTN_GAP : 0
+    const shortcutCount = page.shortcuts?.length ?? 0
+
+    const titleH   = 22
+    const contentH = titleH + PAD / 2
+      + textLines * LINE_H + paraGaps * (LINE_H * 0.5)
+      + (page.buttons.length  > 0    ? PAD + btnH              : 0)
+      + (shortcutCount        > 0    ? PAD + shortcutCount * LINE_H : 0)
+      + PAD + NAV_SZ + PAD
+    return Math.max(contentH, 120)
   }
 
   private _drawNavBtn(ctx: Ctx2D, b: BBox, symbol: string): void {
