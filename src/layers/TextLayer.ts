@@ -36,6 +36,7 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 const ACCENT       = '#c8c8e8'
 const DIR_ACCENT   = '#7ecfcf'
+const AM_COL       = '#4a8fe8'   // Amount type accent
 const MIN_SIZE     = 12
 const MAX_SIZE     = 120
 const DEFAULT_SIZE = 48
@@ -162,6 +163,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private readonly _sizeSlot:     ParameterSlot
   private readonly _maskSlot:     ParameterSlot
   private readonly _rotationSlot: ParameterSlot
+  private readonly _opacitySlot:  ParameterSlot
 
   // Persisted text content
   private _text: string = ''
@@ -195,6 +197,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _manualPosition: Point | null = null
   private _drag:           DragState | null = null
 
+  // Opacity — computed each recompute from slot; 1.0 when unbound
+  private _opacity = 1.0
+
   // Direct in-place text editing — ephemeral UI state, not persisted.
   private _cursorPos:        number  = 0
   private _hoverActive:      boolean = false   // mouse hovering the edit region
@@ -214,7 +219,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
     this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
     this._rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
-    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot)
+    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot)
     this.debugName = 'TextLayer'
     graph.register(this)
   }
@@ -228,6 +234,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get sizeSlot():     ParameterSlot { return this._sizeSlot     }
   get maskSlot():     ParameterSlot { return this._maskSlot     }
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
+  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
@@ -239,6 +246,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
     }
     if (slot === this._rotationSlot) return { angle: this._rotation, magnitude: 1 }
+    if (slot === this._opacitySlot)  return this._opacity
     return null
   }
 
@@ -645,6 +653,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   protected recompute(): void {
+    this._opacity = this._opacitySlot.isActive
+      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      : 1.0
+
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
       : (this._manualPosition ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 })
@@ -941,13 +953,14 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.fillStyle = 'rgba(255,255,255,0.80)'
     ctx.fillText(this._truncate(ctx, `"${this._text}"`, prevR - prevL - 72), prevL, midY)
 
-    // Slot indicators (right-to-left: rot, mask, sz, col, pos)
+    // Slot indicators (right-to-left: rot, mask, sz, col, pos, α)
     const slots = [
       { slot: this._positionSlot, label: 'pos',  accent: ACCENT },
       { slot: this._colourSlot,   label: 'col',  accent: ACCENT },
       { slot: this._sizeSlot,     label: 'sz',   accent: ACCENT },
       { slot: this._maskSlot,     label: 'mask', accent: ACCENT },
       { slot: this._rotationSlot, label: 'rot',  accent: DIR_ACCENT },
+      { slot: this._opacitySlot,  label: 'α',    accent: AM_COL },
     ]
     let dx = editB.x - 6
     ctx.font = '9px monospace'
@@ -1053,6 +1066,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const css = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a.toFixed(2)})`
 
     ctx.save()
+    ctx.globalAlpha  = Math.max(0, Math.min(1, this._opacity))
     ctx.font         = this._fontString()
     ctx.fillStyle    = css
     if (withShadow) {

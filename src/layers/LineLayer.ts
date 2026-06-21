@@ -4,7 +4,7 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
   type Colour, type ColourSource,
-  type AmountSource,
+  type Amount, type AmountSource,
   type Direction, type DirectionSource,
   type Point,  type PointSource,
   type Ctx2D,
@@ -63,6 +63,7 @@ export class LineLayer extends Layer {
   readonly directionSlot: ParameterSlot
   readonly widthSlot:     ParameterSlot
   readonly colourSlot:    ParameterSlot
+  readonly opacitySlot:   ParameterSlot
 
   private _start: Point
   private _end:   Point
@@ -73,6 +74,9 @@ export class LineLayer extends Layer {
   private _colour: Colour = { r: 0.5, g: 0.5, b: 0.5, a: 1 }  // mid grey default
   private _arrowStart = false
   private _arrowEnd   = false
+
+  // Opacity — computed each recompute from slot; 1.0 when unbound
+  private _opacity = 1.0
 
   // Offscreen canvas — all line elements composited here, then drawn once
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
@@ -118,7 +122,8 @@ export class LineLayer extends Layer {
     this.directionSlot = new ParameterSlot(ValueType.Direction, this, 'direction')
     this.widthSlot     = new ParameterSlot(ValueType.Amount,    this, 'width')
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
-    this.slots.push(this.startSlot, this.endSlot, this.directionSlot, this.widthSlot, this.colourSlot)
+    this.opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this.slots.push(this.startSlot, this.endSlot, this.directionSlot, this.widthSlot, this.colourSlot, this.opacitySlot)
     graph.register(this)
   }
 
@@ -150,6 +155,7 @@ export class LineLayer extends Layer {
     if (slot === this.startSlot)     return { ...this._start }
     if (slot === this.endSlot)       return { ...this._end   }
     if (slot === this.widthSlot)     return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))
+    if (slot === this.opacitySlot)   return this._opacity
     if (slot === this.directionSlot) {
       const dx = this._end.x - this._start.x
       const dy = this._end.y - this._start.y
@@ -163,6 +169,10 @@ export class LineLayer extends Layer {
   // ----------------------------------------------------------
 
   protected recompute(): void {
+    this._opacity = this.opacitySlot.isActive
+      ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
+      : 1.0
+
     if (this.startSlot.isActive)  this._start = (this.startSlot.source  as PointSource).getPoint()
     if (this.endSlot.isActive)    this._end   = (this.endSlot.source    as PointSource).getPoint()
     if (this.widthSlot.isActive)  this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * MAX_STROKE_W)
@@ -363,7 +373,10 @@ export class LineLayer extends Layer {
     // If canvas was resized between recomputes, rebuild before drawing.
     const cw = Node.canvasWidth, ch = Node.canvasHeight
     if (this._canvas.width !== cw || this._canvas.height !== ch) this._updateCanvas()
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.drawImage(this._canvas, 0, 0)
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -429,6 +442,17 @@ export class LineLayer extends Layer {
     ctx.font      = '10px monospace'
     ctx.fillStyle = this.widthSlot.isActive ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.70)'
     ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, x + 54, midY)
+
+    // Opacity slot indicator
+    {
+      const active = this.opacitySlot.isActive
+      ctx.font      = '9px monospace'
+      ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+      ctx.textAlign = 'right'
+      ctx.fillText(active ? '●' : '○', x + width - (2 * BTN_SZ + 4 + 3) - 8, midY)
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'
+      ctx.fillText('α', x + width - (2 * BTN_SZ + 4 + 3) - 20, midY)
+    }
 
     // Arrow toggles at right edge: end (▶) first (rightmost), then start (◀).
     let btnX = x + width - BTN_SZ - 3
@@ -497,12 +521,12 @@ export class LineLayer extends Layer {
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.directionSlot, this.colourSlot], this.panelBottom)
+    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.directionSlot, this.colourSlot, this.opacitySlot], this.panelBottom)
     this._drawWidthPill(ctx)
   }
 
   private _widthPillBounds(): BBox {
-    const mainH = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    const mainH = 5 * (SLOT_H + SLOT_GAP) - SLOT_GAP
     return {
       x:      contentLeft(Node.canvasWidth),
       y:      this.panelBottom + mainH + 8,

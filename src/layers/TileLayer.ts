@@ -5,6 +5,8 @@ import {
   ValueType,
   boundingBoxContains,
   type ImageValue, type ImageSource,
+  type Amount, type AmountSource,
+  type Direction,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -28,6 +30,7 @@ import { graph } from '../dataflow/Graph.js'
 // [Tile/Fit] button in the panel toggles between modes.
 
 const ACCENT      = '#7ecf7e'   // Image type colour
+const AM_COL      = '#4a8fe8'   // Amount type colour
 
 const BTN_W = 50
 const BTN_H = 22
@@ -44,9 +47,12 @@ type Mode = 'tile' | 'fit'
 export class TileLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
-  private readonly _sourceSlot: ParameterSlot
+  private readonly _sourceSlot:  ParameterSlot
+  private readonly _opacitySlot: ParameterSlot
 
   private _mode:       Mode = 'tile'
+  // Opacity — computed each recompute from slot; 1.0 when unbound
+  private _opacity = 1.0
   // px gap between tiles (tile mode only). Defaults to a 2px overlap
   // ("bleed") so adjacent copies abut with no hairline gap.
   private _margin:     number = MARGIN_MIN
@@ -55,8 +61,9 @@ export class TileLayer extends Layer implements ImageSource {
   constructor() {
     super()
     this._offscreen  = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
-    this._sourceSlot = new ParameterSlot(ValueType.Image, this, 'image')
-    this.slots.push(this._sourceSlot)
+    this._sourceSlot = new ParameterSlot(ValueType.Image,  this, 'image')
+    this._opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
+    this.slots.push(this._sourceSlot, this._opacitySlot)
     this.debugName = 'TileLayer'
     graph.register(this)
   }
@@ -71,7 +78,13 @@ export class TileLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get sourceSlot(): ParameterSlot { return this._sourceSlot }
+  get sourceSlot():  ParameterSlot { return this._sourceSlot  }
+  get opacitySlot(): ParameterSlot { return this._opacitySlot }
+
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this._opacitySlot) return this._opacity
+    return null
+  }
 
   // ----------------------------------------------------------
   // Mode toggle
@@ -114,6 +127,10 @@ export class TileLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
+    this._opacity = this._opacitySlot.isActive
+      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      : 1.0
+
     const w = Node.canvasWidth
     const h = Node.canvasHeight
     if (this._offscreen.width !== w || this._offscreen.height !== h) {
@@ -130,6 +147,8 @@ export class TileLayer extends Layer implements ImageSource {
 
     const bbox = this._contentBbox(src)
     if (bbox === null) return
+
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
 
     if (this._mode === 'fit') {
       // Scale so the smaller dimension of the bbox exactly fills the
@@ -263,7 +282,7 @@ export class TileLayer extends Layer implements ImageSource {
     const mpB = this._marginPlusBtnBounds()
     this._drawBtn(ctx, mpB, '+', this._margin < MARGIN_MAX ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.18)')
 
-    // Slot indicator — img
+    // Slot indicators — right to left: img, then α
     ctx.font      = '9px monospace'
     ctx.textAlign = 'right'
     let dx = x + width - 8
@@ -272,6 +291,12 @@ export class TileLayer extends Layer implements ImageSource {
     dx -= 12
     ctx.fillStyle = 'rgba(255,255,255,0.35)'
     ctx.fillText('img', dx, midY)
+    dx -= 24
+    ctx.fillStyle = this._opacitySlot.isActive ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.fillText(this._opacitySlot.isActive ? '●' : '○', dx, midY)
+    dx -= 8
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'
+    ctx.fillText('α', dx, midY)
 
     ctx.restore()
   }

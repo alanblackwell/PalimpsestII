@@ -4,7 +4,7 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
   type Colour, type ColourSource,
-  type AmountSource,
+  type Amount, type AmountSource,
   type Point,  type PointSource,
   type ImageValue, type ImageSource,
   type MaskValue,  type MaskSource,
@@ -80,6 +80,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   readonly startSlot:    ParameterSlot
   readonly endSlot:      ParameterSlot
   readonly rotationSlot: ParameterSlot
+  readonly opacitySlot:  ParameterSlot
 
   // Drawing state
   private _drawMode  = true
@@ -124,6 +125,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   private _drag: DragState | null = null
   private _strokeSliderDrag = false
 
+  // Opacity — computed each recompute from slot; 1.0 when unbound
+  private _opacity = 1.0
+
   // Draw-button bounds (written during renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BBox | null = null
 
@@ -140,7 +144,8 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this.startSlot    = new ParameterSlot(ValueType.Point,     this, 'start')
     this.endSlot      = new ParameterSlot(ValueType.Point,     this, 'end')
     this.rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
-    this.slots.push(this.widthSlot, this.colourSlot, this.startSlot, this.endSlot, this.rotationSlot)
+    this.opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this.slots.push(this.widthSlot, this.colourSlot, this.startSlot, this.endSlot, this.rotationSlot, this.opacitySlot)
 
     graph.register(this)
   }
@@ -195,6 +200,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this.widthSlot)    return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
     if (slot === this.rotationSlot) return { angle: this._rotation, magnitude: 1 }
+    if (slot === this.opacitySlot)  return this._opacity
     return null
   }
 
@@ -246,6 +252,10 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // ----------------------------------------------------------
 
   protected recompute(): void {
+    this._opacity = this.opacitySlot.isActive
+      ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
+      : 1.0
+
     if (this.widthSlot.isActive) {
       this._strokeWidth = Math.max(0.5, (this.widthSlot.source as AmountSource).getAmount() * MAX_STROKE_WIDTH)
     }
@@ -408,6 +418,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     ctx.clearRect(0, 0, w, h)
     if (this._localSegs.length === 0) return
     const c = this._colour
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.strokeStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
     ctx.lineWidth   = this._strokeWidth
     ctx.lineCap     = 'round'
@@ -415,6 +426,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     ctx.beginPath()
     this._buildCtxPath(ctx)
     ctx.stroke()
+    ctx.globalAlpha = 1
   }
 
   private _updateMask(): void {
@@ -444,6 +456,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     const css = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
 
     ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.lineCap  = 'round'
     ctx.lineJoin = 'round'
     ctx.lineWidth = this._strokeWidth
@@ -924,6 +937,17 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
         : `Stroke  ${this._localSegs.length} seg  ${Math.round(this._strokeWidth)}px`,
       x + 28, midY,
     )
+
+    // Opacity slot indicator (canvas-space pill only, before draw button)
+    if (width >= panelWidth(Node.canvasWidth)) {
+      const active = this.opacitySlot.isActive
+      ctx.font      = '9px monospace'
+      ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+      ctx.textAlign = 'right'
+      ctx.fillText(active ? '●' : '○', x + width - 56, midY)
+      ctx.fillStyle = 'rgba(255,255,255,0.35)'
+      ctx.fillText('α', x + width - 68, midY)
+    }
 
     // Draw / Done button (canvas-space pill only)
     if (width >= panelWidth(Node.canvasWidth)) {

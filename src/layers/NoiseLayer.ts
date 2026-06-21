@@ -356,6 +356,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   private readonly _detailSlot:   ParameterSlot
   private readonly _positionSlot: ParameterSlot
   private readonly _driftSlot:    ParameterSlot
+  private readonly _opacitySlot:  ParameterSlot
 
   private _noiseIndex: number = 0       // default: static
   private _seed:       number = 0
@@ -373,6 +374,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // Index (0=scale, 1=speed, 2=warp, 3=drift) of the slider currently being
   // dragged, or null if none.
   private _sliderDrag: number | null = null
+
+  // Opacity — 0.55 default matches the previous hardcoded overlay alpha.
+  // Computed each recompute from slot when bound.
+  private _opacity = 0.55
 
   // Resolved each recompute
   private _frequency:  number = DEFAULT_FREQ
@@ -406,9 +411,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._detailSlot   = new ParameterSlot(ValueType.Amount,    this, 'warp')
     this._positionSlot = new ParameterSlot(ValueType.Point,     this, 'sample')
     this._driftSlot    = new ParameterSlot(ValueType.Direction, this, 'drift')
+    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this.slots.push(
       this._timeSlot, this._speedSlot, this._scaleSlot,
-      this._detailSlot, this._positionSlot, this._driftSlot,
+      this._detailSlot, this._positionSlot, this._driftSlot, this._opacitySlot,
     )
 
     for (let i = 0; i < MAX_DROPS; i++) this._drops.push(dropParams(i, this._seed))
@@ -441,15 +447,17 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   get detailSlot():   ParameterSlot { return this._detailSlot   }
   get positionSlot(): ParameterSlot { return this._positionSlot }
   get driftSlot():    ParameterSlot { return this._driftSlot    }
+  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual slider, so the binding
   // starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this._scaleSlot)  return this._scale
-    if (slot === this._speedSlot)  return this._speed
-    if (slot === this._detailSlot) return this._detail
-    if (slot === this._driftSlot)  return this._drift
+    if (slot === this._scaleSlot)   return this._scale
+    if (slot === this._speedSlot)   return this._speed
+    if (slot === this._detailSlot)  return this._detail
+    if (slot === this._driftSlot)   return this._drift
+    if (slot === this._opacitySlot) return this._opacity
     return null
   }
 
@@ -504,6 +512,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
+    this._opacity = this._opacitySlot.isActive
+      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      : 0.55
+
     const elapsed = this._timeSlot.isActive
       ? (this._timeSlot.source as AmountSource).getAmount() as Amount
       : 0
@@ -639,13 +651,11 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    // Blit noise texture full-canvas at reduced opacity for overlay effect
     const cw = (ctx as CanvasRenderingContext2D).canvas?.width  ?? this._noiseCanvas.width
     const ch = (ctx as CanvasRenderingContext2D).canvas?.height ?? this._noiseCanvas.height
     ctx.save()
-    ctx.globalAlpha = 0.55
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.drawImage(this._noiseCanvas as CanvasImageSource, 0, 0, cw, ch)
-    ctx.globalAlpha = 1
     ctx.restore()
   }
 
@@ -708,6 +718,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
     // Indicators
     this._drawIndicators(ctx, [
+      { slot: this._opacitySlot,  label: 'α',    accent: AM_COL },
       { slot: this._timeSlot,     label: 'time' },
       { slot: this._positionSlot, label: 'pos'  },
     ], x + width - 8, r1.midY)
@@ -794,14 +805,14 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     ctx.fill()
   }
 
-  private _drawIndicators(ctx: Ctx2D, items: Array<{ slot: ParameterSlot; label: string }>, rightX: number, midY: number): void {
+  private _drawIndicators(ctx: Ctx2D, items: Array<{ slot: ParameterSlot; label: string; accent?: string }>, rightX: number, midY: number): void {
     let dx = rightX
     ctx.font         = '9px monospace'
     ctx.textBaseline = 'middle'
     for (let i = items.length - 1; i >= 0; i--) {
-      const { slot, label } = items[i]!
+      const { slot, label, accent = ACCENT } = items[i]!
       const active = slot.isActive
-      ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.22)'
+      ctx.fillStyle = active ? accent : 'rgba(255,255,255,0.22)'
       ctx.textAlign = 'right'
       ctx.fillText(active ? '●' : '○', dx, midY)
       dx -= 12

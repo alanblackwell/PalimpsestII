@@ -90,8 +90,8 @@ export class ImageLayer extends Layer implements ImageSource {
   constructor() {
     super()
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
-    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this)
-    this._scaleSlot    = new ParameterSlot(ValueType.Amount,    this)
+    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this._scaleSlot    = new ParameterSlot(ValueType.Amount,    this, 'scale')
     this._rotationSlot = new ParameterSlot(ValueType.Direction, this)
     this.slots.push(this._positionSlot, this._opacitySlot, this._scaleSlot, this._rotationSlot)
     this.debugName = 'ImageLayer'

@@ -200,6 +200,63 @@ function _edges(d: Uint8ClampedArray, t: number, w: number, h: number): void {
   }
 }
 
+// ── Gradient map (neon chrome: 4-stop luminance palette) ──────────
+// t blends from original to fully mapped.
+function _gradientMap(d: Uint8ClampedArray, t: number): void {
+  const s0r = 8,   s0g = 4,   s0b = 20   // near-black purple (shadow)
+  const s1r = 30,  s1g = 80,  s1b = 200  // electric blue
+  const s2r = 0,   s2g = 220, s2b = 240  // bright cyan (peak)
+  const s3r = 180, s3g = 240, s3b = 255  // ice-blue rolloff (highlight)
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i]!, g = d[i+1]!, b = d[i+2]!
+    const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255
+    let mr: number, mg: number, mb: number
+    if (lum < 0.33) {
+      const f = lum / 0.33
+      mr = s0r + (s1r-s0r)*f;  mg = s0g + (s1g-s0g)*f;  mb = s0b + (s1b-s0b)*f
+    } else if (lum < 0.66) {
+      const f = (lum - 0.33) / 0.33
+      mr = s1r + (s2r-s1r)*f;  mg = s1g + (s2g-s1g)*f;  mb = s1b + (s2b-s1b)*f
+    } else {
+      const f = (lum - 0.66) / 0.34
+      mr = s2r + (s3r-s2r)*f;  mg = s2g + (s3g-s2g)*f;  mb = s2b + (s3b-s2b)*f
+    }
+    d[i]   = Math.round(r + (mr - r) * t)
+    d[i+1] = Math.round(g + (mg - g) * t)
+    d[i+2] = Math.round(b + (mb - b) * t)
+  }
+}
+
+// ── False colour (thermal: blue→green→red) ───────────────────────
+// Maps luminance 0→1 to hue 240°→0° (S=1, V=1); t blends from original.
+function _falseColour(d: Uint8ClampedArray, t: number): void {
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i]!, g = d[i+1]!, b = d[i+2]!
+    const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255
+    const h  = (1 - lum) * 240
+    const hi = Math.floor(h / 60) % 6
+    const f  = h / 60 - Math.floor(h / 60)
+    let fr: number, fg: number, fb: number
+    switch (hi) {
+      case 0:  fr = 1;   fg = f;   fb = 0; break
+      case 1:  fr = 1-f; fg = 1;   fb = 0; break
+      case 2:  fr = 0;   fg = 1;   fb = f; break
+      case 3:  fr = 0;   fg = 1-f; fb = 1; break
+      default: fr = f;   fg = 0;   fb = 1; break  // hi == 4 (h in [240, 300))
+    }
+    d[i]   = Math.round(r + (fr*255 - r) * t)
+    d[i+1] = Math.round(g + (fg*255 - g) * t)
+    d[i+2] = Math.round(b + (fb*255 - b) * t)
+  }
+}
+
+// ── Opacity ───────────────────────────────────────────────────────
+function _opacity(d: Uint8ClampedArray, t: number): void {
+  for (let i = 0; i < d.length; i += 4) {
+    d[i+3] = Math.round(d[i+3]! * t)
+  }
+}
+
 // ── Solarisation (Sabattier effect) ───────────────────────────────
 // Pixels brighter than the fold point are inverted; darker pass through.
 // t = 0.5 is the classic darkroom fold at mid-tone.
@@ -374,7 +431,10 @@ const FILTER_DEFS: readonly FilterDef[] = [
   { label: 'solarise',   defaultT: 0.50, apply: _solarise   },
   { label: 'pixelise',   defaultT: 0.10, apply: _pixelise   },
   { label: 'mosaic',     defaultT: 0.15, apply: _mosaic     },
-  { label: 'shadow',     defaultT: 0.40, apply: _dropShadow },
+  { label: 'shadow',        defaultT: 0.40, apply: _dropShadow  },
+  { label: 'opacity',       defaultT: 1.00, apply: _opacity     },
+  { label: 'gradient-map',  defaultT: 1.00, apply: _gradientMap },
+  { label: 'false-colour',  defaultT: 1.00, apply: _falseColour },
 ]
 
 // ── Per-filter state ─────────────────────────────────────────
@@ -448,6 +508,10 @@ export class FilterLayer extends Layer implements ImageSource {
   // Working canvas for ImageData operations and thumbnail capture.
   private _workCanvas: OffscreenCanvas | null = null
   private _result:     OffscreenCanvas | null = null
+
+  // Opacity applied in renderSelf() via globalAlpha, bypassing the filter
+  // pipeline so premultiplied-alpha round-trips in WebGL can't corrupt it.
+  private _renderOpacity = 1.0
 
   // Drag-to-reorder state.
   private _dragRow:     number = -1   // index of row being dragged
@@ -616,8 +680,12 @@ export class FilterLayer extends Layer implements ImageSource {
     spctx.clearRect(0, 0, THUMB_W, THUMB_H)
     spctx.drawImage(src as CanvasImageSource, 0, 0, THUMB_W, THUMB_H)
 
-    // Build the list of enabled steps for the pipeline.
-    const enabledRows: FilterRow[] = this._rows.filter(r => r.enabled)
+    // Opacity is applied in renderSelf() via globalAlpha — not in the pipeline.
+    const opRow = this._rows.find(r => r.def.label === 'opacity')
+    this._renderOpacity = (opRow?.enabled === true) ? Math.max(0, Math.min(1, opRow.intensity)) : 1.0
+
+    // Build the list of enabled steps for the pipeline (opacity excluded).
+    const enabledRows: FilterRow[] = this._rows.filter(r => r.enabled && r.def.label !== 'opacity')
     const steps = enabledRows.map(r => ({ label: r.def.label, intensity: r.intensity }))
 
     // ── WebGL pipeline (preferred) ───────────────────────────
@@ -656,7 +724,7 @@ export class FilterLayer extends Layer implements ImageSource {
     const d = imageData.data
 
     for (const row of this._rows) {
-      if (!row.enabled) continue
+      if (!row.enabled || row.def.label === 'opacity') continue
       row.def.apply(d, row.intensity, w, h)
       wctx.putImageData(imageData, 0, 0)
       let prev = this._rowPreviews.get(row)
@@ -677,7 +745,10 @@ export class FilterLayer extends Layer implements ImageSource {
 
   renderSelf(ctx: Ctx2D): void {
     if (this._result === null) return
+    ctx.save()
+    ctx.globalAlpha = this._renderOpacity
     ctx.drawImage(this._result as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
+    ctx.restore()
   }
 
   private _pillsPerCol(): number {

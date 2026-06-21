@@ -6,6 +6,8 @@ import {
   boundingBoxContains,
   type ImageValue, type ImageSource,
   type EventValue, type EventSource,
+  type Amount, type AmountSource,
+  type Direction,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -14,6 +16,7 @@ import { graph } from '../dataflow/Graph.js'
 
 const ACCENT     = '#7ecf7e'   // Image type colour
 const ROT_ACCENT = '#7ecfcf'   // Direction type colour for rotation handle
+const AM_COL     = '#4a8fe8'   // Amount type accent
 const STRIPE     = 4
 
 // Source-selector button row  [🎥][⊞][📁]
@@ -111,8 +114,12 @@ export class VideoLayer extends Layer implements ImageSource {
   private _status   = ''
 
   // Enable slot — rising edge toggles freeze (stream) or play/pause (file)
-  readonly enableSlot: ParameterSlot
+  readonly enableSlot:  ParameterSlot
+  readonly opacitySlot: ParameterSlot
   private _lastEventTime: EventValue = null
+
+  // Opacity — computed each recompute from slot; 1.0 when unbound
+  private _opacity = 1.0
 
   // ── Display transform ─────────────────────────────────────────
   private _cx              = 0
@@ -149,8 +156,9 @@ export class VideoLayer extends Layer implements ImageSource {
     super()
     this.debugName = 'Video'
 
-    this.enableSlot = new ParameterSlot(ValueType.Event, this, 'enable toggle')
-    this.slots.push(this.enableSlot)
+    this.enableSlot  = new ParameterSlot(ValueType.Event,  this, 'enable toggle')
+    this.opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
+    this.slots.push(this.enableSlot, this.opacitySlot)
 
     this._video = document.createElement('video')
     this._video.playsInline = true
@@ -191,6 +199,11 @@ export class VideoLayer extends Layer implements ImageSource {
   // ── ImageSource ───────────────────────────────────────────────
 
   getImage(): ImageValue { return this._result }
+
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+    if (slot === this.opacitySlot) return this._opacity
+    return null
+  }
 
   // ── File loading (public — called from drag-and-drop in main.ts) ──
 
@@ -280,6 +293,10 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   protected recompute(): void {
+    this._opacity = this.opacitySlot.isActive
+      ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
+      : 1.0
+
     // Rising edge on enable slot toggles freeze (stream) or play/pause (file).
     if (this.enableSlot.isActive) {
       const t = (this.enableSlot.source as EventSource).getEventTime()
@@ -314,6 +331,7 @@ export class VideoLayer extends Layer implements ImageSource {
       ctx.clearRect(0, 0, cw, ch)
       if (this._displayW > 0 && this._displayH > 0) {
         ctx.save()
+        ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
         ctx.translate(this._cx, this._cy)
         ctx.rotate(this._rotation)
         ctx.drawImage(this._video,
@@ -926,6 +944,17 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.textAlign = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText('Video', x + 12, y + height / 2)
+
+    // Opacity slot indicator
+    const midY  = y + height / 2
+    const active = this.opacitySlot.isActive
+    ctx.font      = '9px monospace'
+    ctx.textAlign = 'right'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.fillText(active ? '●' : '○', x + width - 8, midY)
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'
+    ctx.fillText('α', x + width - 20, midY)
+
     ctx.restore()
   }
 

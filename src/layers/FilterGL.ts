@@ -184,6 +184,48 @@ void main() {
   gl_FragColor = texture2D(uTex, clamp(buv, 0.0, 1.0));
 }`,
 
+  // Gradient map: neon chrome 4-stop palette, blended by uT.
+  'gradient-map': /* glsl */`
+precision mediump float;
+uniform sampler2D uTex;
+uniform float uT;
+varying vec2 vUv;
+void main() {
+  vec4 c = texture2D(uTex, vUv);
+  float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+  vec3 s0 = vec3(0.031, 0.016, 0.078);   // near-black purple
+  vec3 s1 = vec3(0.118, 0.314, 0.784);   // electric blue
+  vec3 s2 = vec3(0.000, 0.863, 0.941);   // bright cyan
+  vec3 s3 = vec3(0.706, 0.941, 1.000);   // ice-blue rolloff
+  vec3 mapped = lum < 0.33
+    ? mix(s0, s1, lum / 0.33)
+    : lum < 0.66
+      ? mix(s1, s2, (lum - 0.33) / 0.33)
+      : mix(s2, s3, (lum - 0.66) / 0.34);
+  gl_FragColor = vec4(mix(c.rgb, mapped, uT), c.a);
+}`,
+
+  // False colour: thermal palette blue→green→red, blended by uT.
+  'false-colour': /* glsl */`
+precision mediump float;
+uniform sampler2D uTex;
+uniform float uT;
+varying vec2 vUv;
+vec3 hue2rgb(float h) {
+  float hi = mod(floor(h / 60.0), 6.0);
+  float f  = fract(h / 60.0);
+  if (hi < 1.0) return vec3(1.0, f, 0.0);
+  if (hi < 2.0) return vec3(1.0 - f, 1.0, 0.0);
+  if (hi < 3.0) return vec3(0.0, 1.0, f);
+  if (hi < 4.0) return vec3(0.0, 1.0 - f, 1.0);
+  return vec3(f, 0.0, 1.0);
+}
+void main() {
+  vec4 c = texture2D(uTex, vUv);
+  float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
+  gl_FragColor = vec4(mix(c.rgb, hue2rgb((1.0 - lum) * 240.0), uT), c.a);
+}`,
+
   // Sobel edge detection — direction-invariant magnitude, source alpha preserved.
   edges: /* glsl */`
 precision mediump float;
