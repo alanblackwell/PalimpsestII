@@ -44,6 +44,7 @@ import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
+import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import * as Persistence      from '../persistence/Persistence.js'
 
 // Bind a RateLayer's timeSlot to the shared singleton Clock, if not already
@@ -821,6 +822,17 @@ interaction.setSlotClickCallback((consumer, slot) => {
 })
 
 interaction.setRefreshCallback(() => refreshStack())
+
+interaction.setCreateBindingMapCallback((source) => {
+  const layer = new BindingMapLayer(source)
+  Layer.assignDebugName(layer)
+  layer.bounds = { x: X, y: 24, width: W, height: 36 }
+  const sel = widget.selected
+  if (sel !== null) insertAboveSelected(layer, sel)
+  else layer.insertAbove(lowestAnchor())
+  postInsertLayer(layer)
+  refreshStack(layer)
+})
 
 // Permanently remove a layer from the archive and clear any bindings that
 // still source from it.  We snapshot dependents before iterating because

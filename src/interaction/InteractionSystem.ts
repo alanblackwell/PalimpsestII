@@ -166,6 +166,7 @@ export class InteractionSystem {
   private _onMaskDrop:     ((source: Node, target: Layer) => void) | null = null
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
+  private _createBindingMap: ((source: Node) => void) | null = null
 
   // Inspector popup element (right-click on a slot).
   private _inspector: HTMLElement | null = null
@@ -289,6 +290,12 @@ export class InteractionSystem {
   // (i.e. a binding is removed).  Should call refreshStack() in main.ts.
   setRefreshCallback(fn: () => void): void {
     this._refreshCallback = fn
+  }
+
+  // Register a callback invoked when "Map" is clicked in the binding inspector.
+  // Should create a BindingMapLayer for the given source node.
+  setCreateBindingMapCallback(fn: (source: Node) => void): void {
+    this._createBindingMap = fn
   }
 
   // Remove all event listeners.  Call when the canvas is torn down.
@@ -1052,10 +1059,37 @@ export class InteractionSystem {
     const consumerName = slot.owner.debugName
     const slotLabel    = slot.label
 
-    // Header
+    // Header row: label left, optional Map button right
     const header = document.createElement('div')
-    header.style.cssText = 'font-weight:bold;margin-bottom:8px;color:rgba(255,255,255,0.55);font-size:10px;letter-spacing:1px'
-    header.textContent = 'BINDING'
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'
+
+    const headerLabel = document.createElement('span')
+    headerLabel.style.cssText = 'font-weight:bold;color:rgba(255,255,255,0.55);font-size:10px;letter-spacing:1px'
+    headerLabel.textContent = 'BINDING'
+    header.appendChild(headerLabel)
+
+    if (this._createBindingMap !== null) {
+      const mapBtn = document.createElement('button')
+      mapBtn.textContent = '∿ Map'
+      mapBtn.style.cssText = [
+        'background:rgba(80,60,140,0.45)',
+        'color:#c4aaff',
+        'border:none',
+        'border-radius:4px',
+        'padding:3px 8px',
+        'font:10px monospace',
+        'cursor:pointer',
+        'letter-spacing:0.5px',
+      ].join(';')
+      const createFn = this._createBindingMap
+      const source   = bl.source
+      mapBtn.addEventListener('click', () => {
+        this._closeInspector()
+        createFn(source)
+      })
+      header.appendChild(mapBtn)
+    }
+
     panel.appendChild(header)
 
     // Binding description
