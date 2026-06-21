@@ -161,12 +161,16 @@ function _boxV(d: Uint8ClampedArray, w: number, h: number, r: number): void {
   }
 }
 
-// ── Threshold: transparent where darker than amount ────────────
+// ── Threshold: centre (t=0.5) = no effect; t→0 cuts dark areas,
+//   t→1 cuts light areas.
 function _threshold(d: Uint8ClampedArray, t: number): void {
-  const thresh = t * 255
   for (let i = 0; i < d.length; i += 4) {
     const lum = 0.2126 * d[i]! + 0.7152 * d[i+1]! + 0.0722 * d[i+2]!
-    if (lum < thresh) d[i+3] = 0
+    if (t < 0.5) {
+      if (lum < (1 - 2 * t) * 255) d[i+3] = 0
+    } else {
+      if (lum > (2 - 2 * t) * 255) d[i+3] = 0
+    }
   }
 }
 
@@ -579,8 +583,9 @@ export class FilterLayer extends Layer implements ImageSource {
 
   override autoBindRules() {
     return [{
-      slot:    this._sourceSlot,
-      accepts: (l: Layer) => l.types.has(ValueType.Image),
+      slot:                  this._sourceSlot,
+      accepts:               (l: Layer) => l.types.has(ValueType.Image),
+      sendToBackgroundAfterBind: true,
     }]
   }
 
