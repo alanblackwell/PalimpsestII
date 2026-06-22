@@ -415,17 +415,17 @@ export class WarpLayer extends Layer implements ImageSource {
         ctx.lineWidth   = 1.5
         ctx.setLineDash([])
       } else {
-        // Unbound — faint fill + dashed outline, clearly visible
-        ctx.fillStyle = 'rgba(255,255,255,0.10)'
+        // Unbound — faint purple fill + dashed PT_ACCENT outline, visible on white or dark
+        ctx.fillStyle = PT_ACCENT + '30'
         ctx.fill()
-        ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+        ctx.strokeStyle = PT_ACCENT + 'b0'
         ctx.lineWidth   = 1.5
         ctx.setLineDash([4, 3])
       }
       ctx.stroke()
       ctx.setLineDash([])
 
-      ctx.fillStyle = active ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.65)'
+      ctx.fillStyle = active ? 'rgba(255,255,255,0.9)' : PT_ACCENT
       ctx.fillText(String(i + 1), curr.x, curr.y)
     }
 
@@ -476,7 +476,7 @@ export class WarpLayer extends Layer implements ImageSource {
     Layer.assignDebugName(pl)
     pl.isHiddenHelper = true
     pl.helperHost     = this
-    pl.insertBelow(this)
+    pl.insertAbove(this)
     this._hiddenPL[i] = pl
     // BindingLayer.create removes any prior binding then binds pl, making
     // right-click on this slot show the standard binding inspector.
