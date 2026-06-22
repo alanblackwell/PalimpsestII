@@ -368,6 +368,7 @@ clock.bounds = { x: X, y: 24, width: W, height: 36 }
 clock.outsideStack = true
 root.setClock(clock)
 evaluator.setClock(clock)
+Node.clock = clock
 
 const deletionLayer = new DeletionLayer()
 deletionLayer.bounds = { x: X, y: 24, width: W, height: 36 }

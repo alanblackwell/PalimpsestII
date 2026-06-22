@@ -384,6 +384,7 @@ export class PointLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
 
   private _wanderTick(): void {
+    if (Node.clock?.paused) return
     const now = performance.now()
     if (this._lastTickTime === null) {
       this._lastTickTime = now

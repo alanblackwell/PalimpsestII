@@ -40,6 +40,7 @@ export abstract class Node {
   // a render frame without nodes needing to import the Evaluator.
   // ----------------------------------------------------------
   static scheduleFrame: (() => void) | null = null
+  static clock: { readonly paused: boolean } | null = null
 
   // Shared bind-drag state — set by LayerStackWidget, read by Layer.renderSlots
   // and Evaluator to draw the cursor overlay.
