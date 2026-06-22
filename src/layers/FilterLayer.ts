@@ -204,30 +204,48 @@ function _edges(d: Uint8ClampedArray, t: number, w: number, h: number): void {
   }
 }
 
-// ── Gradient map (neon chrome: 4-stop luminance palette) ──────────
-// t blends from original to fully mapped.
+// ── Gradient map ──────────────────────────────────────────────────
+// t=0.5 = pass-through (no effect).
+// t=0   = chrome: cool gunmetal shadows → cold steel → silver → icy white.
+// t=1   = neon:   deep purple → hot pink → neon lime → electric yellow.
 function _gradientMap(d: Uint8ClampedArray, t: number): void {
-  const s0r = 8,   s0g = 4,   s0b = 20   // near-black purple (shadow)
-  const s1r = 30,  s1g = 80,  s1b = 200  // electric blue
-  const s2r = 0,   s2g = 220, s2b = 240  // bright cyan (peak)
-  const s3r = 180, s3g = 240, s3b = 255  // ice-blue rolloff (highlight)
+  const useChrome = t < 0.5
+  const blend = useChrome ? 1 - t * 2 : (t - 0.5) * 2
+
+  // Chrome palette (luminance stops 0 / 0.33 / 0.66 / 1.0)
+  const cr0r=18,  cr0g=18,  cr0b=24    // gunmetal
+  const cr1r=58,  cr1g=68,  cr1b=88    // cold steel
+  const cr2r=160, cr2g=168, cr2b=180   // silver
+  const cr3r=230, cr3g=235, cr3b=242   // icy white
+
+  // Neon palette (luminance stops 0 / 0.33 / 0.66 / 1.0)
+  const ne0r=8,   ne0g=4,   ne0b=20    // deep purple
+  const ne1r=255, ne1g=10,  ne1b=145   // hot pink
+  const ne2r=150, ne2g=255, ne2b=20    // neon lime
+  const ne3r=235, ne3g=255, ne3b=20    // electric yellow
+
+  const p0r=useChrome?cr0r:ne0r, p0g=useChrome?cr0g:ne0g, p0b=useChrome?cr0b:ne0b
+  const p1r=useChrome?cr1r:ne1r, p1g=useChrome?cr1g:ne1g, p1b=useChrome?cr1b:ne1b
+  const p2r=useChrome?cr2r:ne2r, p2g=useChrome?cr2g:ne2g, p2b=useChrome?cr2b:ne2b
+  const p3r=useChrome?cr3r:ne3r, p3g=useChrome?cr3g:ne3g, p3b=useChrome?cr3b:ne3b
+
   for (let i = 0; i < d.length; i += 4) {
     const r = d[i]!, g = d[i+1]!, b = d[i+2]!
     const lum = (0.2126*r + 0.7152*g + 0.0722*b) / 255
     let mr: number, mg: number, mb: number
     if (lum < 0.33) {
       const f = lum / 0.33
-      mr = s0r + (s1r-s0r)*f;  mg = s0g + (s1g-s0g)*f;  mb = s0b + (s1b-s0b)*f
+      mr = p0r + (p1r-p0r)*f;  mg = p0g + (p1g-p0g)*f;  mb = p0b + (p1b-p0b)*f
     } else if (lum < 0.66) {
       const f = (lum - 0.33) / 0.33
-      mr = s1r + (s2r-s1r)*f;  mg = s1g + (s2g-s1g)*f;  mb = s1b + (s2b-s1b)*f
+      mr = p1r + (p2r-p1r)*f;  mg = p1g + (p2g-p1g)*f;  mb = p1b + (p2b-p1b)*f
     } else {
       const f = (lum - 0.66) / 0.34
-      mr = s2r + (s3r-s2r)*f;  mg = s2g + (s3g-s2g)*f;  mb = s2b + (s3b-s2b)*f
+      mr = p2r + (p3r-p2r)*f;  mg = p2g + (p3g-p2g)*f;  mb = p2b + (p3b-p2b)*f
     }
-    d[i]   = Math.round(r + (mr - r) * t)
-    d[i+1] = Math.round(g + (mg - g) * t)
-    d[i+2] = Math.round(b + (mb - b) * t)
+    d[i]   = Math.round(r + (mr-r)*blend)
+    d[i+1] = Math.round(g + (mg-g)*blend)
+    d[i+2] = Math.round(b + (mb-b)*blend)
   }
 }
 
@@ -437,7 +455,7 @@ const FILTER_DEFS: readonly FilterDef[] = [
   { label: 'mosaic',     defaultT: 0.15, apply: _mosaic     },
   { label: 'shadow',        defaultT: 0.40, apply: _dropShadow  },
   { label: 'opacity',       defaultT: 1.00, apply: _opacity     },
-  { label: 'gradient-map',  defaultT: 1.00, apply: _gradientMap },
+  { label: 'gradient-map',  defaultT: 0.50, apply: _gradientMap },
   { label: 'false-colour',  defaultT: 1.00, apply: _falseColour },
 ]
 

@@ -50,6 +50,7 @@ import { EllipseLayer }      from '../layers/EllipseLayer.js'
 import { PathLayer }         from '../layers/PathLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import { WarpLayer }         from '../layers/WarpLayer.js'
+import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
 
 // ------------------------------------------------------------
 // Persistence — save/load a Palimpsest session as a single JSON document
@@ -165,6 +166,7 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   PathLayer:        () => new PathLayer(),
   BindingMapLayer:  () => new BindingMapLayer(),
   WarpLayer:        () => new WarpLayer(),
+  MotionBlurLayer:  () => new MotionBlurLayer(),
 }
 
 // ------------------------------------------------------------

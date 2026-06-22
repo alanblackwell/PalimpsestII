@@ -39,6 +39,7 @@ import { StrokeLayer }     from './StrokeLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
 import { LineLayer }       from './LineLayer.js'
 import { WarpLayer }       from './WarpLayer.js'
+import { MotionBlurLayer } from './MotionBlurLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -157,7 +158,8 @@ const COLUMNS: ColDef[] = [
       { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer() },
       { label: 'Transform', colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
       { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer() },
-      { label: 'Warp',      colour: '#7ecf7e', factory: ()          => new WarpLayer() },
+      { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer() },
+      { label: 'MotionBlur', colour: '#7ecf7e', factory: ()          => new MotionBlurLayer() },
     ],
   },
 

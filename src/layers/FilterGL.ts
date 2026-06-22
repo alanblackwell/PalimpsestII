@@ -190,25 +190,42 @@ void main() {
   gl_FragColor = texture2D(uTex, clamp(buv, 0.0, 1.0));
 }`,
 
-  // Gradient map: neon chrome 4-stop palette, blended by uT.
+  // Gradient map: t=0.5 pass-through; t=0 chrome; t=1 neon.
   'gradient-map': /* glsl */`
 precision mediump float;
 uniform sampler2D uTex;
 uniform float uT;
 varying vec2 vUv;
+vec3 samplePalette(float lum, vec3 p0, vec3 p1, vec3 p2, vec3 p3) {
+  return lum < 0.33
+    ? mix(p0, p1, lum / 0.33)
+    : lum < 0.66
+      ? mix(p1, p2, (lum - 0.33) / 0.33)
+      : mix(p2, p3, (lum - 0.66) / 0.34);
+}
 void main() {
   vec4 c = texture2D(uTex, vUv);
   float lum = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-  vec3 s0 = vec3(0.031, 0.016, 0.078);   // near-black purple
-  vec3 s1 = vec3(0.118, 0.314, 0.784);   // electric blue
-  vec3 s2 = vec3(0.000, 0.863, 0.941);   // bright cyan
-  vec3 s3 = vec3(0.706, 0.941, 1.000);   // ice-blue rolloff
-  vec3 mapped = lum < 0.33
-    ? mix(s0, s1, lum / 0.33)
-    : lum < 0.66
-      ? mix(s1, s2, (lum - 0.33) / 0.33)
-      : mix(s2, s3, (lum - 0.66) / 0.34);
-  gl_FragColor = vec4(mix(c.rgb, mapped, uT), c.a);
+  vec3 chromeMapped = samplePalette(lum,
+    vec3(0.071, 0.071, 0.094),   // gunmetal
+    vec3(0.227, 0.267, 0.345),   // cold steel
+    vec3(0.627, 0.659, 0.706),   // silver
+    vec3(0.902, 0.922, 0.949));  // icy white
+  vec3 neonMapped = samplePalette(lum,
+    vec3(0.031, 0.016, 0.078),   // deep purple
+    vec3(1.000, 0.039, 0.569),   // hot pink
+    vec3(0.588, 1.000, 0.078),   // neon lime
+    vec3(0.922, 1.000, 0.078));  // electric yellow
+  vec3 mapped;
+  float blend;
+  if (uT < 0.5) {
+    mapped = chromeMapped;
+    blend = 1.0 - uT * 2.0;
+  } else {
+    mapped = neonMapped;
+    blend = (uT - 0.5) * 2.0;
+  }
+  gl_FragColor = vec4(mix(c.rgb, mapped, blend), c.a);
 }`,
 
   // False colour: thermal palette blue→green→red, blended by uT.

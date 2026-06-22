@@ -450,6 +450,7 @@ and the mask source to `BackgroundLayer`).
 | `src/layers/BackgroundLayer.ts` | Off-stack collection for layers that must keep recomputing |
 | `src/layers/ClockLayer.ts` | Singleton time source, `outsideStack` but ticked every frame |
 | `src/layers/FilterGL.ts` | Shared WebGL pipeline singleton for `FilterLayer` |
+| `src/layers/MotionBlurLayer.ts` | Temporal image accumulation / motion trails |
 | `src/persistence/Persistence.ts` | Save/load — `LAYER_CLASSES` registry, serialize/deserialize |
 | `spec/architecture.md` | Detailed architecture specification |
 | `spec/feature-log.md` | Per-feature implementation notes (historical reference) |
@@ -480,6 +481,32 @@ manually-set field that isn't fully derived from slot inputs in
   pre-existing ~451-line warning count — new errors should be 0) and do a
   manual save → reload → load round-trip of a stack using the new/changed
   layer.
+
+### `MotionBlurLayer`
+
+Temporal accumulation layer that maintains a persistent cache canvas. On each
+update tick (gated by the `delay` slider, log-scaled), it fades the cache by
+`fade` and composites the current `imageSlot` input over it. Slots:
+- `imageSlot` (Image) — source; auto-bound at creation, source sent to Background
+- `fadeSlot` (Amount) — `0` = full accumulation (old frames never cleared);
+  `1` = instant clear (only latest frame visible). Slider suspends on touch.
+- `delaySlot` (Amount) — `0` = update every frame; `1` = frozen; log-scaled
+  so `0.5` ≈ every 10 frames. Slider suspends on touch.
+
+### `LineLayer` — now produces `Image`
+
+`LineLayer` already rendered into a private `_canvas: OffscreenCanvas`. It now
+declares `ValueType.Image` and implements `ImageSource` (returning that canvas),
+so it can be bound to any Image slot (e.g. `MotionBlurLayer.imageSlot`).
+
+### `FilterLayer` — `gradient-map` filter
+
+The `gradient-map` filter has a bidirectional control: `t = 0.5` is
+pass-through (no effect); `t < 0.5` blends towards a chrome palette (cool
+gunmetal → cold steel → silver → icy white); `t > 0.5` blends towards a neon
+palette (deep purple → hot pink → neon lime → electric yellow). Both the CPU
+fallback (`FilterLayer.ts`) and the WebGL path (`FilterGL.ts`) use identical
+palettes and blend logic.
 
 ## Known issues / pre-existing tech debt
 

@@ -7,6 +7,7 @@ import {
   type Amount, type AmountSource,
   type Direction, type DirectionSource,
   type Point,  type PointSource,
+  type ImageValue, type ImageSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
@@ -55,8 +56,8 @@ type HandleDrag = 'start' | 'end'
 
 function ptDist(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y - b.y) }
 
-export class LineLayer extends Layer {
-  readonly types: ReadonlySet<ValueType> = new Set()
+export class LineLayer extends Layer implements ImageSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
   readonly startSlot:     ParameterSlot
   readonly endSlot:       ParameterSlot
@@ -126,6 +127,12 @@ export class LineLayer extends Layer {
     this.slots.push(this.startSlot, this.endSlot, this.directionSlot, this.widthSlot, this.colourSlot, this.opacitySlot)
     graph.register(this)
   }
+
+  // ----------------------------------------------------------
+  // ImageSource
+  // ----------------------------------------------------------
+
+  getImage(): ImageValue { return this._canvas }
 
   // ----------------------------------------------------------
   // Persistence
