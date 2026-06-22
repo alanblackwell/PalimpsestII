@@ -49,6 +49,7 @@ import { RectLayer }         from '../layers/RectLayer.js'
 import { EllipseLayer }      from '../layers/EllipseLayer.js'
 import { PathLayer }         from '../layers/PathLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
+import { WarpLayer }         from '../layers/WarpLayer.js'
 
 // ------------------------------------------------------------
 // Persistence — save/load a Palimpsest session as a single JSON document
@@ -163,6 +164,7 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   EllipseLayer:     () => new EllipseLayer(Node.canvasWidth / 2, Node.canvasHeight / 2, 200, 150),
   PathLayer:        () => new PathLayer(),
   BindingMapLayer:  () => new BindingMapLayer(),
+  WarpLayer:        () => new WarpLayer(),
 }
 
 // ------------------------------------------------------------

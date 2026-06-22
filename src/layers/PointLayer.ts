@@ -233,9 +233,11 @@ export class PointLayer extends Layer implements PointSource {
   // Value
   // ----------------------------------------------------------
 
-  // Called by the embedded DraggablePointRegion when the user drags.
+  // Called by the embedded DraggablePointRegion when the user drags,
+  // or by WarpLayer to move a hidden PointLayer handle.
   setPoint(p: Point): void {
     this._point = { ...p }
+    this._region.setPoint(this._point)  // keep region in sync so recompute() reads back the right value
     this.markDirty()
   }
 
