@@ -5,6 +5,7 @@ import {
   ValueType, SlotState,
   type ImageValue, type ImageSource,
   type Amount, type AmountSource,
+  type EventSource,
   type Ctx2D, type Point, type Direction,
 } from '../core/types.js'
 import { graph }        from '../dataflow/Graph.js'
@@ -36,6 +37,7 @@ import { BindingLayer } from './BindingLayer.js'
 
 const ACCENT = '#7ecf7e'   // Image type colour
 const AM_COL = '#4a8fe8'   // Amount type colour
+const EV_COL = '#e0e060'   // Event type colour
 
 const HDR_H    = 36   // header row height
 const SLIDER_H = 26   // per-slider row height
@@ -46,6 +48,11 @@ const VALUE_W  = 36   // numeric value column width
 // Canvas-space pill height: header + 2 slider rows
 const PILL_H = HDR_H + ROW_GAP + SLIDER_H + ROW_GAP + SLIDER_H   // 96
 
+// Fade is remapped through a cubic curve so the slider midpoint (0.5)
+// gives the same visual decay as the raw value 0.15 did previously,
+// leaving more of the useful range in the lower half of the slider.
+const FADE_EXPONENT = 3
+
 // Log-scale base for delay: delay=0 → 1 frame, delay=0.5 → 10 frames,
 // delay→1 → effectively never (guarded separately).
 const DELAY_BASE = 100
@@ -53,12 +60,15 @@ const DELAY_BASE = 100
 export class MotionBlurLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
-  private readonly _imageSlot: ParameterSlot
-  private readonly _fadeSlot:  ParameterSlot
-  private readonly _delaySlot: ParameterSlot
+  private readonly _imageSlot:   ParameterSlot
+  private readonly _fadeSlot:    ParameterSlot
+  private readonly _delaySlot:   ParameterSlot
+  private readonly _captureSlot: ParameterSlot
 
   private _fade:  number = 0.5
   private _delay: number = 0.0
+
+  private _lastCaptureTime: number | null = null
 
   // Persistent trail buffer, working canvas, and output
   private _cache:  OffscreenCanvas | null = null
@@ -72,10 +82,11 @@ export class MotionBlurLayer extends Layer implements ImageSource {
 
   constructor() {
     super()
-    this._imageSlot = new ParameterSlot(ValueType.Image,  this, 'image')
-    this._fadeSlot  = new ParameterSlot(ValueType.Amount, this, 'fade')
-    this._delaySlot = new ParameterSlot(ValueType.Amount, this, 'delay')
-    this.slots.push(this._imageSlot, this._fadeSlot, this._delaySlot)
+    this._imageSlot   = new ParameterSlot(ValueType.Image,  this, 'image')
+    this._fadeSlot    = new ParameterSlot(ValueType.Amount, this, 'fade')
+    this._delaySlot   = new ParameterSlot(ValueType.Amount, this, 'delay')
+    this._captureSlot = new ParameterSlot(ValueType.Event,  this, 'capture')
+    this.slots.push(this._imageSlot, this._fadeSlot, this._delaySlot, this._captureSlot)
     this.debugName = 'MotionBlur'
     graph.register(this)
   }
@@ -90,9 +101,10 @@ export class MotionBlurLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get imageSlot(): ParameterSlot { return this._imageSlot }
-  get fadeSlot():  ParameterSlot { return this._fadeSlot  }
-  get delaySlot(): ParameterSlot { return this._delaySlot }
+  get imageSlot():   ParameterSlot { return this._imageSlot   }
+  get fadeSlot():    ParameterSlot { return this._fadeSlot    }
+  get delaySlot():   ParameterSlot { return this._delaySlot   }
+  get captureSlot(): ParameterSlot { return this._captureSlot }
 
   override getSlotDefault(slot: ParameterSlot): number | Point | Direction | null {
     if (slot === this._fadeSlot)  return this._fade
@@ -116,9 +128,10 @@ export class MotionBlurLayer extends Layer implements ImageSource {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
 
-    const fade = Math.max(0, Math.min(1, this._fadeSlot.isActive
+    const fadeRaw = Math.max(0, Math.min(1, this._fadeSlot.isActive
       ? (this._fadeSlot.source as AmountSource).getAmount() as Amount
       : this._fade))
+    const fade = Math.pow(fadeRaw, FADE_EXPONENT)
     const delay = Math.max(0, Math.min(1, this._delaySlot.isActive
       ? (this._delaySlot.source as AmountSource).getAmount() as Amount
       : this._delay))
@@ -139,12 +152,24 @@ export class MotionBlurLayer extends Layer implements ImageSource {
       return
     }
 
+    // Capture event: rising edge triggers an immediate cache update,
+    // overriding the delay counter. Useful with delay=1 for manual control.
+    let captureTriggered = false
+    if (this._captureSlot.isActive) {
+      const t = (this._captureSlot.source as EventSource).getEventTime()
+      if (t !== null && t !== this._lastCaptureTime) {
+        this._lastCaptureTime = t
+        captureTriggered = true
+      }
+    }
+
     // Determine whether to update the cache this frame
     this._frameCount++
     const interval = delay >= 1.0
       ? Infinity
       : Math.max(1, Math.round(Math.pow(DELAY_BASE, delay)))
-    const shouldUpdate = Number.isFinite(interval) && this._frameCount % interval === 0
+    const shouldUpdate = captureTriggered ||
+      (Number.isFinite(interval) && this._frameCount % interval === 0)
 
     if (shouldUpdate) {
       const wctx = this._work!.getContext('2d')!
@@ -226,11 +251,12 @@ export class MotionBlurLayer extends Layer implements ImageSource {
     ctx.textBaseline = 'middle'
     ctx.fillText('Motion Blur', x + 12, hdrMidY)
 
-    // Slot indicators right-to-left: image, fade, delay
+    // Slot indicators right-to-left: image, fade, delay, capture
     this._drawIndicators(ctx, [
-      { slot: this._imageSlot, label: 'img', colour: ACCENT },
-      { slot: this._fadeSlot,  label: 'fde', colour: AM_COL },
-      { slot: this._delaySlot, label: 'dly', colour: AM_COL },
+      { slot: this._imageSlot,   label: 'img', colour: ACCENT },
+      { slot: this._fadeSlot,    label: 'fde', colour: AM_COL },
+      { slot: this._delaySlot,   label: 'dly', colour: AM_COL },
+      { slot: this._captureSlot, label: 'cap', colour: EV_COL },
     ], x + width - 8, hdrMidY)
 
     // Slider rows
