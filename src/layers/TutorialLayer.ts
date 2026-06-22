@@ -111,7 +111,7 @@ const PAGES: TutPage[] = [
   {
     title: 'Values and Binding',
     paragraphs: [
-      'Every layer has parameter slots — shown as dots on its card in the stack panel. A value layer feeds its value into any compatible slot on another layer.',
+      'Every layer has parameter slots — shown as dotted lines. A value layer feeds its value into any compatible slot on another layer.',
       'To bind: drag from a value layer\'s card in the stack to a slot dot on a consumer layer. The slot glows green when a compatible drag is in progress. You can also click an empty slot row in the panel to create and bind a default value layer automatically.',
       'Colour sets a shape\'s fill colour. Amount controls a numeric value such as opacity or intensity. Point sets a position on the canvas. Try creating a shape from page 1 first, then add one of these and drag it onto a slot.',
     ],
