@@ -14,7 +14,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
-import { AngleSnapper } from '../interaction/AngleSnapper.js'
+import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -44,6 +44,11 @@ const ROT_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i
 const ROT_SNAP_THRESHOLD = Math.PI / 12
 const ROT_SNAP_DWELL_MS  = 700
 const ROT_SNAP_COL = '#7ecfcf'
+
+// Square/circle snap — fires when |width - height| < threshold
+const SQUARE_SNAP_THRESHOLD = 20   // px
+const SQUARE_SNAP_DWELL_MS  = 700
+
 const MIN_SIZE  = 20          // minimum width / height (px)
 const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
 
@@ -126,6 +131,12 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   private _snapSnapped  = false
   private _snapProgress = 0
   private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
+
+  // Square / circle snap — snaps the difference (width - height) to 0
+  private readonly _squareSnapper = new ValueSnapper([0], SQUARE_SNAP_THRESHOLD, SQUARE_SNAP_DWELL_MS)
+  private _squareSnapSnapped  = false
+  private _squareSnapProgress = 0
+  private _squareDwellTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
@@ -668,6 +679,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       if (this.scaleSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.scaleSlot)?.toggle()
       }
+      this._squareSnapper.reset()
     }
 
     this.markDirty()
@@ -737,6 +749,47 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
         case H_BR:      applyX(1);  applyY(1);  break
       }
 
+      // Square / circle snap — fires when |width - height| is within threshold.
+      // The anchor invariant is maintained: shiftX / shiftY are recomputed from
+      // the snapped sizes so the opposite edge/corner stays fixed in canvas space.
+      const changesW = this._dragHandle !== H_TOP && this._dragHandle !== H_BOTTOM
+      const changesH = this._dragHandle !== H_LEFT && this._dragHandle !== H_RIGHT
+      const signX: 1 | -1 = (this._dragHandle === H_LEFT || this._dragHandle === H_TL || this._dragHandle === H_BL) ? -1 : 1
+      const signY: 1 | -1 = (this._dragHandle === H_TOP  || this._dragHandle === H_TL || this._dragHandle === H_TR) ? -1 : 1
+
+      const sqResult = this._squareSnapper.update(this._width - this._height)
+      this._squareSnapSnapped  = sqResult.snapped
+      this._squareSnapProgress = sqResult.progress
+
+      if (sqResult.snapped) {
+        if (changesW && changesH) {
+          // Corner drag: snap both to average so the dragged corner moves to a square
+          const t = (this._width + this._height) / 2
+          this._width  = t; this._height = t
+          shiftX = signX * (t - this._dragStartW) / 2
+          shiftY = signY * (t - this._dragStartH) / 2
+        } else if (changesW) {
+          // Edge drag (left/right): snap width to the fixed height
+          this._width = this._height
+          shiftX = signX * (this._height - this._dragStartW) / 2
+        } else {
+          // Edge drag (top/bottom): snap height to the fixed width
+          this._height = this._width
+          shiftY = signY * (this._width - this._dragStartH) / 2
+        }
+        if (this._squareDwellTimer === null) {
+          this._squareDwellTimer = setInterval(() => {
+            const r = this._squareSnapper.update(0)
+            this._squareSnapSnapped  = r.snapped
+            this._squareSnapProgress = r.progress
+            this.markDirty()
+            if (this._squareSnapper.isRefining) this._clearSquareDwellTimer()
+          }, 16)
+        }
+      } else {
+        this._clearSquareDwellTimer()
+      }
+
       this._cx = this._dragStartCx + shiftX * ux.x + shiftY * uy.x
       this._cy = this._dragStartCy + shiftX * ux.y + shiftY * uy.y
     }
@@ -749,6 +802,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._strokeSliderDrag = false
     this._scaleSliderDrag  = false
     this._clearRotDwellTimer()
+    this._clearSquareDwellTimer()
+  }
+
+  private _clearSquareDwellTimer(): void {
+    if (this._squareDwellTimer !== null) {
+      clearInterval(this._squareDwellTimer)
+      this._squareDwellTimer = null
+    }
+    this._squareSnapSnapped  = false
+    this._squareSnapProgress = 0
   }
 
   private _applySnapAngle(raw: number): void {
@@ -879,10 +942,23 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
         ctx.fill()
         ctx.stroke()
       } else {
-        ctx.fillStyle = lit ? '#ffffff' : 'rgba(255,255,255,0.80)'
+        const squareActive = lit && this._squareSnapSnapped
+        ctx.fillStyle = squareActive ? ROT_SNAP_COL : (lit ? '#ffffff' : 'rgba(255,255,255,0.80)')
         const s = HANDLE_R
         ctx.fillRect(h.x - s, h.y - s, s * 2, s * 2)
         ctx.strokeRect(h.x - s, h.y - s, s * 2, s * 2)
+        if (squareActive && this._squareSnapProgress > 0) {
+          ctx.save()
+          ctx.strokeStyle = ROT_SNAP_COL
+          ctx.lineWidth   = 1.5
+          ctx.globalAlpha = 0.85
+          ctx.beginPath()
+          ctx.arc(h.x, h.y, s + 6, -Math.PI / 2, -Math.PI / 2 + this._squareSnapProgress * 2 * Math.PI)
+          ctx.stroke()
+          ctx.restore()
+          ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+          ctx.lineWidth   = 1
+        }
       }
     }
 
