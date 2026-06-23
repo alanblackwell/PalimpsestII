@@ -220,6 +220,38 @@ This is the standard pattern for `AmountLayer`'s slider, `ColourLayer`'s
 hue/SV picker, `NoiseLayer`/`FillLayer`/`PointLayer`'s sliders, and every
 `rotationSlot`/transform-handle drag.
 
+### Snap-and-refine handles (`AngleSnapper` / `ValueSnapper`)
+
+`src/interaction/AngleSnapper.ts` provides two reusable helpers:
+
+- **`AngleSnapper(snaps, threshold, dwellMs)`** — wraps-around angular values. Used for rotation handles.
+- **`ValueSnapper(snaps, threshold, dwellMs)`** — linear 1-D values. Used for ShapeLayer's square/circle snap.
+
+Both follow a four-phase cycle per drag:
+1. **snap** — within `threshold` of a snap position → output held at that value; dwell timer starts.
+2. **dwell** — pointer stays in the snap zone for `dwellMs` → a progress arc sweeps around the handle.
+3. **refine** — dwell completes → input passes through freely; snap is disengaged until the next drag.
+4. **free** — outside all zones → raw value; timer resets on re-entry.
+
+**Visual convention**: while snapping the handle turns `'#7ecfcf'` (Direction accent / `ROT_SNAP_COL`)
+and a clockwise arc sweeps around it. Call `snapper.reset()` on drag start so every drag begins fresh
+in snap mode.
+
+**Dwell timer pattern**: start a `setInterval(..., 16)` on first snap entry; feed the current snapped
+value back into `update()` each tick to advance the arc while the pointer is still. Clear the timer
+and zero `_snapSnapped`/`_snapProgress` in `handlePointerUp` via a dedicated `_clearXxxDwellTimer()`
+method.
+
+**Rotation snap** — `AngleSnapper` on the `○ rotate` handle of `ImageLayer`, `TextLayer`,
+`StrokeLayer`, `TransformLayer`, and `ShapeLayer` (all subclasses via `_applySnapAngle`), plus
+`DirectionLayer`'s dial and rotate handle. Eight snap positions every 45°, 15° threshold, 700 ms dwell.
+
+**Square / circle snap** — `ValueSnapper([0], 20, 700)` on all eight resize handles of
+`RectLayer` / `EllipseLayer` (via `ShapeLayer`). Operates on the difference `width − height`; fires
+when the two dimensions are within 20 px of equal. When snapped: edge handles fix the changing
+dimension to the other; corner handles snap both to their average (preserving the anchor-opposite-edge
+invariant by recomputing `shiftX`/`shiftY` from the snapped sizes before the centre-shift step).
+
 ### Event-slot toggle buttons
 
 Two conventions for a manual button beside an `Event`-typed slot that flips
@@ -443,6 +475,7 @@ and the mask source to `BackgroundLayer`).
 | `src/interaction/LayerStackWidget.ts` | Thumbnail strip, layer selection, reorder |
 | `src/interaction/thumbnail.ts` | Shared thumbnail rendering utility (used by widget and DeletionLayer) |
 | `src/interaction/layout.ts` | `contentLeft`/`stackWidgetWidth` — widget/content boundary |
+| `src/interaction/AngleSnapper.ts` | `AngleSnapper` and `ValueSnapper` — reusable snap-and-refine helpers for handles |
 | `src/layers/MaskLayer.ts` | Composite mask: shape slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
@@ -498,6 +531,14 @@ update tick (gated by the `delay` slider, log-scaled), it fades the cache by
 `LineLayer` already rendered into a private `_canvas: OffscreenCanvas`. It now
 declares `ValueType.Image` and implements `ImageSource` (returning that canvas),
 so it can be bound to any Image slot (e.g. `MotionBlurLayer.imageSlot`).
+
+### `TransformLayer` — reflect (mirror)
+
+A **reflect** toggle pill sits below the opacity pill. The `↔` button mirrors the transformed
+output through a reflection axis (left-right flip by default). An optional `reflectSlot`
+(Direction) sets the axis angle: `dirAngle = 0` → `axisAngle = π/2` → left-right flip; any
+other direction rotates the axis accordingly. When the slot is first bound, reflect is
+auto-enabled; pressing `↔` while the slot is bound suspends the binding.
 
 ### `FilterLayer` — `gradient-map` filter
 
