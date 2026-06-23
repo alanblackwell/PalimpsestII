@@ -9,13 +9,13 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 //
 // The dependency edges run: source → consumer
 // (source's value flows into consumer's parameter slot).
-// A cycle would exist if consumer is already a transitive
-// ancestor of source — i.e. consumer is reachable from source
+// A cycle would exist if source is already a transitive
+// descendant of consumer — i.e. source is reachable from consumer
 // by following dependent edges.
 //
-// Example cycle:  A → B → C → A  (C tries to use A as source,
-// but A already depends on C via B).  Detected by BFS from A:
-// A's dependents include B, B's include C, so C is reachable → reject.
+// Example cycle:  A → B → C → A  (A tries to use C as source,
+// but C already depends on A via B).  Detected by BFS from consumer (A):
+// A's dependents include B, B's include C, so source (C) is reachable → reject.
 
 export class Graph {
   private readonly _nodes = new Set<Node>()
@@ -44,9 +44,10 @@ export class Graph {
   // is safe (would not create a cycle in the dependency graph).
   canBind(source: Node, consumer: Node): boolean {
     if (source === consumer) return false
-    // If consumer is reachable from source via dependent edges,
-    // adding source → consumer would form a cycle.
-    return !this.isReachable(source, consumer)
+    // A cycle would form if source is already reachable from consumer
+    // via dependent edges (i.e. source is already downstream of consumer).
+    // Adding source → consumer would then create: consumer → … → source → consumer.
+    return !this.isReachable(consumer, source)
   }
 
   // BFS from `from` following dependent edges; returns true if `target` is found.
