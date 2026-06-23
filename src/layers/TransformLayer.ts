@@ -12,6 +12,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -56,6 +57,7 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 const ACCENT = '#e09840'   // warm amber-orange
 const AM_COL = '#4a8fe8'   // Amount type accent (opacity slot)
+const DIR_COL = '#7ecfcf'  // Direction type accent (reflect slot)
 
 const MIN_SCALE = 0.05
 const MAX_SCALE = 4.0
@@ -65,8 +67,12 @@ const MAX_SCALE = 4.0
 // be computed without re-rendering.
 const SLOT_H    = 26
 const SLOT_GAP  = 4
-const PILL_GAP  = 8    // vertical gap between the slot pill and the opacity pill
-const OPACITY_H = 36
+const PILL_GAP         = 8    // vertical gap between pills
+const OPACITY_H        = 36
+const REFLECT_TOGGLE_H = 36   // height of the toggle row inside the reflect pill
+const REFLECT_SLOT_H   = 26   // height of the axis slot row inside the reflect pill
+const REFLECT_SLOT_GAP = 4
+const REFLECT_H        = REFLECT_TOGGLE_H + REFLECT_SLOT_GAP + REFLECT_SLOT_H
 const OP_LABEL_W = 50
 const OP_VALUE_W = 40
 
@@ -77,6 +83,11 @@ const ROT_ARM    = 85
 const SCALE_OX   = 70
 const SCALE_OY   = 70
 const HANDLE_HIT = 14
+
+const ROT_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const ROT_SNAP_THRESHOLD = Math.PI / 12
+const ROT_SNAP_DWELL_MS  = 700
+const ROT_SNAP_COL = '#7ecfcf'
 
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
@@ -100,8 +111,10 @@ export class TransformLayer extends Layer implements ImageSource {
   private readonly _rotateSlot:   ParameterSlot
   private readonly _centreSlot:   ParameterSlot
   private readonly _opacitySlot:  ParameterSlot
+  private readonly _reflectSlot:  ParameterSlot
 
-  private _offscreen: OffscreenCanvas
+  private _offscreen:     OffscreenCanvas
+  private _reflectCanvas: OffscreenCanvas | null = null
 
   // Resolved each recompute
   private _position:    Point  = { x: 0, y: 0 }
@@ -117,7 +130,16 @@ export class TransformLayer extends Layer implements ImageSource {
   private _opacity: number = 1   // [0, 1]
   private _opacityDrag = false
 
+  private _reflectEnabled = false
+  private _reflectBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _reflectSlotWasActive = false
+
   private _drag: DragState | null = null
+
+  private readonly _rotSnapper = new AngleSnapper(ROT_SNAP_ANGLES, ROT_SNAP_THRESHOLD, ROT_SNAP_DWELL_MS)
+  private _snapSnapped  = false
+  private _snapProgress = 0
+  private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
@@ -130,8 +152,12 @@ export class TransformLayer extends Layer implements ImageSource {
     this._rotateSlot     = new ParameterSlot(ValueType.Direction, this, 'rotate')
     this._centreSlot     = new ParameterSlot(ValueType.Point,     this, 'centre')
     this._opacitySlot    = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this._reflectSlot    = new ParameterSlot(ValueType.Direction, this, 'reflect')
+    // _reflectSlot is included so evaluate() calls source.evaluate() on it,
+    // keeping the direction value fresh. renderSlots filters it out of the
+    // standard slot-row group and draws it inside the reflect pill instead.
     this.slots.push(this._sourceSlot, this._positionSlot, this._scaleSlot,
-                    this._rotateSlot, this._centreSlot, this._opacitySlot)
+                    this._rotateSlot, this._centreSlot, this._opacitySlot, this._reflectSlot)
     this.debugName = 'TransformLayer'
     graph.register(this)
   }
@@ -140,7 +166,11 @@ export class TransformLayer extends Layer implements ImageSource {
   // ImageSource
   // ----------------------------------------------------------
 
-  getImage(): ImageValue { return this._offscreen }
+  getImage(): ImageValue {
+    return (this._reflectEnabled && this._reflectCanvas !== null)
+      ? this._reflectCanvas
+      : this._offscreen
+  }
 
   // ----------------------------------------------------------
   // Slot accessors
@@ -152,6 +182,7 @@ export class TransformLayer extends Layer implements ImageSource {
   get rotateSlot():   ParameterSlot { return this._rotateSlot   }
   get centreSlot():   ParameterSlot { return this._centreSlot   }
   get opacitySlot():  ParameterSlot { return this._opacitySlot  }
+  get reflectSlot():  ParameterSlot { return this._reflectSlot  }
 
   // Touching the slider while opacitySlot is bound suspends the binding
   // and hands manual control to the user (suspend-on-touch convention).
@@ -175,6 +206,7 @@ export class TransformLayer extends Layer implements ImageSource {
     if (slot === this._rotateSlot)  return { angle: this._rotation, magnitude: 1 }
     if (slot === this._centreSlot)  return { ...this._centrePoint }
     if (slot === this._opacitySlot) return this._opacity
+    if (slot === this._reflectSlot) return { angle: 0, magnitude: 1 }
     return null
   }
 
@@ -206,6 +238,7 @@ export class TransformLayer extends Layer implements ImageSource {
       manualScale:    this._manualScale,
       rotation:       this._rotation,
       opacity:        this._opacity,
+      reflectEnabled: this._reflectEnabled,
     }
   }
 
@@ -213,9 +246,10 @@ export class TransformLayer extends Layer implements ImageSource {
     if (state.manualPosition && typeof state.manualPosition === 'object') {
       this._manualPosition = state.manualPosition as Point
     }
-    if (typeof state.manualScale === 'number') this._manualScale = state.manualScale
-    if (typeof state.rotation === 'number')    this._rotation    = state.rotation
-    if (typeof state.opacity === 'number')     this._opacity     = state.opacity
+    if (typeof state.manualScale    === 'number')  this._manualScale    = state.manualScale
+    if (typeof state.rotation       === 'number')  this._rotation       = state.rotation
+    if (typeof state.opacity        === 'number')  this._opacity        = state.opacity
+    if (typeof state.reflectEnabled === 'boolean') this._reflectEnabled = state.reflectEnabled
   }
 
   // ----------------------------------------------------------
@@ -272,6 +306,36 @@ export class TransformLayer extends Layer implements ImageSource {
       ctx.drawImage(src as CanvasImageSource, -sw / 2, -sh / 2, sw, sh)
       ctx.restore()
     }
+
+    // Auto-enable reflect when the axis slot is first bound.
+    if (this._reflectSlot.isActive && !this._reflectSlotWasActive) {
+      this._reflectEnabled = true
+    }
+    this._reflectSlotWasActive = this._reflectSlot.isActive
+
+    if (this._reflectEnabled) {
+      if (!this._reflectCanvas || this._reflectCanvas.width !== w || this._reflectCanvas.height !== h) {
+        this._reflectCanvas = new OffscreenCanvas(w, h)
+      }
+      // Axis of reflection is perpendicular to the direction.
+      // dirAngle=0 (pointing right) → axisAngle=π/2 (vertical) → left-right flip.
+      const dirAngle = this._reflectSlot.isActive
+        ? (this._reflectSlot.source as DirectionSource).getDirection().angle
+        : 0
+      const axisAngle = dirAngle + Math.PI / 2
+      const cx = w / 2
+      const cy = h / 2
+      const rctx = this._reflectCanvas.getContext('2d')! as unknown as CanvasRenderingContext2D
+      rctx.clearRect(0, 0, w, h)
+      rctx.save()
+      rctx.translate(cx, cy)
+      rctx.rotate(axisAngle)
+      rctx.scale(1, -1)
+      rctx.rotate(-axisAngle)
+      rctx.translate(-cx, -cy)
+      rctx.drawImage(this._offscreen as CanvasImageSource, 0, 0)
+      rctx.restore()
+    }
   }
 
   // ----------------------------------------------------------
@@ -281,6 +345,7 @@ export class TransformLayer extends Layer implements ImageSource {
   protected override hitTestSelf(point: Point): this | null {
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._opacityPillBounds(), point)) return this
+    if (boundingBoxContains(this._reflectPillBounds(), point)) return this
     if (this._drag !== null || this._opacityDrag) return this
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
@@ -290,6 +355,16 @@ export class TransformLayer extends Layer implements ImageSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    if (this._reflectBtnBounds !== null && boundingBoxContains(this._reflectBtnBounds, point)) {
+      const turningOff = this._reflectEnabled
+      this._reflectEnabled = !this._reflectEnabled
+      if (turningOff && this._reflectSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._reflectSlot)?.toggle()
+      }
+      this.markDirty()
+      return true
+    }
+
     const og = this._opacitySliderGeom()
     if (point.x >= og.sld0 - 6 && point.x <= og.sldR + 6 &&
         point.y >= og.b.y    && point.y <= og.b.y + og.b.height) {
@@ -307,6 +382,7 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._centreSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._centreSlot)?.toggle()
       }
+      this._rotSnapper.reset()
       this._drag = {
         type:       'rotate',
         center:     { ...this._centrePoint },
@@ -363,11 +439,9 @@ export class TransformLayer extends Layer implements ImageSource {
       const s = this._drag.startScale * (d / this._drag.startDist)
       this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
     } else {
-      const angle = Math.atan2(
-        point.y - this._drag.center.y,
-        point.x - this._drag.center.x,
-      )
-      this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+      const angle  = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
+      const rawRot = this._drag.startRot + (angle - this._drag.startAngle)
+      this._applySnapRotation(rawRot)
     }
     this.markDirty()
   }
@@ -375,6 +449,34 @@ export class TransformLayer extends Layer implements ImageSource {
   handlePointerUp(): void {
     this._opacityDrag = false
     this._drag = null
+    this._clearRotDwellTimer()
+  }
+
+  private _applySnapRotation(raw: number): void {
+    const result = this._rotSnapper.update(raw)
+    this._rotation     = result.angle
+    this._snapSnapped  = result.snapped
+    this._snapProgress = result.progress
+    if (result.snapped && this._rotDwellTimer === null) {
+      this._rotDwellTimer = setInterval(() => {
+        const r = this._rotSnapper.update(this._rotation)
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._rotSnapper.isRefining) this._clearRotDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearRotDwellTimer()
+    }
+  }
+
+  private _clearRotDwellTimer(): void {
+    if (this._rotDwellTimer !== null) {
+      clearInterval(this._rotDwellTimer)
+      this._rotDwellTimer = null
+    }
+    this._snapSnapped  = false
+    this._snapProgress = 0
   }
 
   private _setOpacityFromPointer(px: number): void {
@@ -429,8 +531,23 @@ export class TransformLayer extends Layer implements ImageSource {
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       this._scaleSlot.isActive ? '#666688' : '#81d4fa')
 
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
-      this._rotateSlot.isActive ? '#666688' : '#ffb74d')
+    const rotCol = this._rotateSlot.isActive ? '#666688'
+                 : this._snapSnapped         ? ROT_SNAP_COL
+                 : '#ffb74d'
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, rotCol)
+    if (this._snapSnapped && this._snapProgress > 0) {
+      const arcR  = HANDLE_R + 5
+      const start = -Math.PI / 2
+      const end   = start + this._snapProgress * 2 * Math.PI
+      ctx.save()
+      ctx.strokeStyle = ROT_SNAP_COL
+      ctx.lineWidth   = 2
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(hp.rotate.x, hp.rotate.y, arcR, start, end)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     this._drawGlowCircle(ctx, hp.move, HANDLE_R,
       this._positionSlot.isActive ? '#666688' : '#ffffff')
@@ -480,8 +597,10 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
+    const img = this.getImage()
+    if (img === null) return
     ctx.save()
-    ctx.drawImage(this._offscreen as CanvasImageSource, 0, 0)
+    ctx.drawImage(img as CanvasImageSource, 0, 0)
     ctx.restore()
   }
 
@@ -549,12 +668,16 @@ export class TransformLayer extends Layer implements ImageSource {
     this._renderHandles(ctx)
   }
 
-  // Standard slot-row pill, then an opacity slider pill directly below it.
+  // Standard slot-row pill, then an opacity slider pill, then a reflect pill.
+  // _reflectSlot is kept in this.slots for evaluation ordering but drawn
+  // inside the reflect pill, so it is filtered out of the standard group.
   override renderSlots(ctx: Ctx2D): void {
     if (this.slots.length === 0) return
     this._slotBounds.clear()
-    this.renderSlotGroup(ctx, this.slots, this.panelBottom)
+    const standardSlots = this.slots.filter(s => s !== this._reflectSlot)
+    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
     this._drawOpacityPill(ctx)
+    this._drawReflectPill(ctx)
   }
 
   private _drawOpacityPill(ctx: Ctx2D): void {
@@ -635,9 +758,7 @@ export class TransformLayer extends Layer implements ImageSource {
     ctx.fill()
   }
 
-  // Opacity pill — directly below the standard slot-row pill. Geometry is
-  // computed from the same constants as Layer.renderSlotGroup, so it can be
-  // derived without re-rendering.
+  // Opacity pill — directly below the standard slot-row pill.
   private _opacityPillBounds() {
     const groupH = this.slots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
     const y = this.panelBottom + groupH + PILL_GAP
@@ -653,5 +774,112 @@ export class TransformLayer extends Layer implements ImageSource {
     const sld0   = labelX + OP_LABEL_W
     const sldR   = valueRight - OP_VALUE_W - 6
     return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  }
+
+  // Reflect pill — directly below the opacity pill.
+  private _reflectPillBounds() {
+    const op = this._opacityPillBounds()
+    return { x: op.x, y: op.y + OPACITY_H + PILL_GAP, width: op.width, height: REFLECT_H }
+  }
+
+  private _drawReflectPill(ctx: Ctx2D): void {
+    const b      = this._reflectPillBounds()
+    const active = this._reflectSlot.isActive
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 8)
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = active ? DIR_COL : ACCENT
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, 4, b.height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // ── Toggle row ────────────────────────────────────────────
+    const toggleMidY = b.y + REFLECT_TOGGLE_H / 2
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('reflect', b.x + 12, toggleMidY)
+
+    const btnW = 22
+    const btnH = REFLECT_TOGGLE_H - 10
+    const btnX = b.x + b.width - 8 - btnW
+    const btnY = toggleMidY - btnH / 2
+    this._reflectBtnBounds = { x: btnX, y: btnY, width: btnW, height: btnH }
+
+    ctx.strokeStyle = this._reflectEnabled ? DIR_COL : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.roundRect(btnX, btnY, btnW, btnH, 3)
+    ctx.stroke()
+
+    ctx.font      = '11px monospace'
+    ctx.fillStyle = this._reflectEnabled ? DIR_COL : 'rgba(255,255,255,0.40)'
+    ctx.textAlign = 'center'
+    ctx.fillText('↔', btnX + btnW / 2, toggleMidY)
+
+    // ── Axis slot row ─────────────────────────────────────────
+    const slotY   = b.y + REFLECT_TOGGLE_H + REFLECT_SLOT_GAP
+    const slotMidY = slotY + REFLECT_SLOT_H / 2
+    const LABEL_W  = 78
+    const vx       = b.x + LABEL_W
+    const vw       = b.width - LABEL_W - 2
+    const by       = slotY + 3
+    const bh       = REFLECT_SLOT_H - 6
+    const drag     = Node.bindDrag
+    const isCompat = drag.active && drag.source !== null &&
+                     drag.source.types.has(ValueType.Direction)
+
+    const slotBounds = { x: b.x, y: slotY, width: b.width, height: REFLECT_SLOT_H }
+    this._slotBounds.set(this._reflectSlot, slotBounds)
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.62)'
+    ctx.textAlign = 'left'
+    ctx.fillText('axis', b.x + 6, slotMidY)
+
+    if (active && !isCompat) {
+      const srcName = (this._reflectSlot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = DIR_COL + '22'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = DIR_COL + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+      ctx.fillText(srcName, vx + 6, slotMidY)
+    } else if (isCompat) {
+      ctx.fillStyle = 'rgba(50,200,70,0.18)'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+      ctx.fillText(active ? 'replace binding' : 'drop to bind', vx + 6, slotMidY)
+    } else if (this._reflectSlot.state === SlotState.SuspendedBound) {
+      const srcName = (this._reflectSlot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = DIR_COL + '11'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+      ctx.fillText('⏸ ' + srcName, vx + 6, slotMidY)
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+      ctx.fillText('unbound', vx + 6, slotMidY)
+    }
+
+    ctx.restore()
   }
 }

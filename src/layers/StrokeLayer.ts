@@ -13,6 +13,7 @@ import {
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
+import { AngleSnapper }  from '../interaction/AngleSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -50,6 +51,11 @@ const HANDLE_SZ  = 6     // square handle half-size
 const HANDLE_HIT = 14    // pointer hit radius
 const ROT_ARM    = 85    // rotation arm length from centre (px)
 const ARC_STEP   = 20    // sub-samples per Bézier segment for arc table
+
+const ROT_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const ROT_SNAP_THRESHOLD = Math.PI / 12
+const ROT_SNAP_DWELL_MS  = 700
+const ROT_SNAP_COL = '#7ecfcf'
 const RDP_EPS    = 8     // Ramer-Douglas-Peucker tolerance (px)
 const MAX_HANDLE_BOOST = 3   // cap on control-point lengthening when shrunk below drawn size
 
@@ -124,6 +130,11 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // Handle drag
   private _drag: DragState | null = null
   private _strokeSliderDrag = false
+
+  private readonly _rotSnapper = new AngleSnapper(ROT_SNAP_ANGLES, ROT_SNAP_THRESHOLD, ROT_SNAP_DWELL_MS)
+  private _snapSnapped  = false
+  private _snapProgress = 0
+  private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
   // Opacity — computed each recompute from slot; 1.0 when unbound
   private _opacity = 1.0
@@ -670,6 +681,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       if (this.rotationSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.rotationSlot)?.toggle()
       }
+      this._rotSnapper.reset()
       this._drag = {
         type: 'rotate',
         center:     hp.move,
@@ -728,8 +740,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       this._scale = Math.max(0.05, this._drag.startScale * (d / this._drag.startDist))
     } else {
       // rotate
-      const a = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
-      this._rotation = this._drag.startRot + (a - this._drag.startAngle)
+      const a      = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
+      const rawRot = this._drag.startRot + (a - this._drag.startAngle)
+      this._applySnapRotation(rawRot)
     }
     this.markDirty()
   }
@@ -742,7 +755,35 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     }
     this._drag = null
     this._strokeSliderDrag = false
+    this._clearRotDwellTimer()
     this.markDirty()
+  }
+
+  private _applySnapRotation(raw: number): void {
+    const result = this._rotSnapper.update(raw)
+    this._rotation     = result.angle
+    this._snapSnapped  = result.snapped
+    this._snapProgress = result.progress
+    if (result.snapped && this._rotDwellTimer === null) {
+      this._rotDwellTimer = setInterval(() => {
+        const r = this._rotSnapper.update(this._rotation)
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._rotSnapper.isRefining) this._clearRotDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearRotDwellTimer()
+    }
+  }
+
+  private _clearRotDwellTimer(): void {
+    if (this._rotDwellTimer !== null) {
+      clearInterval(this._rotDwellTimer)
+      this._rotDwellTimer = null
+    }
+    this._snapSnapped  = false
+    this._snapProgress = 0
   }
 
   // ----------------------------------------------------------
@@ -997,9 +1038,24 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       (startActive || endActive) ? '#446688' : '#81d4fa')
 
-    // Rotate handle — circle, orange (dimmed if rotationSlot is bound)
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
-      this.rotationSlot.isActive ? '#446688' : '#ffb74d')
+    // Rotate handle — orange normally; cyan when snapping; dimmed when slot bound
+    const rotCol = this.rotationSlot.isActive ? '#446688'
+                 : this._snapSnapped          ? ROT_SNAP_COL
+                 : '#ffb74d'
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, rotCol)
+    if (this._snapSnapped && this._snapProgress > 0) {
+      const arcR  = HANDLE_R + 5
+      const start = -Math.PI / 2
+      const end   = start + this._snapProgress * 2 * Math.PI
+      ctx.save()
+      ctx.strokeStyle = ROT_SNAP_COL
+      ctx.lineWidth   = 2
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(hp.rotate.x, hp.rotate.y, arcR, start, end)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // Move handle — circle+crosshair (dimmed if endpoints are bound)
     const moveColour = (startActive || endActive) ? '#446688' : '#ffffff'

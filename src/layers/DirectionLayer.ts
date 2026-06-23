@@ -12,6 +12,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { AngleSnapper, angleDist } from '../interaction/AngleSnapper.js'
 
 // ------------------------------------------------------------
 // DirectionLayer — a 2-D direction picker (angle + magnitude)
@@ -62,6 +63,12 @@ const ROT_PILL_H       = ROT_PILL_PAD * 2 + N_ROT_ROWS * ROT_ROW_H + (N_ROT_ROWS
 const MAX_ROT_SPEED = Math.PI * 2   // rad/s at speed=1 (1 revolution/second)
 const MAX_DT        = 0.1           // cap dt to avoid jumps after a pause
 
+// Angle snap — 8 positions every 45°, 15° threshold, 700 ms dwell to refine
+const SNAP_ANGLES: readonly number[] =
+  Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const SNAP_THRESHOLD = Math.PI / 12   // 15°
+const SNAP_DWELL_MS  = 700
+
 type DragState =
   | { type: 'move'; startMouse: Point; startPos: Point }
   | { type: 'dial' }
@@ -88,6 +95,12 @@ export class DirectionLayer extends Layer implements DirectionSource {
   private _magnitude: number = 1
   private _position:  Point  = { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
   private _drag:      DragState | null = null
+
+  // Snap / dwell state (reset on each drag start)
+  private readonly _snapper  = new AngleSnapper(SNAP_ANGLES, SNAP_THRESHOLD, SNAP_DWELL_MS)
+  private _snapSnapped  = false    // currently held at a snap position
+  private _snapProgress = 0        // dwell progress 0–1
+  private _dwellTimer: ReturnType<typeof setInterval> | null = null
 
   // Rotation animation state
   private _rotating           = false
@@ -283,6 +296,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
       if (this._handleSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._handleSlot)?.toggle()
       }
+      this._snapper.reset()
       this._drag = { type: 'rotate' }
       this._applyRotate(point)
       return true
@@ -303,6 +317,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
       if (this._handleSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._handleSlot)?.toggle()
       }
+      this._snapper.reset()
       this._drag = { type: 'dial' }
       this._applyPointer(point)
       return true
@@ -333,6 +348,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   handlePointerUp(): void {
     this._drag = null
     this._speedSliderDrag = false
+    this._clearDwellTimer()
   }
 
   protected override hitTestSelf(point: Point) {
@@ -693,6 +709,18 @@ export class DirectionLayer extends Layer implements DirectionSource {
     ctx.moveTo(c.x, c.y - DIAL_R); ctx.lineTo(c.x, c.y + DIAL_R)
     ctx.stroke()
 
+    // Snap tick marks at each 45° position
+    const snapAngle = this._snapper.snappedAngle
+    for (const s of SNAP_ANGLES) {
+      const isActive = snapAngle !== null && angleDist(s, snapAngle) < 0.01
+      ctx.strokeStyle = isActive ? ACCENT : 'rgba(126,207,207,0.28)'
+      ctx.lineWidth   = isActive ? 2 : 1
+      ctx.beginPath()
+      ctx.moveTo(c.x + Math.cos(s) * (DIAL_R - 5), c.y + Math.sin(s) * (DIAL_R - 5))
+      ctx.lineTo(c.x + Math.cos(s) * (DIAL_R + 5), c.y + Math.sin(s) * (DIAL_R + 5))
+      ctx.stroke()
+    }
+
     // Direction arm + arrowhead
     const armLen = this._magnitude * DIAL_R
     const tx = c.x + Math.cos(this._angle) * armLen
@@ -730,7 +758,25 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
     // Rotate handle — outline ring beyond the dial edge at current angle
     const rh = this._rotateHandlePos()
-    this._drawGlowRing(ctx, rh, ROT_HANDLE_R, this._handleSlot.isActive ? '#666688' : '#ffb74d')
+    const handleColour = this._handleSlot.isActive ? '#666688'
+                       : this._snapSnapped          ? ACCENT
+                       : '#ffb74d'
+    this._drawGlowRing(ctx, rh, ROT_HANDLE_R, handleColour)
+
+    // Dwell progress arc — sweeps clockwise around the handle as the user dwells
+    if (this._snapSnapped && this._snapProgress > 0) {
+      const arcR   = ROT_HANDLE_R + 5
+      const start  = -Math.PI / 2                               // start at top
+      const end    = start + this._snapProgress * 2 * Math.PI  // sweep clockwise
+      ctx.save()
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 2
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(rh.x, rh.y, arcR, start, end)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // Move handle — glowing crosshair at the dial centre
     this._drawGlowCircle(ctx, c, HANDLE_R, this._positionSlot.isActive ? '#666688' : '#ffffff')
@@ -767,19 +813,47 @@ export class DirectionLayer extends Layer implements DirectionSource {
   }
 
   private _applyPointer(point: Point): void {
-    const dx = point.x - this._position.x
-    const dy = point.y - this._position.y
-    this._angle = Math.atan2(dy, dx)
+    const dx  = point.x - this._position.x
+    const dy  = point.y - this._position.y
+    const raw = Math.atan2(dy, dx)
+    this._applySnap(raw)
     if (!this._magnitudeSlot.isActive) {
-      const dist = Math.hypot(dx, dy)
-      this._magnitude = Math.min(1, dist / DIAL_R)
+      this._magnitude = Math.min(1, Math.hypot(dx, dy) / DIAL_R)
     }
     this.markDirty()
   }
 
   private _applyRotate(point: Point): void {
-    this._angle = Math.atan2(point.y - this._position.y, point.x - this._position.x)
+    const raw = Math.atan2(point.y - this._position.y, point.x - this._position.x)
+    this._applySnap(raw)
     this.markDirty()
+  }
+
+  private _applySnap(rawAngle: number): void {
+    const result = this._snapper.update(rawAngle)
+    this._angle       = result.angle
+    this._snapSnapped = result.snapped
+    this._snapProgress = result.progress
+
+    // Drive dwell-progress animation even when the pointer is still.
+    if (result.snapped && this._dwellTimer === null) {
+      this._dwellTimer = setInterval(() => {
+        const r = this._snapper.update(this._angle)
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._snapper.isRefining) this._clearDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearDwellTimer()
+    }
+  }
+
+  private _clearDwellTimer(): void {
+    if (this._dwellTimer !== null) {
+      clearInterval(this._dwellTimer)
+      this._dwellTimer = null
+    }
   }
 
   private _drawGlowCircle(ctx: Ctx2D, pt: Point, r: number, glowColour: string): void {

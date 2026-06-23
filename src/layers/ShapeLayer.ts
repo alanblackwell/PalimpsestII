@@ -14,6 +14,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { AngleSnapper } from '../interaction/AngleSnapper.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -38,6 +39,11 @@ const DIR_ACCENT = '#7ecfcf'   // Direction type colour
 const AM_COL     = '#4a8fe8'   // Amount type accent (stroke-width slot)
 const HANDLE_R  = 5           // handle square/circle half-size (px)
 const HIT_R     = 12          // pointer hit radius (px)
+
+const ROT_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const ROT_SNAP_THRESHOLD = Math.PI / 12
+const ROT_SNAP_DWELL_MS  = 700
+const ROT_SNAP_COL = '#7ecfcf'
 const MIN_SIZE  = 20          // minimum width / height (px)
 const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
 
@@ -115,6 +121,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   private _dragStartH          = 0
   private _dragStartAngle      = 0
   private _rotLocalAngle       = 0   // atan2 of rot handle in local space
+
+  private readonly _rotSnapper = new AngleSnapper(ROT_SNAP_ANGLES, ROT_SNAP_THRESHOLD, ROT_SNAP_DWELL_MS)
+  private _snapSnapped  = false
+  private _snapProgress = 0
+  private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
@@ -649,6 +660,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       }
       const hw = this._width * this._scale / 2, hh = this._height * this._scale / 2
       this._rotLocalAngle = Math.atan2(-(hh + ROT_OFF), hw + ROT_OFF)
+      this._rotSnapper.reset()
     }
 
     // Resize handles: suspend scale binding so manual resizing takes over.
@@ -682,8 +694,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     } else if (this._dragHandle === H_ROTATE) {
       // Angle that places rotation handle at the pointer
-      this._angle = Math.atan2(point.y - this._cy, point.x - this._cx)
-                  - this._rotLocalAngle
+      const rawAngle = Math.atan2(point.y - this._cy, point.x - this._cx) - this._rotLocalAngle
+      this._applySnapAngle(rawAngle)
 
     } else {
       // Anchored resize: project delta into local (unrotated) space, then
@@ -736,6 +748,34 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._dragHandle = -1
     this._strokeSliderDrag = false
     this._scaleSliderDrag  = false
+    this._clearRotDwellTimer()
+  }
+
+  private _applySnapAngle(raw: number): void {
+    const result = this._rotSnapper.update(raw)
+    this._angle        = result.angle
+    this._snapSnapped  = result.snapped
+    this._snapProgress = result.progress
+    if (result.snapped && this._rotDwellTimer === null) {
+      this._rotDwellTimer = setInterval(() => {
+        const r = this._rotSnapper.update(this._angle)
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._rotSnapper.isRefining) this._clearRotDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearRotDwellTimer()
+    }
+  }
+
+  private _clearRotDwellTimer(): void {
+    if (this._rotDwellTimer !== null) {
+      clearInterval(this._rotDwellTimer)
+      this._rotDwellTimer = null
+    }
+    this._snapSnapped  = false
+    this._snapProgress = 0
   }
 
   // ----------------------------------------------------------
@@ -810,12 +850,28 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       ctx.lineWidth   = 1
 
       if (i === H_ROTATE) {
+        const snapCol = this._snapSnapped ? ROT_SNAP_COL : 'rgba(232,160,74,0.85)'
         ctx.fillStyle = lit ? '#ffffff'
-          : this.rotationSlot.isActive ? 'rgba(102,102,136,0.85)' : 'rgba(232,160,74,0.85)'
+          : this.rotationSlot.isActive ? 'rgba(102,102,136,0.85)' : snapCol
         ctx.beginPath()
         ctx.arc(h.x, h.y, HANDLE_R, 0, Math.PI * 2)
         ctx.fill()
         ctx.stroke()
+        if (this._snapSnapped && this._snapProgress > 0) {
+          const arcR  = HANDLE_R + 5
+          const start = -Math.PI / 2
+          const end   = start + this._snapProgress * 2 * Math.PI
+          ctx.save()
+          ctx.strokeStyle = ROT_SNAP_COL
+          ctx.lineWidth   = 1.5
+          ctx.globalAlpha = 0.85
+          ctx.beginPath()
+          ctx.arc(h.x, h.y, arcR, start, end)
+          ctx.stroke()
+          ctx.restore()
+          ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+          ctx.lineWidth   = 1
+        }
       } else if (i === H_CENTER) {
         ctx.fillStyle = lit ? ACCENT : 'rgba(232,160,74,0.70)'
         ctx.beginPath()

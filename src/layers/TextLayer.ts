@@ -15,6 +15,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -110,6 +111,11 @@ const ROT_ARM    = 85   // rotate handle arm length from centre (px)
 const HANDLE_HIT = 14   // pointer hit-test radius (px)
 const SCALE_OFFSET_FACTOR = 1.6  // scale-handle distance, relative to font size
 
+const ROT_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const ROT_SNAP_THRESHOLD = Math.PI / 12
+const ROT_SNAP_DWELL_MS  = 700
+const ROT_SNAP_COL = '#7ecfcf'
+
 // Direct in-place text editing
 const EDIT_REGION_R = 50   // hover radius around the move handle (px)
 const CURSOR_GAP    = 3    // gap between baseline and cursor triangle (px)
@@ -196,6 +202,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _rotation:       number       = 0
   private _manualPosition: Point | null = null
   private _drag:           DragState | null = null
+
+  private readonly _rotSnapper = new AngleSnapper(ROT_SNAP_ANGLES, ROT_SNAP_THRESHOLD, ROT_SNAP_DWELL_MS)
+  private _snapSnapped  = false
+  private _snapProgress = 0
+  private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
   // Opacity — computed each recompute from slot; 1.0 when unbound
   private _opacity = 1.0
@@ -822,6 +833,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       if (this._rotationSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._rotationSlot)?.toggle()
       }
+      this._rotSnapper.reset()
       this._drag = {
         type:       'rotate',
         center:     { ...hp.center },
@@ -871,17 +883,43 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, s))
     } else {
       // rotate
-      const angle = Math.atan2(
-        point.y - this._drag.center.y,
-        point.x - this._drag.center.x,
-      )
-      this._rotation = this._drag.startRot + (angle - this._drag.startAngle)
+      const angle  = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
+      const rawRot = this._drag.startRot + (angle - this._drag.startAngle)
+      this._applySnapRotation(rawRot)
     }
     this.markDirty()
   }
 
   handlePointerUp(): void {
     this._drag = null
+    this._clearRotDwellTimer()
+  }
+
+  private _applySnapRotation(raw: number): void {
+    const result = this._rotSnapper.update(raw)
+    this._rotation     = result.angle
+    this._snapSnapped  = result.snapped
+    this._snapProgress = result.progress
+    if (result.snapped && this._rotDwellTimer === null) {
+      this._rotDwellTimer = setInterval(() => {
+        const r = this._rotSnapper.update(this._rotation)
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._rotSnapper.isRefining) this._clearRotDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearRotDwellTimer()
+    }
+  }
+
+  private _clearRotDwellTimer(): void {
+    if (this._rotDwellTimer !== null) {
+      clearInterval(this._rotDwellTimer)
+      this._rotDwellTimer = null
+    }
+    this._snapSnapped  = false
+    this._snapProgress = 0
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
@@ -1307,10 +1345,24 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
       this._sizeSlot.isActive ? '#666688' : '#81d4fa')
 
-    // Rotate handle — circle, orange glow (dimmed when slot bound). Always
-    // draggable, including when masked.
-    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
-      this._rotationSlot.isActive ? '#666688' : '#ffb74d')
+    // Rotate handle — orange normally; cyan when snapping; dimmed when slot bound
+    const rotCol = this._rotationSlot.isActive ? '#666688'
+                 : this._snapSnapped           ? ROT_SNAP_COL
+                 : '#ffb74d'
+    this._drawGlowCircle(ctx, hp.rotate, HANDLE_R, rotCol)
+    if (this._snapSnapped && this._snapProgress > 0) {
+      const arcR  = HANDLE_R + 5
+      const start = -Math.PI / 2
+      const end   = start + this._snapProgress * 2 * Math.PI
+      ctx.save()
+      ctx.strokeStyle = ROT_SNAP_COL
+      ctx.lineWidth   = 2
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(hp.rotate.x, hp.rotate.y, arcR, start, end)
+      ctx.stroke()
+      ctx.restore()
+    }
 
     // Move handle — circle + crosshair, white glow. Hidden entirely when a
     // mask is applied, since masked text ignores _position.
