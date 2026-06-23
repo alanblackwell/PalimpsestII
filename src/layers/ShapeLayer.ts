@@ -20,16 +20,16 @@ import { BindingLayer } from './BindingLayer.js'
 // ------------------------------------------------------------
 //
 // Provides:
-//   • Center position, width, height, rotation angle
-//   • Four input slots: positionSlot (Point), colourSlot (Colour),
-//     opacitySlot (Amount), phaseSlot (Amount)
+//   • Center position, width, height, rotation angle, uniform scale
+//   • Five input slots: positionSlot (Point), colourSlot (Colour),
+//     opacitySlot (Amount), scaleSlot (Amount), rotationSlot (Direction)
 //   • Ten interactive handles: center (move), four edge midpoints
 //     (anchored resize — the opposite edge/corner stays fixed in canvas
 //     space, so the centre shifts as the box is resized), four corners
 //     (anchored resize), one rotation handle (upper-right of bounding box)
 //   • renderSelf  — draws shape content via abstract drawShape()
 //   • renderPanel — strip pill + canvas panel pill + handle overlays
-//   • PointSource output — current point at phase along perimeter
+//   • PointSource output — center of the shape
 //
 // Subclasses implement drawShape() and samplePerimeter().
 
@@ -41,14 +41,14 @@ const HIT_R     = 12          // pointer hit radius (px)
 const MIN_SIZE  = 20          // minimum width / height (px)
 const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
 
-// Stroke-control pill (outline-mode toggle + stroke-width slider),
-// drawn directly below the canvas-space panel pill.
+// Stroke/scale control pill, drawn directly below the canvas-space panel pill.
 const SLOT_H    = 26
 const SLOT_GAP  = 4
 const BTN_SZ    = SLOT_H - 6   // square toggle-button size
 const SW_LABEL_W = 78
 const SW_VALUE_W = 38
 const MAX_STROKE_WIDTH = 30    // Amount [0,1] -> stroke width [0.5, 30] px
+const MAX_SCALE = 2            // Amount [0,1] -> scale [0, 2], 0.5 -> 1.0×
 
 // Handle index constants
 const H_CENTER = 0
@@ -82,6 +82,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _width:  number
   protected _height: number
   protected _angle:  number = 0   // radians
+  protected _scale:  number = 1   // uniform scale multiplier (Amount * 2)
 
   protected _colour:  Colour = { r: 1, g: 1, b: 1, a: 1 }
   protected _opacity: number = 1
@@ -92,7 +93,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   readonly positionSlot:    ParameterSlot
   readonly colourSlot:      ParameterSlot
   readonly opacitySlot:     ParameterSlot
-  readonly phaseSlot:       ParameterSlot
+  readonly scaleSlot:       ParameterSlot
   readonly fillModeSlot:    ParameterSlot
   readonly rotationSlot:    ParameterSlot
   readonly strokeWidthSlot: ParameterSlot
@@ -100,9 +101,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _filled = true
   protected _strokeWidth = 2
   protected _strokeSliderDrag = false
+  private   _scaleSliderDrag  = false
 
-  private _phase:          number = 0
-  private _currentPoint:   Point  = { x: 0, y: 0 }
   private _lastEventTime:  EventValue = null
   protected _toggleBounds: { x: number; y: number; width: number; height: number } | null = null
 
@@ -127,12 +127,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this.positionSlot  = new ParameterSlot(ValueType.Point,     this, 'position')
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
     this.opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
-    this.phaseSlot     = new ParameterSlot(ValueType.Amount,    this, 'phase')
+    this.scaleSlot     = new ParameterSlot(ValueType.Amount,    this, 'scale')
     this.fillModeSlot  = new ParameterSlot(ValueType.Event,     this, 'outline mode')
     this.rotationSlot  = new ParameterSlot(ValueType.Direction, this, 'rotation')
     this.strokeWidthSlot = new ParameterSlot(ValueType.Amount,  this, 'stroke width')
-    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.phaseSlot, this.fillModeSlot, this.rotationSlot, this.strokeWidthSlot)
-    this._currentPoint = { x: cx, y: cy }
+    this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.scaleSlot, this.fillModeSlot, this.rotationSlot, this.strokeWidthSlot)
     graph.register(this)
   }
 
@@ -155,7 +154,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   /** Return canvas coordinate at t ∈ [0, 1) on the shape's perimeter. */
   abstract samplePerimeter(t: number): Point
 
-  getPoint(): Point { return { ...this._currentPoint } }
+  getPoint(): Point { return { x: this._cx, y: this._cy } }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
@@ -163,7 +162,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this.positionSlot) return { x: this._cx, y: this._cy }
     if (slot === this.opacitySlot)  return this._opacity
-    if (slot === this.phaseSlot)    return this._phase
+    if (slot === this.scaleSlot)    return this._scale / MAX_SCALE
     if (slot === this.rotationSlot) return { angle: this._angle, magnitude: 1 }
     if (slot === this.strokeWidthSlot) return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
     return null
@@ -197,8 +196,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (this.opacitySlot.isActive) {
       this._opacity = (this.opacitySlot.source as AmountSource).getAmount() as Amount
     }
-    if (this.phaseSlot.isActive) {
-      this._phase = (this.phaseSlot.source as AmountSource).getAmount()
+    if (this.scaleSlot.isActive) {
+      this._scale = (this.scaleSlot.source as AmountSource).getAmount() * MAX_SCALE
     }
     if (this.fillModeSlot.isActive) {
       const t = (this.fillModeSlot.source as EventSource).getEventTime()
@@ -213,7 +212,6 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (this.strokeWidthSlot.isActive) {
       this._strokeWidth = Math.max(0.5, (this.strokeWidthSlot.source as AmountSource).getAmount() * MAX_STROKE_WIDTH)
     }
-    this._currentPoint = this.samplePerimeter(this._phase)
     this._updateOffscreens()
   }
 
@@ -225,7 +223,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return {
       cx: this._cx, cy: this._cy, width: this._width, height: this._height,
       angle: this._angle, colour: this._colour, opacity: this._opacity,
-      filled: this._filled, strokeWidth: this._strokeWidth, phase: this._phase,
+      filled: this._filled, strokeWidth: this._strokeWidth, scale: this._scale,
     }
   }
 
@@ -239,7 +237,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.opacity === 'number')     this._opacity = state.opacity
     if (typeof state.filled === 'boolean')     this._filled = state.filled
     if (typeof state.strokeWidth === 'number') this._strokeWidth = state.strokeWidth
-    if (typeof state.phase === 'number')       this._phase = state.phase
+    if (typeof state.scale === 'number')       this._scale = state.scale
   }
 
   private _updateOffscreens(): void {
@@ -252,7 +250,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const mctx = this._maskCanvas.getContext('2d')!
     mctx.clearRect(0, 0, w, h)
     // White filled shape on transparent — alpha encodes inclusion.
-    this.drawShape(mctx, this._cx, this._cy, this._width, this._height, this._angle,
+    this.drawShape(mctx, this._cx, this._cy, this._width * this._scale, this._height * this._scale, this._angle,
       { r: 1, g: 1, b: 1, a: 1 }, 1, true, this._strokeWidth)
 
     if (this._imageCanvas.width !== w || this._imageCanvas.height !== h) {
@@ -261,7 +259,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const ictx = this._imageCanvas.getContext('2d')!
     ictx.clearRect(0, 0, w, h)
     // Shape rendered at its actual colour and fill mode.
-    this.drawShape(ictx, this._cx, this._cy, this._width, this._height, this._angle,
+    this.drawShape(ictx, this._cx, this._cy, this._width * this._scale, this._height * this._scale, this._angle,
       this._colour, this._opacity, this._filled, this._strokeWidth)
   }
 
@@ -271,7 +269,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   renderSelf(ctx: Ctx2D): void {
     this.drawShape(ctx, this._cx, this._cy,
-      this._width, this._height, this._angle, this._colour, this._opacity, this._filled, this._strokeWidth)
+      this._width * this._scale, this._height * this._scale, this._angle, this._colour, this._opacity, this._filled, this._strokeWidth)
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -281,17 +279,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
-    if (this.phaseSlot.isActive) {
-      this._drawPhaseIndicator(ctx)
-    }
   }
 
-  // The fillModeSlot ("outline mode") and strokeWidthSlot rows are pulled
-  // out of the standard slot pill and rendered together in a second pill
-  // below the canvas-space panel (see _drawStrokePill).
+  // fillModeSlot, strokeWidthSlot, and scaleSlot are pulled out of the
+  // standard slot pill and rendered together in a second pill below the
+  // canvas-space panel (see _drawStrokePill).
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
+    const standardSlots = this.slots.filter(
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot
+    )
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
     this._drawStrokePill(ctx)
   }
@@ -302,9 +299,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   protected _strokePillBounds(): BBox {
     const cb = this.canvasBounds
-    const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
+    const standardSlots = this.slots.filter(
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot
+    )
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 3 * SLOT_H + 2 * SLOT_GAP }
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * SLOT_H + 4 * SLOT_GAP }
   }
 
   private _outlineRowBounds(): BBox {
@@ -322,6 +321,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return { x: pb.x, y: pb.y + 2 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
   }
 
+  private _scaleRowBounds(): BBox {
+    const pb = this._strokePillBounds()
+    return { x: pb.x, y: pb.y + 3 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
+  }
+
+  private _scaleBindRowBounds(): BBox {
+    const pb = this._strokePillBounds()
+    return { x: pb.x, y: pb.y + 4 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
+  }
+
   protected _strokeSliderGeom() {
     const b = this._strokeRowBounds()
     const midY = b.y + b.height / 2
@@ -331,6 +340,35 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const sld0 = labelX + SW_LABEL_W
     const sldR = valueRight - SW_VALUE_W - 6
     return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  }
+
+  private _scaleSliderGeom() {
+    const b = this._scaleRowBounds()
+    const midY       = b.y + b.height / 2
+    const labelX     = b.x + 12
+    const indX       = b.x + b.width - 8
+    const valueRight = indX - 14
+    const sld0       = labelX + SW_LABEL_W
+    const sldR       = valueRight - SW_VALUE_W - 6
+    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  }
+
+  protected _scaleSliderHit(point: Point): boolean {
+    return boundingBoxContains(this._scaleRowBounds(), point)
+  }
+
+  protected _setScaleFromPointer(px: number): void {
+    if (this.scaleSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.scaleSlot)?.toggle()
+    }
+    const g = this._scaleSliderGeom()
+    const thumbR = 5
+    const lo = g.sld0 + thumbR
+    const hi = g.sldR - thumbR
+    const range = Math.max(1e-6, hi - lo)
+    const v = Math.max(0, Math.min(1, (px - lo) / range))
+    this._scale = v * MAX_SCALE
+    this.markDirty()
   }
 
   protected _drawStrokePill(ctx: Ctx2D): void {
@@ -343,6 +381,12 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     // Row 3 — strokeWidthSlot binding row (standard label + drop-target box).
     this.renderSlotGroup(ctx, [this.strokeWidthSlot], this._strokeBindRowBounds().y)
+
+    // Row 4 — scale slider.
+    this._drawScaleSlider(ctx)
+
+    // Row 5 — scaleSlot binding row.
+    this.renderSlotGroup(ctx, [this.scaleSlot], this._scaleBindRowBounds().y)
   }
 
   private _drawOutlineToggle(ctx: Ctx2D): void {
@@ -429,6 +473,42 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
+  private _drawScaleSlider(ctx: Ctx2D): void {
+    const g = this._scaleSliderGeom()
+    const { x, y, width, height } = g.b
+
+    const active = this.scaleSlot.isActive
+    const colour = active ? AM_COL : ACCENT
+    const v01 = Math.max(0, Math.min(1, this._scale / MAX_SCALE))
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, 6)
+    ctx.fill()
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('scale', g.labelX, g.midY)
+
+    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${this._scale.toFixed(2)}×`, g.valueRight, g.midY)
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+
+    ctx.restore()
+  }
+
   protected _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
     const thumbR = 5
     const lo = x0 + thumbR
@@ -489,6 +569,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     }
     // Stroke-width slider
     if (this._strokeSliderHit(point)) return this
+    // Scale slider
+    if (this._scaleSliderHit(point)) return this
     // Shape handles
     const r2 = HIT_R * HIT_R
     for (const h of this._handlePositions()) {
@@ -529,6 +611,14 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       return true
     }
 
+    // Scale slider
+    if (this._scaleSliderHit(point)) {
+      this._scaleSliderDrag = true
+      this._setScaleFromPointer(point.x)
+      this.markDirty()
+      return true
+    }
+
     const handles = this._handlePositions()
     let best = -1, bestD2 = HIT_R * HIT_R
     for (let i = 0; i < handles.length; i++) {
@@ -557,8 +647,15 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       if (this.rotationSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.rotationSlot)?.toggle()
       }
-      const hw = this._width / 2, hh = this._height / 2
+      const hw = this._width * this._scale / 2, hh = this._height * this._scale / 2
       this._rotLocalAngle = Math.atan2(-(hh + ROT_OFF), hw + ROT_OFF)
+    }
+
+    // Resize handles: suspend scale binding so manual resizing takes over.
+    if (best !== H_CENTER && best !== H_ROTATE) {
+      if (this.scaleSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this.scaleSlot)?.toggle()
+      }
     }
 
     this.markDirty()
@@ -568,6 +665,10 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   handlePointerMove(point: Point): void {
     if (this._strokeSliderDrag) {
       this._setStrokeWidthFromPointer(point.x)
+      return
+    }
+    if (this._scaleSliderDrag) {
+      this._setScaleFromPointer(point.x)
       return
     }
     if (this._dragHandle < 0) return
@@ -634,17 +735,18 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   handlePointerUp(): void {
     this._dragHandle = -1
     this._strokeSliderDrag = false
+    this._scaleSliderDrag  = false
   }
 
   // ----------------------------------------------------------
   // Private helpers
   // ----------------------------------------------------------
 
-  /** Ten handle positions in canvas space, accounting for rotation. */
+  /** Ten handle positions in canvas space, accounting for rotation and scale. */
   private _handlePositions(): Point[] {
     const { _cx: cx, _cy: cy, _angle } = this
-    const hw  = this._width  / 2
-    const hh  = this._height / 2
+    const hw  = this._width  * this._scale / 2
+    const hh  = this._height * this._scale / 2
     const cos = Math.cos(_angle)
     const sin = Math.sin(_angle)
     const T   = (lx: number, ly: number): Point => ({
@@ -731,21 +833,6 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
-  protected _drawPhaseIndicator(ctx: Ctx2D): void {
-    const cp = this._currentPoint
-    ctx.save()
-    ctx.strokeStyle = 'rgba(255,255,255,0.75)'
-    ctx.lineWidth   = 1.5
-    ctx.beginPath()
-    ctx.arc(cp.x, cp.y, 8, 0, Math.PI * 2)
-    ctx.stroke()
-    ctx.fillStyle = '#ffffff'
-    ctx.beginPath()
-    ctx.arc(cp.x, cp.y, 3, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
-  }
-
   private _drawPill(ctx: Ctx2D, b: BBox): void {
     const { x, y, width, height } = b
     if (width <= 0 || height <= 0) return
@@ -776,13 +863,13 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.lineWidth   = 1
     ctx.stroke()
 
-    // Dimensions
+    // Dimensions (scaled)
     ctx.font         = '11px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.80)'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText(
-      `${Math.round(this._width)} × ${Math.round(this._height)}`,
+      `${Math.round(this._width * this._scale)} × ${Math.round(this._height * this._scale)}`,
       x + 28, midY,
     )
 

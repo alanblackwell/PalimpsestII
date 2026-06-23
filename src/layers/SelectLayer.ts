@@ -233,18 +233,23 @@ export class SelectLayer extends Layer implements ImageSource {
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     if (pointRight) {
-      ctx.rect(cx, cy - shaftH / 2, shaftW, shaftH)
-      ctx.moveTo(cx + shaftW, cy - headH / 2)
+      ctx.moveTo(cx,             cy - shaftH / 2)
+      ctx.lineTo(cx + shaftW,    cy - shaftH / 2)
+      ctx.lineTo(cx + shaftW,    cy - headH / 2)
       ctx.lineTo(cx + shaftW + headW, cy)
-      ctx.lineTo(cx + shaftW, cy + headH / 2)
-      ctx.closePath()
+      ctx.lineTo(cx + shaftW,    cy + headH / 2)
+      ctx.lineTo(cx + shaftW,    cy + shaftH / 2)
+      ctx.lineTo(cx,             cy + shaftH / 2)
     } else {
-      ctx.rect(cx - shaftW, cy - shaftH / 2, shaftW, shaftH)
-      ctx.moveTo(cx - shaftW, cy - headH / 2)
+      ctx.moveTo(cx,             cy - shaftH / 2)
+      ctx.lineTo(cx - shaftW,    cy - shaftH / 2)
+      ctx.lineTo(cx - shaftW,    cy - headH / 2)
       ctx.lineTo(cx - shaftW - headW, cy)
-      ctx.lineTo(cx - shaftW, cy + headH / 2)
-      ctx.closePath()
+      ctx.lineTo(cx - shaftW,    cy + headH / 2)
+      ctx.lineTo(cx - shaftW,    cy + shaftH / 2)
+      ctx.lineTo(cx,             cy + shaftH / 2)
     }
+    ctx.closePath()
     ctx.fill()
     ctx.restore()
   }

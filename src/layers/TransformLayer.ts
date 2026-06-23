@@ -94,18 +94,20 @@ function ptDist(a: Point, b: Point): number {
 export class TransformLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
-  private readonly _sourceSlot:    ParameterSlot
-  private readonly _positionSlot:  ParameterSlot
-  private readonly _scaleSlot:     ParameterSlot
-  private readonly _directionSlot: ParameterSlot
-  private readonly _opacitySlot:   ParameterSlot
+  private readonly _sourceSlot:   ParameterSlot
+  private readonly _positionSlot: ParameterSlot
+  private readonly _scaleSlot:    ParameterSlot
+  private readonly _rotateSlot:   ParameterSlot
+  private readonly _centreSlot:   ParameterSlot
+  private readonly _opacitySlot:  ParameterSlot
 
   private _offscreen: OffscreenCanvas
 
   // Resolved each recompute
-  private _position: Point  = { x: 0, y: 0 }
-  private _scale:    number = 1.0
-  private _rotation: number = 0
+  private _position:    Point  = { x: 0, y: 0 }
+  private _centrePoint: Point  = { x: 0, y: 0 }
+  private _scale:       number = 1.0
+  private _rotation:    number = 0
 
   // Manual fallbacks, set by handle drags
   private _manualPosition: Point | null = null
@@ -121,13 +123,15 @@ export class TransformLayer extends Layer implements ImageSource {
     super()
     this._offscreen      = new OffscreenCanvas(canvasWidth, canvasHeight)
     this._position       = { x: canvasWidth / 2, y: canvasHeight / 2 }
+    this._centrePoint    = { x: canvasWidth / 2, y: canvasHeight / 2 }
     this._sourceSlot     = new ParameterSlot(ValueType.Image,     this)
     this._positionSlot   = new ParameterSlot(ValueType.Point,     this)
     this._scaleSlot      = new ParameterSlot(ValueType.Amount,    this, 'scale')
-    this._directionSlot  = new ParameterSlot(ValueType.Direction, this)
+    this._rotateSlot     = new ParameterSlot(ValueType.Direction, this, 'rotate')
+    this._centreSlot     = new ParameterSlot(ValueType.Point,     this, 'centre')
     this._opacitySlot    = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this.slots.push(this._sourceSlot, this._positionSlot, this._scaleSlot,
-                    this._directionSlot, this._opacitySlot)
+                    this._rotateSlot, this._centreSlot, this._opacitySlot)
     this.debugName = 'TransformLayer'
     graph.register(this)
   }
@@ -142,11 +146,12 @@ export class TransformLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get sourceSlot():    ParameterSlot { return this._sourceSlot    }
-  get positionSlot():  ParameterSlot { return this._positionSlot  }
-  get scaleSlot():     ParameterSlot { return this._scaleSlot     }
-  get directionSlot(): ParameterSlot { return this._directionSlot }
-  get opacitySlot():   ParameterSlot { return this._opacitySlot   }
+  get sourceSlot():   ParameterSlot { return this._sourceSlot   }
+  get positionSlot(): ParameterSlot { return this._positionSlot }
+  get scaleSlot():    ParameterSlot { return this._scaleSlot    }
+  get rotateSlot():   ParameterSlot { return this._rotateSlot   }
+  get centreSlot():   ParameterSlot { return this._centreSlot   }
+  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
 
   // Touching the slider while opacitySlot is bound suspends the binding
   // and hands manual control to the user (suspend-on-touch convention).
@@ -162,13 +167,14 @@ export class TransformLayer extends Layer implements ImageSource {
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this._positionSlot)  return this._manualPosition ?? this._position
+    if (slot === this._positionSlot) return this._manualPosition ?? this._position
     if (slot === this._scaleSlot) {
       const scale = this._manualScale ?? this._scale
       return Math.max(0, Math.min(1, (scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)))
     }
-    if (slot === this._directionSlot) return { angle: this._rotation, magnitude: 1 }
-    if (slot === this._opacitySlot)   return this._opacity
+    if (slot === this._rotateSlot)  return { angle: this._rotation, magnitude: 1 }
+    if (slot === this._centreSlot)  return { ...this._centrePoint }
+    if (slot === this._opacitySlot) return this._opacity
     return null
   }
 
@@ -235,10 +241,14 @@ export class TransformLayer extends Layer implements ImageSource {
       this._scale = this._manualScale ?? 1.0
     }
 
-    if (this._directionSlot.isActive) {
-      const dir: Direction = (this._directionSlot.source as DirectionSource).getDirection()
+    if (this._rotateSlot.isActive) {
+      const dir: Direction = (this._rotateSlot.source as DirectionSource).getDirection()
       this._rotation = dir.angle
     }
+
+    this._centrePoint = this._centreSlot.isActive
+      ? (this._centreSlot.source as PointSource).getPoint()
+      : this._position
 
     const opacity: number = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
@@ -253,8 +263,11 @@ export class TransformLayer extends Layer implements ImageSource {
 
       ctx.save()
       ctx.globalAlpha = Math.max(0, Math.min(1, opacity))
-      ctx.translate(this._position.x, this._position.y)
+      // Rotate about centrePoint, then translate to position.
+      // When centrePoint === position this reduces to the previous transform.
+      ctx.translate(this._centrePoint.x, this._centrePoint.y)
       ctx.rotate(this._rotation)
+      ctx.translate(-this._centrePoint.x + this._position.x, -this._centrePoint.y + this._position.y)
       ctx.scale(this._scale, this._scale)
       ctx.drawImage(src as CanvasImageSource, -sw / 2, -sh / 2, sw, sh)
       ctx.restore()
@@ -288,13 +301,16 @@ export class TransformLayer extends Layer implements ImageSource {
     const hp = this._handlePos()
 
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
-      if (this._directionSlot.state === SlotState.Bound) {
-        BindingLayer.findForSlot(this._directionSlot)?.toggle()
+      if (this._rotateSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._rotateSlot)?.toggle()
+      }
+      if (this._centreSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._centreSlot)?.toggle()
       }
       this._drag = {
         type:       'rotate',
-        center:     { ...this._position },
-        startAngle: Math.atan2(point.y - this._position.y, point.x - this._position.x),
+        center:     { ...this._centrePoint },
+        startAngle: Math.atan2(point.y - this._centrePoint.y, point.x - this._centrePoint.x),
         startRot:   this._rotation,
       }
       return true
@@ -414,7 +430,7 @@ export class TransformLayer extends Layer implements ImageSource {
       this._scaleSlot.isActive ? '#666688' : '#81d4fa')
 
     this._drawGlowCircle(ctx, hp.rotate, HANDLE_R,
-      this._directionSlot.isActive ? '#666688' : '#ffb74d')
+      this._rotateSlot.isActive ? '#666688' : '#ffb74d')
 
     this._drawGlowCircle(ctx, hp.move, HANDLE_R,
       this._positionSlot.isActive ? '#666688' : '#ffffff')
@@ -503,11 +519,12 @@ export class TransformLayer extends Layer implements ImageSource {
 
     // Slot indicators (right side)
     const slots = [
-      { slot: this._sourceSlot,    label: 'src' },
-      { slot: this._positionSlot,  label: 'pos' },
-      { slot: this._scaleSlot,     label: 'sc'  },
-      { slot: this._directionSlot, label: 'dir' },
-      { slot: this._opacitySlot,   label: 'op'  },
+      { slot: this._sourceSlot,   label: 'src' },
+      { slot: this._positionSlot, label: 'pos' },
+      { slot: this._scaleSlot,    label: 'sc'  },
+      { slot: this._rotateSlot,   label: 'rot' },
+      { slot: this._centreSlot,   label: 'ctr' },
+      { slot: this._opacitySlot,  label: 'op'  },
     ]
     let dx = x + width - 6
     ctx.font = '9px monospace'

@@ -239,16 +239,16 @@ export class PathLayer extends ShapeLayer {
   protected override _strokePillBounds() {
     const cb = this.canvasBounds
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.radiusSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot && s !== this.radiusSlot
     )
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 3 * SLOT_H + 2 * SLOT_GAP }
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * SLOT_H + 4 * SLOT_GAP }
   }
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.radiusSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot && s !== this.radiusSlot
     )
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
     this._drawStrokePill(ctx)
@@ -351,7 +351,6 @@ export class PathLayer extends ShapeLayer {
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
-    if (this.phaseSlot.isActive) this._drawPhaseIndicator(ctx)
   }
 
   // ----------------------------------------------------------

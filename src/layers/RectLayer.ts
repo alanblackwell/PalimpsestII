@@ -32,8 +32,8 @@ export class RectLayer extends ShapeLayer {
     const t0    = ((t % 1) + 1) % 1
     const cx    = this._cx
     const cy    = this._cy
-    const w     = this._width
-    const h     = this._height
+    const w     = this._width  * this._scale
+    const h     = this._height * this._scale
     const a     = this._angle
     const hw    = w / 2
     const hh    = h / 2

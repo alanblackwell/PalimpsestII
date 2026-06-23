@@ -964,6 +964,7 @@ export class InteractionSystem {
       return
     }
     if (e.key === 'm' && !e.ctrlKey && !e.metaKey) {
+      if (this._getDisplayMode()) this._spaceAction?.()
       this._menuFocusAction?.()
       e.preventDefault()
       return
@@ -975,6 +976,10 @@ export class InteractionSystem {
     }
     if (this._widget !== null) {
       const key = e.shiftKey ? `Shift+${e.key}` : e.key
+      const isEditModeKey = key === 'h' || key === 'H' ||
+                            key === 'ArrowUp' || key === 'ArrowDown' ||
+                            key === 'Shift+ArrowUp' || key === 'Shift+ArrowDown'
+      if (isEditModeKey && this._getDisplayMode()) this._spaceAction?.()
       if (this._widget.handleKey(key)) e.preventDefault()
     }
   }

@@ -447,9 +447,9 @@ function insertAboveSelected(newLayer: Layer, selected: Layer): void {
 }
 
 // MenuLayer sits at the very top.
-const menuLayer = new MenuLayer((newLayer) => {
+const menuLayer = new MenuLayer((newLayer, selectAfterCreate) => {
   postInsertLayer(newLayer)
-  refreshStack(menuLayer)
+  refreshStack(selectAfterCreate ? newLayer : menuLayer)
 })
 menuLayer.debugName = 'Menu'
 menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
@@ -592,16 +592,24 @@ interaction.setCollectionAction(() => {
     selected.ingest(below)
     refreshStack(selected)
   } else {
-    // Create a new Collection, position it where the selected layer is.
-    const collection = new CollectionLayer()
-    Layer.assignDebugName(collection)
-    collection.bounds = { x: X, y: 24, width: W, height: 36 }
-    collection.setEjectCallback(() => refreshStack())
-    // Insert above the selected layer so it takes its stack position,
-    // then ingest the selected layer (removes it from the stack).
-    collection.insertAbove(selected)
-    collection.ingest(selected)
-    refreshStack(collection)
+    // Look for an existing CollectionLayer below the selected layer.
+    let existing: Layer | null = selected.layerBelow
+    while (existing !== null && !(existing instanceof CollectionLayer)) existing = existing.layerBelow
+    if (existing instanceof CollectionLayer) {
+      const nextSel = selected.layerBelow ?? selected.layerAbove ?? menuLayer
+      existing.ingest(selected)
+      refreshStack(nextSel)
+    } else {
+      // No existing collection — create one, position it where the selected
+      // layer is, then ingest the selected layer into it.
+      const collection = new CollectionLayer()
+      Layer.assignDebugName(collection)
+      collection.bounds = { x: X, y: 24, width: W, height: 36 }
+      collection.setEjectCallback(() => refreshStack())
+      collection.insertAbove(selected)
+      collection.ingest(selected)
+      refreshStack(collection)
+    }
   }
 })
 

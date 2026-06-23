@@ -33,8 +33,8 @@ export class EllipseLayer extends ShapeLayer {
     const angle = t0 * Math.PI * 2
     const cx    = this._cx
     const cy    = this._cy
-    const w     = this._width
-    const h     = this._height
+    const w     = this._width  * this._scale
+    const h     = this._height * this._scale
     const a     = this._angle
     const lx    = (w / 2) * Math.cos(angle)
     const ly    = (h / 2) * Math.sin(angle)

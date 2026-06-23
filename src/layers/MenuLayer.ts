@@ -78,11 +78,12 @@ export function rndShape(canvasW: number, canvasH: number) {
 // ── Button and column types ───────────────────────────────────
 
 type BtnDef = {
-  label:    string
-  colour:   string
-  height?:  number   // default panel height override (px)
-  kind?:    'save' | 'load'
-  factory?: (cx: number, cy: number, w: number, h: number) => Layer
+  label:              string
+  colour:             string
+  height?:            number   // default panel height override (px)
+  kind?:              'save' | 'load'
+  factory?:           (cx: number, cy: number, w: number, h: number) => Layer
+  selectAfterCreate?: boolean  // select the new layer instead of keeping Menu selected
 }
 
 // A column groups related buttons.
@@ -154,12 +155,12 @@ const COLUMNS: ColDef[] = [
       { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
     ],
     bottom: [
-      { label: 'Composite', colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h) },
-      { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer() },
-      { label: 'Transform', colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h) },
-      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer() },
-      { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer() },
-      { label: 'MotionBlur', colour: '#7ecf7e', factory: ()          => new MotionBlurLayer() },
+      { label: 'Composite', colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h), selectAfterCreate: true },
+      { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer(),        selectAfterCreate: true },
+      { label: 'Transform', colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
+      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
+      { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer(),          selectAfterCreate: true },
+      { label: 'MotionBlur', colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
     ],
   },
 
@@ -174,7 +175,7 @@ const COLUMNS: ColDef[] = [
       // Not yet assigned to a column — move to the appropriate place:
       { label: 'Math',      colour: '#4a8fe8', factory: ()          => new MathLayer(2) },
       { label: 'Trace',     colour: '#cf9f7e', factory: ()          => new TraceLayer() },
-      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer() },
+      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer(), selectAfterCreate: true },
     ],
     bottom: [
       { label: 'Load', colour: '#a0a4b8', kind: 'load' },
@@ -214,7 +215,7 @@ type PlacedBtn = { btn: BtnDef; bx: number; by: number; bw: number }
 export class MenuLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
 
-  private readonly _onAdded: (layer: Layer) => void
+  private readonly _onAdded: (layer: Layer, selectAfterCreate: boolean) => void
 
   private _onSave: (() => void) | null = null
   private _onLoad: (() => void) | null = null
@@ -222,7 +223,7 @@ export class MenuLayer extends Layer {
   private _cpBounds:  BBox | null  = null
   private _btnBounds: PlacedBtn[]  = []
 
-  constructor(onAdded: (layer: Layer) => void) {
+  constructor(onAdded: (layer: Layer, selectAfterCreate: boolean) => void) {
     super()
     this._onAdded = onAdded
     this.debugName = 'Menu'
@@ -274,7 +275,7 @@ export class MenuLayer extends Layer {
     const below = this.layerBelow
     if (below !== null) newLayer.insertAbove(below)
 
-    this._onAdded(newLayer)
+    this._onAdded(newLayer, btn.selectAfterCreate ?? false)
     return true
   }
 
