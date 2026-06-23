@@ -67,6 +67,13 @@ export class CollectionLayer extends Layer implements ImageSource {
   private _lastClickTime = 0
   private _lastClickIdx  = -1
 
+  // Drag-to-reorder state
+  private _dragIdx       = -1           // index of item being reordered (-1 = none)
+  private _dragPt: Point | null = null  // current pointer position during drag
+  private _dropIdx       = -1           // computed insertion index (0..n)
+  private _downIdx       = -1           // index hit on pointerdown
+  private _downPt: Point | null = null  // pointer position at pointerdown
+
   constructor() {
     super()
     this._indexSlot = new ParameterSlot(ValueType.Count, this, 'index')
@@ -220,17 +227,22 @@ export class CollectionLayer extends Layer implements ImageSource {
     const gb = this._gridBounds()
     if (!boundingBoxContains(gb, point)) return false
 
-    const idx = this._thumbIndexAt(point, gb)
+    const idx = this._thumbIndexAt(point, gb)   // visual index (0 = top-left = newest)
     if (idx >= 0 && idx < this._layers.length) {
       const now = performance.now()
       if (idx === this._lastClickIdx && now - this._lastClickTime < 400) {
-        // Double-click → eject
-        this.eject(idx)
+        // Double-click → eject (convert visual index to array index)
+        this.eject(this._layers.length - 1 - idx)
         this._lastClickIdx  = -1
         this._lastClickTime = 0
+        this._downIdx = -1
+        this._downPt  = null
       } else {
+        // First click — record for potential double-click or drag
         this._lastClickIdx  = idx
         this._lastClickTime = now
+        this._downIdx = idx
+        this._downPt  = { ...point }
       }
       return true
     }
@@ -238,9 +250,84 @@ export class CollectionLayer extends Layer implements ImageSource {
     return true   // consume click within the grid zone
   }
 
+  handlePointerMove(point: Point): void {
+    if (this._downIdx === -1) return
+
+    if (this._dragIdx === -1) {
+      // Check if we've moved past the drag threshold
+      if (this._downPt !== null) {
+        const dx = point.x - this._downPt.x
+        const dy = point.y - this._downPt.y
+        if (Math.hypot(dx, dy) > 8) {
+          this._dragIdx = this._downIdx
+          this._dragPt  = point
+          this._dropIdx = this._computeDropIdx(point)
+          this._lastClickIdx  = -1   // cancel pending double-click
+          this._lastClickTime = 0
+          Node.scheduleFrame?.()
+        }
+      }
+      return
+    }
+
+    // Active drag — update position and insertion index
+    this._dragPt  = point
+    this._dropIdx = this._computeDropIdx(point)
+    Node.scheduleFrame?.()
+  }
+
+  handlePointerUp(): void {
+    if (this._dragIdx !== -1) this._commitReorder()
+    this._dragIdx = -1
+    this._dragPt  = null
+    this._dropIdx = -1
+    this._downIdx = -1
+    this._downPt  = null
+    Node.scheduleFrame?.()
+  }
+
   // ----------------------------------------------------------
   // Private helpers
   // ----------------------------------------------------------
+
+  private _computeDropIdx(point: Point): number {
+    const gb = this._gridBounds()
+    const n  = this._layers.length
+    if (n === 0) return 0
+    const { tw, th, cols } = gb
+    const rows = Math.ceil(n / cols)
+
+    const relX = point.x - (gb.x + GRID_PAD)
+    const relY = point.y - (gb.y + GRID_PAD)
+    const row  = Math.max(0, Math.min(rows - 1, Math.floor(relY / (th + CELL_GAP))))
+    const col  = Math.max(0, Math.min(cols - 1, Math.floor(relX / (tw + CELL_GAP))))
+    const idx  = Math.min(row * cols + col, n - 1)
+
+    // Left half of cell → insert before, right half → insert after
+    const cellLeftX = gb.x + GRID_PAD + col * (tw + CELL_GAP)
+    return point.x < cellLeftX + tw / 2 ? idx : idx + 1
+  }
+
+  private _commitReorder(): void {
+    const vFrom = this._dragIdx   // visual drag index
+    const vTo   = this._dropIdx   // visual insertion index (0..n)
+    const n     = this._layers.length
+    if (vFrom < 0 || vFrom >= n || vTo < 0 || vTo > n) return
+    if (vTo === vFrom || vTo === vFrom + 1) return  // no-op
+
+    // Visual index → array index: arrFrom = n-1-vFrom.
+    // After removing arrFrom, insert so the item lands at visual position adjVTo
+    // in the final n-item array. adjVTo accounts for the gap left by the removed
+    // item shifting visual indices. The final array index = (n-1)-adjVTo, which
+    // is the splice position in the post-removal (n-1)-item array.
+    const arrFrom   = n - 1 - vFrom
+    const adjVTo    = vTo > vFrom ? vTo - 1 : vTo
+    const arrInsert = (n - 1) - adjVTo
+
+    const [item] = this._layers.splice(arrFrom, 1)
+    this._layers.splice(arrInsert, 0, item!)
+    this.markDirty()
+  }
 
   private _gridBounds(): GridLayout {
     // Use the full available width to the right of the widget strip — this
@@ -346,20 +433,28 @@ export class CollectionLayer extends Layer implements ImageSource {
       ctx.textBaseline = 'middle'
       ctx.fillText('drag layers here', x + gw / 2, y + gh / 2)
     } else {
-      const cw = Node.canvasWidth
-      const ch = Node.canvasHeight
+      const cw          = Node.canvasWidth
+      const ch          = Node.canvasHeight
+      const n           = this._layers.length
+      const isReordering = this._dragIdx >= 0
 
-      for (let i = 0; i < this._layers.length; i++) {
-        const col = i % cols
-        const row = Math.floor(i / cols)
+      // Iterate by visual position v (0 = top-left = most-recently-added).
+      // Array index i = n-1-v so that _layers[n-1] (newest) appears first.
+      for (let v = 0; v < n; v++) {
+        if (isReordering && v === this._dragIdx) continue  // skip ghost source slot
+
+        const i   = n - 1 - v
+        const col = v % cols
+        const row = Math.floor(v / cols)
         const tx  = x + GRID_PAD + col * (tw + CELL_GAP)
         const ty  = y + GRID_PAD + row * (th + CELL_GAP)
 
         const thumb    = new OffscreenCanvas(tw, th)
         const thumbCtx = thumb.getContext('2d')!
-        drawLayerThumbnail(thumbCtx, this._layers[i], tw, th, cw, ch)
+        drawLayerThumbnail(thumbCtx, this._layers[i]!, tw, th, cw, ch)
 
         ctx.save()
+        if (isReordering) ctx.globalAlpha = 0.5
         ctx.beginPath()
         ctx.roundRect(tx, ty, tw, th, 4)
         ctx.clip()
@@ -368,10 +463,60 @@ export class CollectionLayer extends Layer implements ImageSource {
 
         // Cell border — highlighted when this item is the active index.
         const isSelected = this._indexSlot.isActive && i === this.selectedIndex()
-        ctx.strokeStyle = isSelected ? '#a0a0a0' : typeColor(this._layers[i]) + '88'
+        ctx.strokeStyle = isSelected ? '#a0a0a0' : typeColor(this._layers[i]!) + '88'
         ctx.lineWidth   = isSelected ? 2 : 1
         ctx.beginPath()
         ctx.roundRect(tx + 0.5, ty + 0.5, tw - 1, th - 1, 4)
+        ctx.stroke()
+      }
+
+      // Insertion line
+      if (isReordering && this._dropIdx >= 0) {
+        const k = this._dropIdx
+        let lx: number, ly: number, lh: number
+        if (k < n) {
+          const col = k % cols
+          const row = Math.floor(k / cols)
+          lx = x + GRID_PAD + col * (tw + CELL_GAP)
+          ly = y + GRID_PAD + row * (th + CELL_GAP)
+          lh = th
+        } else {
+          const lastCol = (n - 1) % cols
+          const lastRow = Math.floor((n - 1) / cols)
+          lx = x + GRID_PAD + lastCol * (tw + CELL_GAP) + tw
+          ly = y + GRID_PAD + lastRow * (th + CELL_GAP)
+          lh = th
+        }
+        ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+        ctx.lineWidth   = 3
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.moveTo(lx, ly)
+        ctx.lineTo(lx, ly + lh)
+        ctx.stroke()
+      }
+
+      // Ghost thumbnail following the pointer
+      if (isReordering && this._dragPt !== null && this._dragIdx < n) {
+        const ghost    = new OffscreenCanvas(tw, th)
+        const ghostCtx = ghost.getContext('2d')!
+        drawLayerThumbnail(ghostCtx, this._layers[n - 1 - this._dragIdx]!, tw, th, cw, ch)
+
+        const gx = this._dragPt.x - tw / 2
+        const gy = this._dragPt.y - th / 2
+        ctx.save()
+        ctx.globalAlpha = 0.85
+        ctx.beginPath()
+        ctx.roundRect(gx, gy, tw, th, 4)
+        ctx.clip()
+        ctx.drawImage(ghost, gx, gy)
+        ctx.restore()
+
+        ctx.strokeStyle = 'rgba(255,255,255,0.7)'
+        ctx.lineWidth   = 2
+        ctx.setLineDash([])
+        ctx.beginPath()
+        ctx.roundRect(gx + 0.5, gy + 0.5, tw - 1, th - 1, 4)
         ctx.stroke()
       }
     }

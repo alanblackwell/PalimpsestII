@@ -505,6 +505,16 @@ function handleLoad(): void {
         console.warn('Persistence: failed to load save file', err)
         return
       }
+      // Restore eject callbacks on any CollectionLayers in the loaded stack or
+      // archive — Persistence.deserialize doesn't call main.ts callbacks.
+      let scanL: Layer | null = root
+      while (scanL !== null) {
+        if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
+        scanL = scanL.layerAbove
+      }
+      for (const archived of deletionLayer.archivedLayers) {
+        if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
+      }
       widget.setVisible(true)
       refreshStack(selected ?? menuLayer)
     })()
