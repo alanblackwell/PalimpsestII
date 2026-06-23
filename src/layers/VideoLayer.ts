@@ -11,6 +11,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFaceDetect.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -27,6 +28,10 @@ const SRC_L   = STRIPE + 6   // left margin of first button within pill
 // Camera navigation buttons
 const NAV_SZ  = 20
 const NAV_M   = 4    // margin inside the right section
+
+// Mirror / fit-fill buttons in source pill
+const MIR_W   = 28
+const MIR_GAP = 4
 
 // File controls
 const BTN   = 22     // load button size
@@ -136,6 +141,17 @@ export class VideoLayer extends Layer implements ImageSource {
   private _frozenFrameCount = 0    // consecutive recomputes with no new frame
   private _streamHadFrames  = false // true once we've seen at least one advancing frame
   private _cameraStalled    = false // shown as overlay in renderSelf
+
+  // ── Mirror mode ───────────────────────────────────────────────
+  private _mirrored    = false
+  private _mirrorBtnB: BBox | null = null
+
+  // ── Face-detect overlay ───────────────────────────────────────
+  private _faceDetectState: 'idle' | 'scanning' | 'found' | 'not-found' = 'idle'
+  private _faceDetectMsg   = ''
+  private _faceDetectTimer: ReturnType<typeof setTimeout> | null = null
+  // Detected faces in canvas-display coordinates, set after a successful detect.
+  private _canvasFaces: Array<{ cx: number; cy: number; radius: number }> = []
 
   // ── UI hit-test bounds (set during render, read during interaction) ──
   private _toggleBounds:      BBox | null = null
@@ -252,6 +268,7 @@ export class VideoLayer extends Layer implements ImageSource {
       rotation:        this._rotation,
       manualTransform: this._manualTransform,
       fillMode:        this._fillMode,
+      mirrored:        this._mirrored,
     }
   }
 
@@ -283,6 +300,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.rotation === 'number')         this._rotation       = state.rotation
     if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
     if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
+    if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────
@@ -334,6 +352,7 @@ export class VideoLayer extends Layer implements ImageSource {
         ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
         ctx.translate(this._cx, this._cy)
         ctx.rotate(this._rotation)
+        if (this._mirrored) ctx.scale(-1, 1)
         ctx.drawImage(this._video,
           -this._displayW / 2, -this._displayH / 2, this._displayW, this._displayH)
         ctx.restore()
@@ -428,10 +447,220 @@ export class VideoLayer extends Layer implements ImageSource {
       await this._video.play()
       this._status = 'live'
       this.markDirty()
+      void this._autoDetectMirror()
     } catch {
       this._status = 'camera error'
       this.markDirty()
     }
+  }
+
+  // Runs once after each camera stream starts. Shows a cartoon-face overlay
+  // while searching, turning green (mirror on) or red (not found).
+  //
+  // Strategy:
+  //   1. MediaStreamTrack.getSettings().facingMode — reliable on mobile
+  //      ('user' = front, 'environment' = rear), usually absent on desktop.
+  //   2. HAAR Viola-Jones detector — cascade data embedded in faceCascade.ts,
+  //      no network required, works in every browser.
+  private async _autoDetectMirror(): Promise<void> {
+    this._canvasFaces = []
+    this._setFaceDetectState('scanning', 'scanning…')
+
+    // ── Step 1: facingMode from the MediaStreamTrack ──────────────
+    const track      = this._stream?.getVideoTracks()[0]
+    const facingMode = track?.getSettings().facingMode
+    if (facingMode === 'user') {
+      this._mirrored = true
+      this._setFaceDetectState('found', 'front camera — mirror on', 2500)
+      return
+    }
+    if (facingMode === 'environment') {
+      this._mirrored = false
+      this._setFaceDetectState('not-found', 'rear camera — mirror off', 2500)
+      return
+    }
+
+    // ── Step 2: capture a frame ───────────────────────────────────
+    // Wait up to 3 s for the first video frame.
+    for (let i = 0; i < 30; i++) {
+      if (this._video.readyState >= 2 && this._video.videoWidth > 0) break
+      await new Promise(r => setTimeout(r, 100))
+    }
+    if (this._sourceType !== 'camera' || this._video.readyState < 2) {
+      this._setFaceDetectState('idle', ''); return
+    }
+
+    const vw = this._video.videoWidth
+    const vh = this._video.videoHeight
+    if (!vw || !vh) { this._setFaceDetectState('idle', ''); return }
+
+    // Downscale to at most 320×240 for speed.
+    const detScale = Math.min(1, 320 / vw, 240 / vh)
+    const detW     = Math.round(vw * detScale)
+    const detH     = Math.round(vh * detScale)
+    const canvas   = new OffscreenCanvas(detW, detH)
+    const fctx     = canvas.getContext('2d')!
+    fctx.drawImage(this._video, 0, 0, detW, detH)
+    const rgba = fctx.getImageData(0, 0, detW, detH).data
+
+    if (this._sourceType !== 'camera') { this._setFaceDetectState('idle', ''); return }
+
+    // ── Step 2a: skin-tone detection (fast, high recall) ─────────
+    // Counts pixels in the Cb/Cr skin band (Tsekeridou & Pitas 1998).
+    // Works at any face size; false positives (wood, fabric) are acceptable.
+    let skinResult: SkinResult | null = detectSkin(rgba, detW, detH)
+
+    // ── Step 2b: HAAR cascade fallback ────────────────────────────
+    // If skin detection finds nothing, try the Viola-Jones cascade.
+    // It's more precise but requires the face to fill a larger portion of frame.
+    let haarFound = false
+    if (!skinResult) {
+      const gray  = rgbaToGray(rgba, detW * detH)
+      const faces = detectFaces(gray, detW, detH)
+      haarFound   = faces.length > 0
+      if (haarFound) {
+        const dW  = this._displayW > 0 ? this._displayW : Node.viewportWidth
+        const dH  = this._displayH > 0 ? this._displayH : Node.viewportHeight
+        const ox  = this._displayW > 0 ? this._cx : Node.viewportWidth  / 2
+        const oy  = this._displayH > 0 ? this._cy : Node.viewportHeight / 2
+        this._mirrored = true
+        this._canvasFaces = faces.map(f => ({
+          cx:     ox + ((f.x + f.width  / 2) / detW - 0.5) * dW,
+          cy:     oy + ((f.y + f.height / 2) / detH - 0.5) * dH,
+          radius: (f.width / detW) * dW * 0.5,
+        }))
+      }
+    }
+
+    const found = skinResult !== null || haarFound
+    this._mirrored = found
+
+    if (skinResult !== null) {
+      // Map skin centroid from detection image → canvas display coordinates.
+      const dW  = this._displayW > 0 ? this._displayW : Node.viewportWidth
+      const dH  = this._displayH > 0 ? this._displayH : Node.viewportHeight
+      const ox  = this._displayW > 0 ? this._cx : Node.viewportWidth  / 2
+      const oy  = this._displayH > 0 ? this._cy : Node.viewportHeight / 2
+      const mir = -1  // mirror is now on
+      this._canvasFaces = [{
+        cx:     ox + (skinResult.cx / detW - 0.5) * dW * mir,
+        cy:     oy + (skinResult.cy / detH - 0.5) * dH,
+        radius: skinResult.radius / detW * dW,
+      }]
+    }
+
+    this._setFaceDetectState(
+      found ? 'found' : 'not-found',
+      found ? 'face found — mirror on' : 'no face — mirror off',
+      2500,
+    )
+  }
+
+  private _setFaceDetectState(
+    state: 'idle' | 'scanning' | 'found' | 'not-found',
+    msg: string,
+    clearAfterMs?: number,
+  ): void {
+    if (this._faceDetectTimer !== null) { clearTimeout(this._faceDetectTimer); this._faceDetectTimer = null }
+    this._faceDetectState = state
+    this._faceDetectMsg   = msg
+    this.markDirty()
+    if (clearAfterMs !== undefined) {
+      this._faceDetectTimer = setTimeout(() => {
+        this._faceDetectState = 'idle'
+        this._faceDetectTimer = null
+        this.markDirty()
+      }, clearAfterMs)
+    }
+  }
+
+  private _renderFaceDetectOverlay(ctx: Ctx2D): void {
+    const cw    = Node.canvasWidth
+    const ch    = Node.canvasHeight
+    const state = this._faceDetectState
+
+    // When a face was found, draw the cartoon at the detected position.
+    // Otherwise centre it on the canvas.
+    const face0  = this._canvasFaces[0]
+    const hasPos = state === 'found' && face0 !== undefined
+    const cx  = hasPos ? face0!.cx     : cw / 2
+    const cy  = hasPos ? face0!.cy     : ch / 2
+    const R   = hasPos
+      ? Math.max(30, Math.min(face0!.radius, Math.min(cw, ch) * 0.35))
+      : Math.min(cw, ch) * 0.13
+    const lw  = Math.max(2, R * 0.055)
+
+    const colour = state === 'found'     ? '#55ee77'
+                 : state === 'not-found' ? '#ee5555'
+                 : '#e8e8e8'
+
+    ctx.save()
+
+    // Dark backdrop disc
+    ctx.fillStyle = 'rgba(0,0,0,0.40)'
+    ctx.beginPath()
+    ctx.arc(cx, cy, R * 1.35, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.strokeStyle = colour
+    ctx.fillStyle   = colour
+    ctx.lineWidth   = lw
+    ctx.lineCap     = 'round'
+    ctx.globalAlpha = state === 'scanning' ? 0.65 : 0.90
+
+    // Head circle
+    ctx.beginPath()
+    ctx.arc(cx, cy, R, 0, Math.PI * 2)
+    ctx.stroke()
+
+    // Eyes
+    const eyeR = R * 0.10
+    const eyeY = cy - R * 0.20
+    ctx.beginPath(); ctx.arc(cx - R * 0.30, eyeY, eyeR, 0, Math.PI * 2); ctx.fill()
+    ctx.beginPath(); ctx.arc(cx + R * 0.30, eyeY, eyeR, 0, Math.PI * 2); ctx.fill()
+
+    // Mouth
+    const mouthR = R * 0.36
+    if (state === 'found') {
+      ctx.beginPath()
+      ctx.arc(cx, cy + R * 0.12, mouthR, 0.15 * Math.PI, 0.85 * Math.PI)
+      ctx.stroke()
+    } else if (state === 'not-found') {
+      ctx.beginPath()
+      ctx.arc(cx, cy + R * 0.55, mouthR, 1.15 * Math.PI, 1.85 * Math.PI)
+      ctx.stroke()
+    } else {
+      // Scanning — neutral mouth + animated horizontal scan line
+      ctx.beginPath()
+      ctx.moveTo(cx - mouthR, cy + R * 0.38)
+      ctx.lineTo(cx + mouthR, cy + R * 0.38)
+      ctx.stroke()
+
+      const t     = (Date.now() % 1400) / 1400
+      const scanY = cy - R + t * R * 2
+      const halfW = Math.sqrt(Math.max(0, R * R - (scanY - cy) ** 2))
+      if (halfW > 2) {
+        ctx.globalAlpha = 0.50
+        ctx.lineWidth   = lw * 0.6
+        ctx.setLineDash([Math.max(3, R * 0.08), Math.max(3, R * 0.08)])
+        ctx.beginPath()
+        ctx.moveTo(cx - halfW, scanY); ctx.lineTo(cx + halfW, scanY)
+        ctx.stroke()
+        ctx.setLineDash([])
+        ctx.lineWidth   = lw
+        ctx.globalAlpha = 0.65
+      }
+    }
+
+    // Label below the face
+    ctx.globalAlpha  = state === 'scanning' ? 0.60 : 0.85
+    ctx.font         = `${Math.max(11, Math.round(R * 0.21))}px monospace`
+    ctx.fillStyle    = colour
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(this._faceDetectMsg, cx, cy + R * 1.62)
+
+    ctx.restore()
   }
 
   // ── Screen share source ───────────────────────────────────────
@@ -563,6 +792,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._result !== null)
       ctx.drawImage(this._result as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
     if (this._cameraStalled) this._renderStalledOverlay(ctx)
+    if (this._faceDetectState !== 'idle') this._renderFaceDetectOverlay(ctx)
   }
 
   private _renderStalledOverlay(ctx: Ctx2D): void {
@@ -747,6 +977,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._nextBtnB    !== null && boundingBoxContains(this._nextBtnB,    point)) return this
     if (this._loadBtnB    !== null && boundingBoxContains(this._loadBtnB,    point)) return this
     if (this._fitBtnB     !== null && boundingBoxContains(this._fitBtnB,     point)) return this
+    if (this._mirrorBtnB  !== null && boundingBoxContains(this._mirrorBtnB,  point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
     if (this._scrubHit(point)) return this
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
@@ -803,6 +1034,12 @@ export class VideoLayer extends Layer implements ImageSource {
         this._deviceIdx = (this._deviceIdx + 1) % this._devices.length
         void this._startCameraStream()
       }
+      return true
+    }
+    // Mirror toggle
+    if (this._mirrorBtnB !== null && boundingBoxContains(this._mirrorBtnB, point)) {
+      this._mirrored = !this._mirrored
+      this.markDirty()
       return true
     }
     // Fit/fill toggle — clears manualTransform and resets view pan/zoom
@@ -1006,7 +1243,7 @@ export class VideoLayer extends Layer implements ImageSource {
       ctx.fillText(srcIcons[i]!, bx + SRC_W / 2, btnY + SRC_W / 2)
     }
 
-    // Fit/fill toggle button — far right, always visible
+    // Fit/fill and mirror toggle buttons — far right, always visible
     const FIT_W = 28
     const FIT_M = 4
     const fitX  = x + width - FIT_M - FIT_W
@@ -1030,9 +1267,29 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.textBaseline = 'middle'
     ctx.fillText(this._fillMode ? 'fill' : 'fit', fitX + FIT_W / 2, fitY + SRC_W / 2)
 
-    // Right section — source-specific controls (narrowed to leave room for fit button)
+    // Mirror toggle [↔] — to the left of the fit button
+    const mirX = fitX - MIR_GAP - MIR_W
+    this._mirrorBtnB = { x: mirX, y: fitY, width: MIR_W, height: SRC_W }
+
+    ctx.fillStyle = this._mirrored ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
+    ctx.beginPath()
+    ctx.roundRect(mirX, fitY, MIR_W, SRC_W, 4)
+    ctx.fill()
+    if (this._mirrored) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.roundRect(mirX + 0.5, fitY + 0.5, MIR_W - 1, SRC_W - 1, 4)
+      ctx.stroke()
+    }
+    ctx.font      = '11px monospace'
+    ctx.fillStyle = this._mirrored ? ACCENT : 'rgba(255,255,255,0.45)'
+    ctx.textAlign = 'center'
+    ctx.fillText('↔', mirX + MIR_W / 2, fitY + SRC_W / 2)
+
+    // Right section — source-specific controls (narrowed to leave room for both right buttons)
     const rightX = x + SRC_L + 3 * (SRC_W + SRC_GAP) + 4
-    const rightW = fitX - 4 - rightX
+    const rightW = mirX - 4 - rightX
 
     if (rightW > 4) {
       ctx.save()
