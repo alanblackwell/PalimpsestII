@@ -29,7 +29,7 @@ const RING_R  = 10
 const DOT_R   = 3
 
 // Slot-row constants (must match Layer.ts renderSlots)
-const SLOT_H   = 26
+const SLOT_H   = 30
 const SLOT_GAP = 4
 const LABEL_W  = 78
 

@@ -9,6 +9,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // EventLayer — discrete event source (pulse generator)
@@ -59,7 +60,7 @@ const PROXIMITY_TOLERANCE  = 1.05   // fire within 5 % of calibrated minimum
 
 // Button geometry
 const BTN_M = 6
-const BTN   = 20
+const BTN   = 24
 
 export class EventLayer extends Layer implements EventSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Event])
@@ -314,11 +315,8 @@ export class EventLayer extends Layer implements EventSource {
     ctx.beginPath()
     ctx.roundRect(fb.x, fb.y, fb.width, fb.height, 4)
     ctx.fill()
-    ctx.font         = 'bold 11px monospace'
     ctx.fillStyle    = ACCENT
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('▶ FIRE', fb.x + fb.width / 2, fb.y + fb.height / 2)
+    drawIcon(ctx, 'lightning', fb.x + fb.width / 2, fb.y + fb.height / 2, fb.height - 6)
 
     const clearB = this._clearBtnBounds(b)
     const labelX = fb.x + fb.width + 10
@@ -352,7 +350,7 @@ export class EventLayer extends Layer implements EventSource {
       ctx.fillText(status, labelX, midY)
     }
 
-    this._drawBtn(ctx, clearB, '↺', 'rgba(255,255,255,0.40)')
+    this._drawBtn(ctx, clearB, 'arrow-counter-clockwise', 'rgba(255,255,255,0.40)')
 
     ctx.restore()
   }
@@ -414,18 +412,15 @@ export class EventLayer extends Layer implements EventSource {
   private _drawBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
+    icon: IconName,
     colour: string,
   ): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   private _clearBtnBounds(b?: { x: number; y: number; width: number; height: number }) {

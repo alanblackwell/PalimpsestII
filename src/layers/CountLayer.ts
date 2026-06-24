@@ -8,6 +8,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // CountLayer — a non-negative integer counter
@@ -36,7 +37,7 @@ import { graph } from '../dataflow/Graph.js'
 const ACCENT = '#a0a0a0'   // Count type colour
 
 // Button geometry
-const BTN   = 22   // button size in px
+const BTN   = 24   // button size in px
 const BTN_M = 6    // margin from right edge
 const BTN_G = 6    // gap between buttons
 
@@ -198,7 +199,7 @@ export class CountLayer extends Layer implements CountSource {
     this._drawBtn(ctx, incrB, '+', 'rgba(255,255,255,0.75)')
 
     // [↺] reset button
-    this._drawBtn(ctx, this._resetBtnBounds(b), '↺', 'rgba(255,255,255,0.45)')
+    this._drawIconBtn(ctx, this._resetBtnBounds(b), 'rgba(255,255,255,0.45)')
 
     ctx.restore()
   }
@@ -217,12 +218,24 @@ export class CountLayer extends Layer implements CountSource {
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-
     ctx.font         = '14px monospace'
     ctx.fillStyle    = colour
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
     ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+  }
+
+  private _drawIconBtn(
+    ctx: Ctx2D,
+    b: { x: number; y: number; width: number; height: number },
+    colour: string,
+  ): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+    ctx.fill()
+    ctx.fillStyle = colour
+    drawIcon(ctx, 'arrow-counter-clockwise', b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   // Layout: [−] at left after accent stripe; [+] immediately after; [↺] at right edge.

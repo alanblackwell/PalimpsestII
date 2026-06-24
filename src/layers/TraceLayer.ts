@@ -67,7 +67,7 @@ const HIT_R      = 14   // pointer hit radius
 const ROT_OFF    = 24   // rotate handle offset beyond max radius
 
 // Stroke-control pill constants (match ShapeLayer)
-const SLOT_H          = 26
+const SLOT_H          = 30
 const SLOT_GAP        = 4
 const CTRL_BTN_SZ     = SLOT_H - 6
 const SW_LABEL_W      = 78

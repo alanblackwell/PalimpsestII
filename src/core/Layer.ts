@@ -226,7 +226,7 @@ export abstract class Layer extends Node {
   protected renderSlotGroup(ctx: Ctx2D, slots: ParameterSlot[], y: number): number {
     if (slots.length === 0) return y
 
-    const SLOT_H  = 26
+    const SLOT_H  = 30
     const SLOT_GAP = 4
     const LABEL_W  = 78
     const PANEL_X  = contentLeft(Node.canvasWidth)

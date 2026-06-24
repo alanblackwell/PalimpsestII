@@ -9,14 +9,15 @@ import { graph }          from '../dataflow/Graph.js'
 import { BindingLayer }   from './BindingLayer.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ── Layout constants ──────────────────────────────────────────────────────
 const THUMB_SZ = 40
 const ROW_H    = 52
 const ROW_GAP  = 4
 const PILL_PAD = 8
-const BTN_W    = 22
-const BTN_H    = 22
+const BTN_W    = 24
+const BTN_H    = 24
 const BTN_GAP  = 4
 const RIGHT_M  = 6
 
@@ -265,8 +266,8 @@ export class BindingMapLayer extends Layer {
       this._masterDeleteBB = delBB
 
       const anyOn = bindings.some(b => b.enabled)
-      this._drawBtn(ctx, togBB, anyOn ? '⊙' : '◎', anyOn ? '#7ecfff' : 'rgba(255,180,60,0.80)')
-      this._drawBtn(ctx, delBB, '×', 'rgba(220,80,80,0.80)')
+      this._drawBtn(ctx, togBB, anyOn ? 'toggle-right' : 'toggle-left', anyOn ? '#7ecfff' : 'rgba(255,180,60,0.80)')
+      this._drawBtn(ctx, delBB, 'x', 'rgba(220,80,80,0.80)')
     }
 
     // ── Vertical connector ──────────────────────────────────────────────
@@ -338,8 +339,8 @@ export class BindingMapLayer extends Layer {
       this._bindToggleBB.set(bl, togBB)
       this._bindDeleteBB.set(bl, delBB)
 
-      this._drawBtn(ctx, togBB, enabled ? '⊙' : '◎', enabled ? '#7ecfff' : 'rgba(255,180,60,0.80)')
-      this._drawBtn(ctx, delBB, '×', 'rgba(220,80,80,0.80)')
+      this._drawBtn(ctx, togBB, enabled ? 'toggle-right' : 'toggle-left', enabled ? '#7ecfff' : 'rgba(255,180,60,0.80)')
+      this._drawBtn(ctx, delBB, 'x', 'rgba(220,80,80,0.80)')
     }
 
     ctx.restore()
@@ -390,16 +391,13 @@ export class BindingMapLayer extends Layer {
     ctx.strokeRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1)
   }
 
-  private _drawBtn(ctx: Ctx2D, b: BB, label: string, colour: string): void {
+  private _drawBtn(ctx: Ctx2D, b: BB, icon: IconName, colour: string): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   // ----------------------------------------------------------

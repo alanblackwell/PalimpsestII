@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFaceDetect.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -22,7 +23,7 @@ const AM_COL     = '#4a8fe8'   // Amount type accent
 const STRIPE     = 4
 
 // Source-selector button row  [🎥][⊞][📁]
-const SRC_W   = 24   // each button width (square)
+const SRC_W   = 28   // each button width (square)
 const SRC_GAP = 3    // gap between buttons
 const SRC_L   = STRIPE + 6   // left margin of first button within pill
 
@@ -31,7 +32,7 @@ const NAV_SZ  = 20
 const NAV_M   = 4    // margin inside the right section
 
 // Mirror / fit-fill buttons in source pill
-const MIR_W   = 28
+const MIR_W   = 32
 const MIR_GAP = 4
 
 // File controls
@@ -41,7 +42,7 @@ const BTN_M = 6      // load button margin from right edge
 // File playback control bar
 const BAR_MARGIN = 16
 const BAR_H      = 36
-const PLAY_SZ    = 28
+const PLAY_SZ    = 32
 const SCRUB_R    = 8
 const TRACK_H    = 4
 const TIME_W     = 74
@@ -840,9 +841,13 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.roundRect(btnX + 0.5, btnY + 0.5, btnW - 1, btnH - 1, 8)
     ctx.stroke()
 
+    const icY = btnY + btnH / 2
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    drawIcon(ctx, 'arrows-counter-clockwise', cx - 48, icY, 14)
     ctx.font         = '13px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-    ctx.fillText('↺  restart camera', cx, btnY + btnH / 2)
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('restart camera', cx + 6, icY)
 
     ctx.restore()
   }
@@ -861,7 +866,7 @@ export class VideoLayer extends Layer implements ImageSource {
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
-    const SLOT_H   = 26
+    const SLOT_H   = 30
     const SLOT_GAP = 4
     const BTN_SZ   = SLOT_H - 6
 
@@ -896,14 +901,10 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Icon: ⏸ when paused/frozen, ⏺ otherwise
     const paused = (this._sourceType === 'file' && !this._playing) ||
                    ((this._sourceType === 'camera' || this._sourceType === 'screen') && this._frozen)
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = isActive ? ACCENT : isSuspended ? 'rgba(255,255,255,0.35)' : ACCENT
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(paused ? '⏸' : '⏺', btnX + BTN_SZ / 2, midY)
+    drawIcon(ctx, paused ? 'pause' : 'record', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
     ctx.restore()
   }
 
@@ -1247,7 +1248,6 @@ export class VideoLayer extends Layer implements ImageSource {
 
     // Source selector buttons
     const srcTypes: SourceType[] = ['camera', 'screen', 'file']
-    const srcIcons  = ['🎥', '⊞', '📁']
     const btnY = y + (height - SRC_W) / 2
 
     this._camBtnB = this._screenBtnB = this._fileBtnB = null
@@ -1270,11 +1270,9 @@ export class VideoLayer extends Layer implements ImageSource {
         ctx.roundRect(bx + 0.5, btnY + 0.5, SRC_W - 1, SRC_W - 1, 4)
         ctx.stroke()
       }
-      ctx.font         = '13px monospace'
       ctx.fillStyle    = active ? '#ffffff' : 'rgba(255,255,255,0.55)'
-      ctx.textAlign    = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(srcIcons[i]!, bx + SRC_W / 2, btnY + SRC_W / 2)
+      const icName = (['video-camera', 'monitor', 'folder-open'] as const)[i]!
+      drawIcon(ctx, icName, bx + SRC_W / 2, btnY + SRC_W / 2, SRC_W - 10)
     }
 
     // Fit/fill and mirror toggle buttons — far right, always visible
@@ -1316,10 +1314,8 @@ export class VideoLayer extends Layer implements ImageSource {
       ctx.roundRect(mirX + 0.5, fitY + 0.5, MIR_W - 1, SRC_W - 1, 4)
       ctx.stroke()
     }
-    ctx.font      = '11px monospace'
     ctx.fillStyle = this._mirrored ? ACCENT : 'rgba(255,255,255,0.45)'
-    ctx.textAlign = 'center'
-    ctx.fillText('↔', mirX + MIR_W / 2, fitY + SRC_W / 2)
+    drawIcon(ctx, 'arrows-left-right', mirX + MIR_W / 2, fitY + SRC_W / 2, SRC_W - 10)
 
     // Right section — source-specific controls (narrowed to leave room for both right buttons)
     const rightX = x + SRC_L + 3 * (SRC_W + SRC_GAP) + 4
@@ -1445,11 +1441,8 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.roundRect(playB.x, playB.y, PLAY_SZ, PLAY_SZ, PLAY_SZ / 2)
     ctx.fillStyle = 'rgba(255,255,255,0.10)'
     ctx.fill()
-    ctx.font         = '14px monospace'
     ctx.fillStyle    = ACCENT
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._playing ? '⏸' : '▶', playB.x + PLAY_SZ / 2, playB.y + PLAY_SZ / 2)
+    drawIcon(ctx, this._playing ? 'pause' : 'play', playB.x + PLAY_SZ / 2, playB.y + PLAY_SZ / 2, 20)
 
     if (track.width > 0) {
       ctx.lineCap     = 'round'

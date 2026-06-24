@@ -10,6 +10,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import type { Clock } from '../dataflow/Clock.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // RootLayer — the immovable bottom of the layer stack
@@ -305,7 +306,7 @@ export class RootLayer extends Layer {
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
-    const SLOT_H   = 26
+    const SLOT_H   = 30
     const SLOT_GAP = 4
     const BTN_SZ   = SLOT_H - 6   // 20px
 
@@ -350,11 +351,8 @@ export class RootLayer extends Layer {
       : isSuspended ? 'rgba(255,255,255,0.35)'
       : this._transparent ? 'rgba(180,180,180,0.85)' : 'rgba(255,255,255,0.85)'
 
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = iconCol
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._transparent ? '▨' : '■', btnX + BTN_SZ / 2, midY)
+    drawIcon(ctx, this._transparent ? 'checkerboard' : 'square', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
 
     ctx.restore()
   }

@@ -15,6 +15,7 @@ import { BindingLayer }  from './BindingLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // LineLayer — a straight line with configurable endpoints,
@@ -52,7 +53,7 @@ const LINE_SNAP_DWELL_MS  = 700
 // Minimum extension of arrowhead wing beyond the stroke edge (px each side).
 const ARROW_MIN_EXTEND = 5
 
-const SLOT_H      = 26
+const SLOT_H      = 30
 const SLOT_GAP    = 4
 const SW_LABEL_W  = 78
 const SW_VALUE_W  = 38
@@ -489,15 +490,15 @@ export class LineLayer extends Layer implements ImageSource {
     // Arrow toggles at right edge: end (▶) first (rightmost), then start (◀).
     let btnX = x + width - BTN_SZ - 3
     this._arrowEndBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
-    this._renderArrowBtn(ctx, this._arrowEndBounds, '▶', this._arrowEnd, midY)
+    this._renderArrowBtn(ctx, this._arrowEndBounds, 'arrow-right', this._arrowEnd, midY)
     btnX -= BTN_SZ + 4
     this._arrowStartBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
-    this._renderArrowBtn(ctx, this._arrowStartBounds, '◀', this._arrowStart, midY)
+    this._renderArrowBtn(ctx, this._arrowStartBounds, 'arrow-left', this._arrowStart, midY)
 
     ctx.restore()
   }
 
-  private _renderArrowBtn(ctx: Ctx2D, b: BBox, label: string, active: boolean, midY: number): void {
+  private _renderArrowBtn(ctx: Ctx2D, b: BBox, icon: IconName, active: boolean, midY: number): void {
     ctx.fillStyle = active ? ACCENT + '44' : 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 3)
@@ -507,11 +508,8 @@ export class LineLayer extends Layer implements ImageSource {
     ctx.beginPath()
     ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 3)
     ctx.stroke()
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.55)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, midY)
+    drawIcon(ctx, icon, b.x + b.width / 2, midY, b.height - 8)
   }
 
   private _drawHandles(ctx: Ctx2D): void {

@@ -104,7 +104,7 @@ const SAMPLES    = 200
 const MIN_POINTS = 3   // smallest closed spline we allow (a triangle)
 
 // Radius slider geometry — mirrors ShapeLayer's stroke-width pill layout
-const SLOT_H      = 26
+const SLOT_H      = 30
 const SLOT_GAP    = 4
 const MAX_RADIUS  = 0.8   // slider maps [0, MAX_RADIUS]
 const RAD_LABEL_W = 78

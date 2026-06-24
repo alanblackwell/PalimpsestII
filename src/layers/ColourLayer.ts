@@ -14,6 +14,7 @@ import { graph } from '../dataflow/Graph.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { ColourPickerRegion, registerPromotionFactory } from '../regions/ColourPickerRegion.js'
 import { BindingLayer } from './BindingLayer.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // ColourLayer — a layer that holds and exposes a Colour value
@@ -57,7 +58,7 @@ const SAMPLE_RADIUS_MAX = 100   // px
 
 // Mirrors the constants used by Layer.renderSlots, so the sample group's
 // border/slider row line up exactly with the standard slot rows.
-const SLOT_H   = 26
+const SLOT_H   = 30
 const SLOT_GAP = 4
 const BTN_SZ   = SLOT_H - 6
 
@@ -442,11 +443,8 @@ export class ColourLayer extends Layer implements ColourSource {
       : isSuspended ? 'rgba(255,255,255,0.35)'
       : this._sampleEnabled ? 'rgba(180,255,180,0.85)' : 'rgba(255,255,255,0.55)'
 
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = iconCol
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._sampleEnabled ? '●' : '○', btnX + BTN_SZ / 2, btnY + BTN_SZ / 2)
+    drawIcon(ctx, this._sampleEnabled ? 'aperture' : 'circle-half', btnX + BTN_SZ / 2, btnY + BTN_SZ / 2, BTN_SZ - 8)
 
     // Radius slider row, below the three sample-slot rows
     const sg = this._sampleSliderGeom()

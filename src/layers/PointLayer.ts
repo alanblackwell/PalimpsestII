@@ -15,6 +15,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { DraggablePointRegion, registerPromotionFactory } from '../regions/DraggablePointRegion.js'
+import { drawIcon } from '../ui/icons.js'
 
 registerPromotionFactory((initial: Point) => new PointLayer(initial))
 
@@ -134,7 +135,7 @@ type BBox = { x: number; y: number; width: number; height: number }
 
 // Panel layout
 const PILL_PAD       = 4    // inner padding of each pill
-const ROW_H          = 26   // height of every row (slot rows, slider rows, mode row)
+const ROW_H          = 30   // height of every row (slot rows, slider rows, mode row)
 const ROW_GAP        = 4    // vertical gap between rows
 const LABEL_W        = 78   // label column width, matches Layer.renderSlots' value-box offset
 const BTN_W          = 18   // mode-cycler / toggle button width
@@ -1006,11 +1007,8 @@ export class PointLayer extends Layer implements PointSource {
     ctx.stroke()
     ctx.setLineDash([])
 
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = this._wanderEnabled ? EV_ACCENT : 'rgba(255,255,255,0.55)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._wanderEnabled ? '⏺' : '⏸', btnX + BTN_SZ / 2, midY)
+    drawIcon(ctx, this._wanderEnabled ? 'shuffle' : 'circle-half', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
 
     ctx.restore()
   }

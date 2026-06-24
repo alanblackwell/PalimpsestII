@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
 import { BindingLayer } from './BindingLayer.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // CompositeLayer — blends two images with an optional mask
@@ -428,11 +429,8 @@ export class CompositeLayer extends Layer implements ImageSource {
     ctx.beginPath()
     ctx.roundRect(sb.x, sb.y, sb.width, sb.height, 4)
     ctx.fill()
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.75)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('⇄ swap', sb.x + sb.width / 2, sb.y + sb.height / 2)
+    drawIcon(ctx, 'swap', sb.x + sb.width / 2, sb.y + sb.height / 2, sb.height - 6)
 
     ctx.restore()
   }

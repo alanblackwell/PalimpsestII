@@ -15,6 +15,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // TransformLayer — 2-D affine transform applied to an image
@@ -66,12 +67,12 @@ const MAX_SCALE = 4.0
 // Opacity slider pill, drawn directly below the standard slot-row pill.
 // Mirrors the constants used by Layer.renderSlotGroup, so its position can
 // be computed without re-rendering.
-const SLOT_H    = 26
+const SLOT_H    = 30
 const SLOT_GAP  = 4
 const PILL_GAP         = 8    // vertical gap between pills
 const OPACITY_H        = 36
 const REFLECT_TOGGLE_H = 36   // height of the toggle row inside the reflect pill
-const REFLECT_SLOT_H   = 26   // height of the axis slot row inside the reflect pill
+const REFLECT_SLOT_H   = 30   // height of the axis slot row inside the reflect pill
 const REFLECT_SLOT_GAP = 4
 const REFLECT_H        = REFLECT_TOGGLE_H + REFLECT_SLOT_GAP + REFLECT_SLOT_H
 const OP_LABEL_W = 50
@@ -890,10 +891,8 @@ export class TransformLayer extends Layer implements ImageSource {
     ctx.roundRect(btnX, btnY, btnW, btnH, 3)
     ctx.stroke()
 
-    ctx.font      = '11px monospace'
     ctx.fillStyle = this._reflectEnabled ? DIR_COL : 'rgba(255,255,255,0.40)'
-    ctx.textAlign = 'center'
-    ctx.fillText('↔', btnX + btnW / 2, toggleMidY)
+    drawIcon(ctx, 'arrows-left-right', btnX + btnW / 2, toggleMidY, btnH - 6)
 
     // ── Axis slot row ─────────────────────────────────────────
     const slotY   = b.y + REFLECT_TOGGLE_H + REFLECT_SLOT_GAP

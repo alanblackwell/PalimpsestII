@@ -1,5 +1,6 @@
 import { Clock } from '../dataflow/Clock.js'
 import { boundingBoxContains, type AmountSource, type Amount, type Ctx2D, type Point } from '../core/types.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // ClockLayer — visible, controllable time source in the stack
@@ -36,7 +37,7 @@ export class ClockLayer extends Clock implements AmountSource {
   private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // Button layout constants.
-  private static readonly BTN   = 20
+  private static readonly BTN   = 24
   private static readonly BTN_M = 6
   private static readonly BTN_G = 4
 
@@ -182,10 +183,10 @@ export class ClockLayer extends Clock implements AmountSource {
     }
 
     // Play/pause button
-    this._drawBtn(ctx, this._pauseBtnBounds(b), this._paused ? '▶' : '⏸', ACCENT)
+    this._drawBtn(ctx, this._pauseBtnBounds(b), this._paused ? 'play' : 'pause', ACCENT)
 
     // Reset button
-    this._drawBtn(ctx, this._resetBtnBounds(b), '↺', 'rgba(255,255,255,0.55)')
+    this._drawBtn(ctx, this._resetBtnBounds(b), 'arrow-counter-clockwise', 'rgba(255,255,255,0.55)')
 
     ctx.restore()
   }
@@ -197,19 +198,15 @@ export class ClockLayer extends Clock implements AmountSource {
   private _drawBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
+    icon: IconName,
     colour: string,
   ): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   private _resetBtnBounds(b?: { x: number; y: number; width: number; height: number }) {

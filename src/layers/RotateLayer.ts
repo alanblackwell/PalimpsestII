@@ -41,7 +41,7 @@ const ACCENT = '#7ecf7e'   // Image type colour
 const DIAL_R = 48          // sweep-hand dial radius (px)
 
 // Slot-row constants (must match Layer.ts renderSlots)
-const SLOT_H   = 26
+const SLOT_H   = 30
 const SLOT_GAP = 4
 const LABEL_W  = 78
 

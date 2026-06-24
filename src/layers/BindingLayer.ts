@@ -16,6 +16,7 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // BindingLayer — a first-class stack representation of a binding edge
@@ -92,7 +93,7 @@ export class BindingLayer extends Layer
   private _valueAtSuspend: Point | number | Direction | null = null
 
   // Button geometry — derived from bounds, computed on demand.
-  private static readonly BTN = 20   // button size in px
+  private static readonly BTN = 24   // button size in px
   private static readonly BTN_M = 6  // margin from right edge
   private static readonly BTN_G = 4  // gap between buttons
 
@@ -290,10 +291,8 @@ export class BindingLayer extends Layer
 
     // Arrow / disabled indicator — centred
     const arrowX = x + width / 2
-    ctx.textAlign    = 'center'
     ctx.fillStyle    = disabled ? 'rgba(255,80,80,0.70)' : accent
-    ctx.font         = disabled ? 'bold 13px monospace' : '13px monospace'
-    ctx.fillText(disabled ? '✕' : '→', arrowX, midY)
+    drawIcon(ctx, disabled ? 'x' : 'arrow-right', arrowX, midY, 14)
 
     // Consumer label + slot type
     const consumer   = this._slot.owner
@@ -305,11 +304,11 @@ export class BindingLayer extends Layer
     ctx.fillText(label, textRight, midY)
 
     // Toggle button
-    this._drawBtn(ctx, this._toggleBtnBounds(), disabled ? '◎' : '⊙',
+    this._drawBtn(ctx, this._toggleBtnBounds(), disabled ? 'toggle-left' : 'toggle-right',
       disabled ? 'rgba(255,180,60,0.80)' : accent)
 
     // Remove button
-    this._drawBtn(ctx, this._removeBtnBounds(), '×', 'rgba(220,80,80,0.80)')
+    this._drawBtn(ctx, this._removeBtnBounds(), 'x', 'rgba(220,80,80,0.80)')
 
     ctx.restore()
   }
@@ -317,19 +316,15 @@ export class BindingLayer extends Layer
   private _drawBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
+    icon: IconName,
     colour: string,
   ): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   // ----------------------------------------------------------

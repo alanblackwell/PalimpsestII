@@ -10,12 +10,13 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
 const ACCENT  = '#7ecf7e'   // Image type colour
 const STRIPE  = 4
-const BTN     = 20   // 20 to fit 6 buttons with adequate status text room
+const BTN     = 24   // 20 to fit 6 buttons with adequate status text room
 const BTN_GAP = 4
 const BTN_M   = 6
 
@@ -768,7 +769,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     this._drawStackIcon(ctx, stackB, this._stackCapture)
 
     // Mode toggle — photo / movie.
-    this._drawBtn(ctx, modeB, this._movieMode ? '🎥' : '📷', ACCENT)
+    this._drawBtn(ctx, modeB, this._movieMode ? 'video-camera' : 'camera', ACCENT)
 
     // Shutter / record button.
     if (this._movieMode) {
@@ -794,7 +795,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
     const hasResult = this._movieMode ? this._recordedBlob !== null : this._capturedImage !== null
     // Save (download) — dimmed until there's something to save.
-    this._drawBtn(ctx, saveB, '💾', hasResult ? ACCENT : 'rgba(255,255,255,0.20)')
+    this._drawBtn(ctx, saveB, 'floppy-disk', hasResult ? ACCENT : 'rgba(255,255,255,0.20)')
     // Share — dimmed until there's something to share.
     this._drawShareIcon(ctx, shareB, hasResult)
 
@@ -876,7 +877,7 @@ export class CaptureLayer extends Layer implements ImageSource {
   private _drawPreviewControls(ctx: Ctx2D, b: BBox): void {
     const playB: BBox = { x: b.x, y: b.y, width: b.height, height: b.height }
     this._playBtnB = playB
-    this._drawBtn(ctx, playB, this._previewPlaying ? '⏸' : '▶', ACCENT)
+    this._drawBtn(ctx, playB, this._previewPlaying ? 'pause' : 'play', ACCENT)
 
     const scrubB: BBox = { x: playB.x + playB.width + 6, y: b.y, width: b.width - playB.width - 6, height: b.height }
     this._scrubB = scrubB
@@ -1058,13 +1059,10 @@ export class CaptureLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  private _drawBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
+  private _drawBtn(ctx: Ctx2D, b: BBox, icon: IconName, colour: string): void {
     this._drawBtnBg(ctx, b)
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   // ── Interaction ───────────────────────────────────────────────

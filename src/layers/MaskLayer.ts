@@ -10,6 +10,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // MaskLayer — compositing mask editor
@@ -54,7 +55,7 @@ const TOOLS_GAP =  6
 
 // Invert pill — sits below the shape-slot pill
 const PILL_GAP  =  8   // vertical gap between the shape-slot pill and the invert pill
-const SLOT_H    = 26   // must match Layer.renderSlotGroup's row height
+const SLOT_H    = 30   // must match Layer.renderSlotGroup's row height
 
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
@@ -277,11 +278,8 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.stroke()
     ctx.setLineDash([])
 
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = this._inverted ? EV_ACCENT : 'rgba(255,255,255,0.55)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._inverted ? '⏺' : '⏸', btnX + BTN_SZ / 2, midY)
+    drawIcon(ctx, this._inverted ? 'circle-half' : 'record', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
 
     ctx.restore()
   }
@@ -385,8 +383,8 @@ export class MaskLayer extends Layer implements MaskSource {
     this._drawSlider(ctx)
 
     // [✕] clear and [↺] reset
-    this._drawBtn(ctx, this._clearBtnBounds(), '✕', 'rgba(255,180,180,0.70)')
-    this._drawBtn(ctx, this._resetBtnBounds(), '↺', 'rgba(255,255,255,0.50)')
+    this._drawBtn(ctx, this._clearBtnBounds(), 'x', 'rgba(255,180,180,0.70)')
+    this._drawBtn(ctx, this._resetBtnBounds(), 'arrow-counter-clockwise', 'rgba(255,255,255,0.50)')
 
     ctx.restore()
   }
@@ -692,17 +690,14 @@ export class MaskLayer extends Layer implements MaskSource {
   private _drawBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
+    icon: IconName,
     colour: string,
   ): void {
     ctx.fillStyle = 'rgba(255,255,255,0.07)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '12px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 }

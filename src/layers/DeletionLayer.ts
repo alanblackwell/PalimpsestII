@@ -5,6 +5,7 @@ import type { Point, Ctx2D } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from '../interaction/thumbnail.js'
 import type { BackgroundLayer } from './BackgroundLayer.js'
 import { contentLeft } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // DeletionLayer — archive for removed layers
@@ -33,7 +34,7 @@ const PANEL_Y  = 54
 const HEADER   = 28
 const PAD      = 10
 const GAP      = 8
-const TRASH_SZ = 16     // × button size
+const TRASH_SZ = 20     // × button size
 const TRASH_M  = 3      // margin from thumbnail top-right
 const TOGGLE_W = 110    // "Deleted"/"Background" toggle button width
 const TOGGLE_H = 20
@@ -403,11 +404,8 @@ export class DeletionLayer extends Layer {
       ctx.beginPath()
       ctx.roundRect(tb.x, tb.y, tb.width, tb.height, 3)
       ctx.fill()
-      ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-      ctx.font         = 'bold 11px monospace'
-      ctx.textAlign    = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('×', tb.x + tb.width / 2, tb.y + tb.height / 2)
+      ctx.fillStyle = 'rgba(255,255,255,0.90)'
+      drawIcon(ctx, 'x', tb.x + tb.width / 2, tb.y + tb.height / 2, tb.height - 6)
     }
 
     ctx.restore()

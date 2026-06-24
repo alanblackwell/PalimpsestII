@@ -16,6 +16,7 @@ import { BindingLayer }  from './BindingLayer.js'
 import { AngleSnapper }  from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // StrokeLayer — freehand stroke fitted to cubic Bézier curves
@@ -62,7 +63,7 @@ const MAX_HANDLE_BOOST = 3   // cap on control-point lengthening when shrunk bel
 
 // Stroke-width control pill (slider + binding row), drawn directly below
 // the standard slot pill — see ShapeLayer's stroke-control pill.
-const SLOT_H    = 26
+const SLOT_H    = 30
 const SLOT_GAP  = 4
 const SW_LABEL_W = 78
 const SW_VALUE_W = 38
@@ -1037,8 +1038,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_W - 1, BTN_H - 1, 3)
       ctx.stroke()
       ctx.fillStyle = 'rgba(255,255,255,0.88)'
-      ctx.textAlign = 'center'
-      ctx.fillText(this._drawMode ? 'done' : '✎ draw', btnX + BTN_W / 2, midY)
+      drawIcon(ctx, this._drawMode ? 'check' : 'pencil', btnX + BTN_W / 2, midY, BTN_H - 6)
     } else {
       this._drawBtnBounds = null
     }

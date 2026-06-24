@@ -10,18 +10,19 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
 const ACCENT   = '#7ecf7e'   // Image type colour
 const STRIPE   = 4
-const BTN      = 22          // load button size
+const BTN      = 24          // load button size
 const BTN_M    = 6           // load button margin from pill edge
 
 // Control bar (play/pause + scrub track), drawn across the bottom of the canvas
 const BAR_MARGIN  = 16   // margin from canvas edges
 const BAR_H       = 36   // control bar height
-const PLAY_SZ     = 28   // play/pause button size
+const PLAY_SZ     = 32   // play/pause button size
 const SCRUB_R     = 8    // scrub handle radius
 const TRACK_H     = 4    // track line thickness
 const TIME_W      = 74   // reserved width for the time readout
@@ -364,7 +365,7 @@ export class MediaLayer extends Layer implements ImageSource {
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
-    const SLOT_H   = 26
+    const SLOT_H   = 30
     const SLOT_GAP = 4
     const BTN_SZ   = SLOT_H - 6   // 20px
 
@@ -411,11 +412,8 @@ export class MediaLayer extends Layer implements ImageSource {
       ? ACCENT
       : isSuspended ? 'rgba(255,255,255,0.35)'
       : ACCENT
-    ctx.font         = '11px monospace'
     ctx.fillStyle    = iconCol
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._playing ? '⏸' : '▶', btnX + BTN_SZ / 2, midY)
+    drawIcon(ctx, this._playing ? 'pause' : 'play', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
 
     ctx.restore()
   }
@@ -475,11 +473,8 @@ export class MediaLayer extends Layer implements ImageSource {
     ctx.roundRect(playB.x, playB.y, playB.width, playB.height, playB.height / 2)
     ctx.fillStyle = 'rgba(255,255,255,0.10)'
     ctx.fill()
-    ctx.font         = '14px monospace'
     ctx.fillStyle    = ACCENT
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._playing ? '⏸' : '▶', playB.x + playB.width / 2, playB.y + playB.height / 2)
+    drawIcon(ctx, this._playing ? 'pause' : 'play', playB.x + playB.width / 2, playB.y + playB.height / 2, 20)
 
     if (track.width > 0) {
       // Track
@@ -922,20 +917,17 @@ export class MediaLayer extends Layer implements ImageSource {
       ctx.restore()
     }
 
-    this._drawBtn(ctx, loadB, '📁', 'rgba(255,255,255,0.75)')
+    this._drawBtn(ctx, loadB, 'folder-open', 'rgba(255,255,255,0.75)')
 
     ctx.restore()
   }
 
-  private _drawBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
+  private _drawBtn(ctx: Ctx2D, b: BBox, icon: IconName, colour: string): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '14px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 }

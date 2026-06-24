@@ -54,7 +54,7 @@ const MIN_SIZE  = 20          // minimum width / height (px)
 const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
 
 // Stroke/scale control pill, drawn directly below the canvas-space panel pill.
-const SLOT_H    = 26
+const SLOT_H    = 30
 const SLOT_GAP  = 4
 const BTN_SZ    = SLOT_H - 6   // square toggle-button size
 const SW_LABEL_W = 78

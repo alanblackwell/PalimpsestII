@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, angleDist } from '../interaction/AngleSnapper.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // DirectionLayer — a 2-D direction picker (angle + magnitude)
@@ -51,7 +52,7 @@ const ROT_OFFSET     = 24
 // Rotate-animation pill layout
 type BBox = { x: number; y: number; width: number; height: number }
 const ROT_PILL_PAD     = 4
-const ROT_ROW_H        = 26
+const ROT_ROW_H        = 30
 const ROT_ROW_GAP      = 4
 const ROT_LABEL_W      = 78
 const ROT_SLIDER_VAL_W = 40
@@ -462,7 +463,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
     // Row 0 — rotate toggle binding + play/pause button
     const row0 = this._rotateRow(0)
     this._renderBindRow(ctx, this._rotateToggleSlot, row0)
-    this._renderToggleBtn(ctx, row0, this._rotating ? '⏺' : '⏸',
+    this._renderToggleBtn(ctx, row0, this._rotating ? 'record' : 'circle-half',
       this._rotating ? EV_ACCENT : 'rgba(255,255,255,0.55)',
       this._rotateToggleSlot.state, (b) => { this._rotateToggleBounds = b })
 
@@ -475,7 +476,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
     // Row 3 — CW/CCW toggle binding + direction button
     const row3 = this._rotateRow(3)
     this._renderBindRow(ctx, this._cwSlot, row3)
-    this._renderToggleBtn(ctx, row3, this._clockwise ? '↻' : '↺',
+    this._renderToggleBtn(ctx, row3, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
       ACCENT,
       this._cwSlot.state, (b) => { this._cwBounds = b })
   }
@@ -509,7 +510,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   private _renderToggleBtn(
     ctx:      Ctx2D,
     row:      BBox,
-    label:    string,
+    icon:     IconName,
     colour:   string,
     state:    SlotState,
     setBounds: (b: BBox) => void,
@@ -536,11 +537,8 @@ export class DirectionLayer extends Layer implements DirectionSource {
     ctx.stroke()
     ctx.setLineDash([])
 
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, btnX + ROT_BTN_SZ / 2, midY)
+    ctx.fillStyle = colour
+    drawIcon(ctx, icon, btnX + ROT_BTN_SZ / 2, midY, ROT_BTN_SZ - 8)
     ctx.restore()
   }
 
@@ -652,11 +650,8 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
     // Rotation state indicator
     if (this._rotating) {
-      ctx.font      = '13px monospace'
       ctx.fillStyle = EV_ACCENT
-      ctx.textAlign = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(this._clockwise ? '↻' : '↺', x + width - 48, midY)
+      drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise', x + width - 48, midY, 14)
     }
 
     // Slot indicators (●/○), right-to-left

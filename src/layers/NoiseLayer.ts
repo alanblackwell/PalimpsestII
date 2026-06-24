@@ -330,7 +330,7 @@ const MANUAL_DRIFT_MAGNITUDE = 0.5
 
 // Panel layout
 const ROW_H        = 33    // row 1: type cycler / seed
-const SLIDER_ROW_H = 26    // rows 2-5: scale/speed/warp/drift sliders
+const SLIDER_ROW_H = 30    // rows 2-5: scale/speed/warp/drift sliders
 const ROW_GAP      = 4
 const PAD          = 4
 const BTN_W        = 18

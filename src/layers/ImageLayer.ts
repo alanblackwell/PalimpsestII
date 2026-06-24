@@ -43,7 +43,7 @@ const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
 // Panel button geometry
-const BTN   = 22
+const BTN   = 24
 const BTN_M = 6
 
 // Handle geometry
