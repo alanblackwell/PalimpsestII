@@ -94,7 +94,8 @@ export class MathLayer extends Layer implements AmountSource {
     this._slotA   = new ParameterSlot(ValueType.Amount, this)
     this._slotB   = new ParameterSlot(ValueType.Amount, this)
     this.slots.push(this._slotA, this._slotB)
-    this.debugName = 'MathLayer'
+    this.displayBaseName = 'Calculate'
+    this.debugName = 'Calculate'
     graph.register(this)
   }
 

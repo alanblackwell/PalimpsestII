@@ -332,11 +332,12 @@ export abstract class Layer extends Node {
   // empty-slot click, drag-and-drop, auto-bind helpers, ...).
   private static _typeCounters = new Map<string, number>()
 
-  // Assign a friendly debugName of the form "<Type> <n>", where <Type> is
-  // the layer's class name with any trailing "Layer" stripped, and <n> is
-  // a per-type running count.
+  // Assign a friendly debugName of the form "<Type> <n>". Uses the layer's
+  // displayBaseName when set, otherwise the class name with "Layer" stripped.
+  displayBaseName?: string
+
   static assignDebugName(layer: Layer): void {
-    const base = layer.constructor.name.replace(/Layer$/, '')
+    const base = layer.displayBaseName ?? layer.constructor.name.replace(/Layer$/, '')
     const n = (Layer._typeCounters.get(base) ?? 0) + 1
     Layer._typeCounters.set(base, n)
     layer.debugName = `${base} ${n}`

@@ -121,7 +121,8 @@ export class AnimationPathLayer extends Layer implements PointSource {
     this._points  = points ?? ellipsePath(500, 300, 130, 85)
     this._currentPoint = samplePath(this._points, 0)
     this.slots.push(this._posSlot)
-    this.debugName = 'AnimPath'
+    this.displayBaseName = 'Animate'
+    this.debugName = 'Animate'
     graph.register(this)
   }
 

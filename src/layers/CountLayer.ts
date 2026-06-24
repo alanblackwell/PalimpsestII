@@ -57,7 +57,8 @@ export class CountLayer extends Layer implements CountSource {
     this._count    = Math.max(0, Math.floor(initial))
     this._eventSlot = new ParameterSlot(ValueType.Event, this)
     this.slots.push(this._eventSlot)
-    this.debugName = 'CountLayer'
+    this.displayBaseName = 'Index'
+    this.debugName = 'Index'
     graph.register(this)
   }
 

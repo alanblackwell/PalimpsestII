@@ -87,7 +87,8 @@ export class MotionBlurLayer extends Layer implements ImageSource {
     this._delaySlot   = new ParameterSlot(ValueType.Amount, this, 'delay')
     this._captureSlot = new ParameterSlot(ValueType.Event,  this, 'capture')
     this.slots.push(this._imageSlot, this._fadeSlot, this._delaySlot, this._captureSlot)
-    this.debugName = 'MotionBlur'
+    this.displayBaseName = 'Trail'
+    this.debugName = 'Trail'
     graph.register(this)
   }
 

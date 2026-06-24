@@ -60,7 +60,8 @@ export class SelectLayer extends Layer implements ImageSource {
     this.rightSlot  = new ParameterSlot(ValueType.Image, this, 'right')
     this.toggleSlot = new ParameterSlot(ValueType.Event, this, 'toggle')
     this.slots.push(this.leftSlot, this.rightSlot, this.toggleSlot)
-    this.debugName = 'Select'
+    this.displayBaseName = 'Choose'
+    this.debugName = 'Choose'
     graph.register(this)
   }
 

@@ -126,7 +126,8 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
     this._rateSlot  = new ParameterSlot(ValueType.Amount, this)
     this._eventSlot = new ParameterSlot(ValueType.Event,  this)
     this.slots.push(this._rateSlot, this._eventSlot)
-    this.debugName = 'SequencerLayer'
+    this.displayBaseName = 'Sequence'
+    this.debugName = 'Sequence'
     graph.register(this)
   }
 

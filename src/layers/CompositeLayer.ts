@@ -135,7 +135,8 @@ export class CompositeLayer extends Layer implements ImageSource {
     this._slider      = new SliderRegion(this, this._amount)
     this.slots.push(this._leftSlot, this._rightSlot, this._maskSlot, this._opacitySlot)
     this._slider.setOnDragStart(() => this._suspendAmountSlot())
-    this.debugName = 'CompositeLayer'
+    this.displayBaseName = 'Blend'
+    this.debugName = 'Blend'
     graph.register(this)
   }
 

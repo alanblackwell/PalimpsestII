@@ -2,6 +2,11 @@ import { ShapeLayer } from './ShapeLayer.js'
 import type { Colour, Ctx2D, Point } from '../core/types.js'
 
 export class RectLayer extends ShapeLayer {
+  constructor(cx: number, cy: number, width: number, height: number, colour?: import('../core/types.js').Colour) {
+    super(cx, cy, width, height, colour)
+    this.displayBaseName = 'Rectangle'
+  }
+
   protected drawShape(
     ctx: Ctx2D,
     cx: number, cy: number,
