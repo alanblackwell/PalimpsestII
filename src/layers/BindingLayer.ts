@@ -87,6 +87,9 @@ export class BindingLayer extends Layer
   private readonly _source: Node
   private readonly _slot:   ParameterSlot
   private _enabled = true
+  // Value captured from getSlotDefault at the moment the binding was suspended.
+  // Used on resume to decide whether the user actually changed the control.
+  private _valueAtSuspend: Point | number | Direction | null = null
 
   // Button geometry — derived from bounds, computed on demand.
   private static readonly BTN = 20   // button size in px
@@ -158,17 +161,37 @@ export class BindingLayer extends Layer
 
   // Toggle between Bound and SuspendedBound on the consumer's slot.
   toggle(): void {
+    const consumer = this._slot.owner as Layer
     if (this._enabled) {
+      // Capture the current manual-control value before suspending so we can
+      // detect on resume whether the user actually changed anything.
+      this._valueAtSuspend = consumer.getSlotDefault(this._slot)
       graph.suspend(this._slot)
     } else {
       graph.resume(this._slot)
-      // Push the consumer's current manual value to the source so it doesn't
-      // jump when the binding resumes.  No-op if getSlotDefault returns null
-      // or the source doesn't override receiveValue.
-      ;(this._slot.owner as Layer).pushResumedValue(this._slot)
+      // Only push the consumer's manual value back to the source if the user
+      // actually changed it while the binding was suspended.  If nothing changed,
+      // let the resumed binding read the source's current value as normal.
+      if (!this._slotValuesEqual(consumer.getSlotDefault(this._slot), this._valueAtSuspend)) {
+        consumer.pushResumedValue(this._slot)
+      }
     }
     this._enabled = !this._enabled
     this.markDirty()
+  }
+
+  private _slotValuesEqual(
+    a: Point | number | Direction | null,
+    b: Point | number | Direction | null,
+  ): boolean {
+    if (a === b) return true
+    if (a === null || b === null) return false
+    if (typeof a === 'number') return false  // b !== a already checked above
+    if ('x' in a && typeof b === 'object' && 'x' in b)
+      return a.x === (b as Point).x && a.y === (b as Point).y
+    if ('angle' in a && typeof b === 'object' && 'angle' in b)
+      return a.angle === (b as Direction).angle && a.magnitude === (b as Direction).magnitude
+    return false
   }
 
   // Fully unbind the consumer's slot and remove this layer from
