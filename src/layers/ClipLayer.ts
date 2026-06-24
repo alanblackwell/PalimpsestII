@@ -13,6 +13,7 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { BindingLayer } from './BindingLayer.js'
 import { contentLeft } from '../interaction/layout.js'
 import { ClipRectLayer }    from './ClipRectLayer.js'
@@ -121,6 +122,8 @@ export class ClipLayer extends Layer implements ImageSource {
   private _manualPosition: Point | null = null
   private _manualScale:    number | null = null
   private _drag:           DragState | null = null
+  private _edgeSnapX:      number | null = null
+  private _edgeSnapY:      number | null = null
 
   // Resolved each recompute
   private _position: Point  = { x: 0, y: 0 }
@@ -338,8 +341,19 @@ export class ClipLayer extends Layer implements ImageSource {
     this._renderReplaceButtons(ctx)
   }
 
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    const halfW = Node.canvasWidth  / 2 * this._scale
+    const halfH = Node.canvasHeight / 2 * this._scale
+    const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+    const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+    const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+    return { minX: this._position.x - extX, maxX: this._position.x + extX,
+             minY: this._position.y - extY, maxY: this._position.y + extY }
+  }
+
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // ----------------------------------------------------------
@@ -478,9 +492,22 @@ export class ClipLayer extends Layer implements ImageSource {
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
-      this._manualPosition = {
-        x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
-        y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      const rawX = this._drag.startPos.x + point.x - this._drag.startMouse.x
+      const rawY = this._drag.startPos.y + point.y - this._drag.startMouse.y
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const halfW = Node.canvasWidth  / 2 * this._scale
+        const halfH = Node.canvasHeight / 2 * this._scale
+        const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+        const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+        const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+        const snapped = snapPointToEdges({ x: rawX, y: rawY }, edges, EDGE_SNAP_THRESHOLD,
+          [-extX, 0, extX], [-extY, 0, extY])
+        this._manualPosition = { x: snapped.x, y: snapped.y }
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._manualPosition = { x: rawX, y: rawY }
+        this._edgeSnapX = null; this._edgeSnapY = null
       }
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
@@ -498,6 +525,8 @@ export class ClipLayer extends Layer implements ImageSource {
 
   handlePointerUp(): void {
     this._drag = null
+    this._edgeSnapX = null
+    this._edgeSnapY = null
   }
 
   // ----------------------------------------------------------

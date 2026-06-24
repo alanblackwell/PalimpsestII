@@ -16,6 +16,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -208,6 +209,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _snapProgress = 0
   private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
+  // Edge snap guide lines
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
+  // Last known text half-extents for position-snap offsets (updated each recompute).
+  private _textHalfW = 50
+  private _textHalfH = 20
+
   // Opacity — computed each recompute from slot; 1.0 when unbound
   private _opacity = 1.0
 
@@ -266,6 +274,16 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   getMask(): MaskValue { return this._maskCanvas }
+
+  override getSnapBounds() {
+    const { x, y } = this._position
+    const cosA = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+    const hw   = this._textHalfW,          hh   = this._textHalfH
+    const extX = Math.abs(hw * cosA) + Math.abs(hh * sinA)
+    const extY = Math.abs(hw * sinA) + Math.abs(hh * cosA)
+    return { minX: x - extX, maxX: x + extX, minY: y - extY, maxY: y + extY }
+  }
+
 
   // ----------------------------------------------------------
   // ImageSource
@@ -700,6 +718,22 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     this._updateMaskCanvas()
     this._updateImageCanvas()
+
+    // Update text half-extents used for getSnapBounds and position-handle snap.
+    if (this._maskRows === null) {
+      const lines = this._text.split('\n')
+      this._textHalfH = lines.length * this._size * 1.35 / 2
+      const mc = this._maskCanvas.getContext('2d')
+      if (mc) {
+        mc.font = this._fontString()
+        let maxW = 1
+        for (const l of lines) maxW = Math.max(maxW, mc.measureText(l).width)
+        this._textHalfW = maxW / 2
+      }
+    } else {
+      this._textHalfW = Node.canvasWidth  / 4
+      this._textHalfH = Node.canvasHeight / 4
+    }
   }
 
   // Rebuild _maskCanvas: a white-on-transparent silhouette of the rendered
@@ -873,9 +907,21 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
-      this._manualPosition = {
+      const rawPos = {
         x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
         y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      }
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const snapped = snapPointToEdges(rawPos, edges, EDGE_SNAP_THRESHOLD,
+          [-this._textHalfW, 0, this._textHalfW],
+          [-this._textHalfH, 0, this._textHalfH],
+        )
+        this._manualPosition = { x: snapped.x, y: snapped.y }
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._manualPosition = rawPos
+        this._edgeSnapX = null; this._edgeSnapY = null
       }
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
@@ -893,6 +939,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   handlePointerUp(): void {
     this._drag = null
     this._clearRotDwellTimer()
+    this._edgeSnapX = null; this._edgeSnapY = null
   }
 
   private _applySnapRotation(raw: number): void {
@@ -955,6 +1002,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
     this._renderEditOverlay(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // ── Main pill ─────────────────────────────────────────────────

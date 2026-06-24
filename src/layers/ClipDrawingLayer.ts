@@ -33,6 +33,7 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
 
   private _clippedImage: OffscreenCanvas
   private _maskTracker: MaskLayer | null = null
+  private _snapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null
 
   constructor() {
     super()
@@ -93,6 +94,32 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
         }
       }
     }
+
+    this._snapBounds = ClipDrawingLayer._pixelAABB(this._clippedImage)
+  }
+
+  private static _pixelAABB(
+    canvas: OffscreenCanvas,
+  ): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    const w    = canvas.width, h = canvas.height
+    const data = canvas.getContext('2d')!.getImageData(0, 0, w, h).data
+    let minX = w, maxX = -1, minY = h, maxY = -1
+    for (let y = 0; y < h; y++) {
+      const rowBase = y * w * 4
+      for (let x = 0; x < w; x++) {
+        if (data[rowBase + x * 4 + 3]! > 10) {
+          if (x < minX) minX = x
+          if (x > maxX) maxX = x
+          if (y < minY) minY = y
+          if (y > maxY) maxY = y
+        }
+      }
+    }
+    return maxX >= 0 ? { minX, maxX, minY, maxY } : null
+  }
+
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    return this._snapBounds
   }
 
   override autoBindRules() {

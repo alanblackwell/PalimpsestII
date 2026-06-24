@@ -9,6 +9,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -126,6 +127,8 @@ export class MediaLayer extends Layer implements ImageSource {
   private _rotation        = 0
   private _manualTransform = false
   private _drag: DragState | null = null
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
 
   // ── Construction ─────────────────────────────────────────────
 
@@ -343,8 +346,18 @@ export class MediaLayer extends Layer implements ImageSource {
     this._renderControlBar(ctx)
   }
 
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    if (this._displayW <= 0 || this._displayH <= 0) return null
+    const halfW = this._displayW / 2, halfH = this._displayH / 2
+    const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+    const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+    const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+    return { minX: this._cx - extX, maxX: this._cx + extX, minY: this._cy - extY, maxY: this._cy + extY }
+  }
+
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // Slot rows are rendered by the base class; we add the play/pause toggle button.
@@ -751,8 +764,22 @@ export class MediaLayer extends Layer implements ImageSource {
   handlePointerMove(point: Point): void {
     if (this._drag !== null) {
       if (this._drag.type === 'move') {
-        this._cx = this._drag.startCX + point.x - this._drag.startMouse.x
-        this._cy = this._drag.startCY + point.y - this._drag.startMouse.y
+        const rawCx = this._drag.startCX + point.x - this._drag.startMouse.x
+        const rawCy = this._drag.startCY + point.y - this._drag.startMouse.y
+        const edges = collectSnapEdges(this, 3)
+        if (edges.xs.length > 0 || edges.ys.length > 0) {
+          const halfW = this._displayW / 2, halfH = this._displayH / 2
+          const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+          const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+          const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+          const snapped = snapPointToEdges({ x: rawCx, y: rawCy }, edges, EDGE_SNAP_THRESHOLD,
+            [-extX, 0, extX], [-extY, 0, extY])
+          this._cx = snapped.x; this._cy = snapped.y
+          this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+        } else {
+          this._cx = rawCx; this._cy = rawCy
+          this._edgeSnapX = null; this._edgeSnapY = null
+        }
       } else if (this._drag.type === 'scale') {
         const d      = Math.max(1, ptDist(point, this._drag.center))
         const factor = d / this._drag.startDist
@@ -775,6 +802,8 @@ export class MediaLayer extends Layer implements ImageSource {
   handlePointerUp(): void {
     if (this._drag !== null) {
       this._drag = null
+      this._edgeSnapX = null
+      this._edgeSnapY = null
       return
     }
     if (!this._scrubbing) return

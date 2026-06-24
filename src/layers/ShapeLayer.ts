@@ -15,6 +15,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapCoord, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -138,6 +139,10 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   private _squareSnapProgress = 0
   private _squareDwellTimer: ReturnType<typeof setInterval> | null = null
 
+  // Edge snap — guide lines drawn while snapping to a nearby layer's edge
+  protected _edgeSnapX: number | null = null  // x of vertical guide line
+  protected _edgeSnapY: number | null = null  // y of horizontal guide line
+
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
     this._cx     = cx
@@ -177,6 +182,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   abstract samplePerimeter(t: number): Point
 
   getPoint(): Point { return { x: this._cx, y: this._cy } }
+
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    const halfW = this._width  * this._scale / 2
+    const halfH = this._height * this._scale / 2
+    const cosA  = Math.cos(this._angle)
+    const sinA  = Math.sin(this._angle)
+    const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+    const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+    return { minX: this._cx - extX, maxX: this._cx + extX, minY: this._cy - extY, maxY: this._cy + extY }
+  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
@@ -301,6 +316,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // fillModeSlot, strokeWidthSlot, and scaleSlot are pulled out of the
@@ -701,8 +717,23 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const dy = point.y - this._dragStartPtr.y
 
     if (this._dragHandle === H_CENTER && !this.positionSlot.isActive) {
-      this._cx = this._dragStartCx + dx
-      this._cy = this._dragStartCy + dy
+      const rawCx = this._dragStartCx + dx
+      const rawCy = this._dragStartCy + dy
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        // Include own AABB edge offsets so any edge of this shape aligns with a target edge.
+        const b = this.getSnapBounds()!
+        const offX = b.maxX - this._cx, offY = b.maxY - this._cy
+        const snapped = snapPointToEdges(
+          { x: rawCx, y: rawCy }, edges, EDGE_SNAP_THRESHOLD,
+          [-offX, 0, offX], [-offY, 0, offY],
+        )
+        this._cx = snapped.x; this._cy = snapped.y
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._cx = rawCx; this._cy = rawCy
+        this._edgeSnapX = null; this._edgeSnapY = null
+      }
 
     } else if (this._dragHandle === H_ROTATE) {
       // Angle that places rotation handle at the pointer
@@ -792,9 +823,68 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
       this._cx = this._dragStartCx + shiftX * ux.x + shiftY * uy.x
       this._cy = this._dragStartCy + shiftX * ux.y + shiftY * uy.y
+
+      // Edge snap for resize handles — axis-aligned shapes only, no conflict with square snap.
+      if (!this._squareSnapSnapped && Math.abs(this._dragStartAngle % (Math.PI / 2)) < 0.01) {
+        this._applyResizeEdgeSnap()
+      } else {
+        this._edgeSnapX = null; this._edgeSnapY = null
+      }
     }
 
     this.markDirty()
+  }
+
+  // Snap the dragged edge to nearby layer edges while maintaining the opposite-edge anchor.
+  // Only valid for axis-aligned shapes (angle is a multiple of π/2).
+  private _applyResizeEdgeSnap(): void {
+    const edges = collectSnapEdges(this, 3)
+    if (edges.xs.length === 0 && edges.ys.length === 0) {
+      this._edgeSnapX = null; this._edgeSnapY = null
+      return
+    }
+    const h = this._dragHandle
+    const halfW = this._width  * this._scale / 2
+    const halfH = this._height * this._scale / 2
+
+    const isLeftDrag   = h === H_LEFT  || h === H_TL || h === H_BL
+    const isRightDrag  = h === H_RIGHT || h === H_TR || h === H_BR
+    const isTopDrag    = h === H_TOP   || h === H_TL || h === H_TR
+    const isBottomDrag = h === H_BOTTOM|| h === H_BL || h === H_BR
+
+    if (isLeftDrag || isRightDrag) {
+      const fixedRight  = this._dragStartCx + this._dragStartW * this._scale / 2
+      const fixedLeft   = this._dragStartCx - this._dragStartW * this._scale / 2
+      const movingEdgeX = isLeftDrag ? this._cx - halfW : this._cx + halfW
+      const rx = snapCoord(movingEdgeX, edges.xs, EDGE_SNAP_THRESHOLD)
+      if (rx.snapLine !== null) {
+        const newVisW = Math.max(MIN_SIZE, isLeftDrag ? fixedRight - rx.out : rx.out - fixedLeft)
+        this._width   = newVisW / this._scale
+        this._cx      = isLeftDrag ? fixedRight - newVisW / 2 : fixedLeft + newVisW / 2
+        this._edgeSnapX = rx.snapLine
+      } else {
+        this._edgeSnapX = null
+      }
+    } else {
+      this._edgeSnapX = null
+    }
+
+    if (isTopDrag || isBottomDrag) {
+      const fixedBottom = this._dragStartCy + this._dragStartH * this._scale / 2
+      const fixedTop    = this._dragStartCy - this._dragStartH * this._scale / 2
+      const movingEdgeY = isTopDrag ? this._cy - halfH : this._cy + halfH
+      const ry = snapCoord(movingEdgeY, edges.ys, EDGE_SNAP_THRESHOLD)
+      if (ry.snapLine !== null) {
+        const newVisH = Math.max(MIN_SIZE, isTopDrag ? fixedBottom - ry.out : ry.out - fixedTop)
+        this._height  = newVisH / this._scale
+        this._cy      = isTopDrag ? fixedBottom - newVisH / 2 : fixedTop + newVisH / 2
+        this._edgeSnapY = ry.snapLine
+      } else {
+        this._edgeSnapY = null
+      }
+    } else {
+      this._edgeSnapY = null
+    }
   }
 
   handlePointerUp(): void {
@@ -803,6 +893,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._scaleSliderDrag  = false
     this._clearRotDwellTimer()
     this._clearSquareDwellTimer()
+    this._edgeSnapX = null
+    this._edgeSnapY = null
   }
 
   private _clearSquareDwellTimer(): void {

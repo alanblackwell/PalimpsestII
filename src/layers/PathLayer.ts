@@ -1,4 +1,5 @@
 import { ShapeLayer } from './ShapeLayer.js'
+import { Node } from '../core/Node.js'
 import {
   ValueType,
   SlotState,
@@ -13,6 +14,7 @@ import {
 } from '../core/types.js'
 import { BindingLayer } from './BindingLayer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 
 // ------------------------------------------------------------
 // PathLayer — a closed Catmull-Rom spline shape layer
@@ -127,12 +129,26 @@ export class PathLayer extends ShapeLayer {
   private _radiusSliderDrag = false
   readonly radiusSlot:     ParameterSlot
 
+  // Edge snap guide lines (set during move/point drags, cleared on pointer-up)
+  private _pathEdgeSnapX: number | null = null
+  private _pathEdgeSnapY: number | null = null
+
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
     super(cx, cy, 1, 1, colour)
     this._points    = points ?? defaultPoints(cx, cy)
     this.radiusSlot = new ParameterSlot(ValueType.Amount, this, 'spline radius')
     this.slots.push(this.radiusSlot)
+  }
+
+  override getSnapBounds() {
+    if (this._points.length === 0) return null
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const p of this._points) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y
+    }
+    return { minX, maxX, minY, maxY }
   }
 
   // ----------------------------------------------------------
@@ -351,6 +367,7 @@ export class PathLayer extends ShapeLayer {
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
+    drawSnapGuides(ctx, this._pathEdgeSnapX, this._pathEdgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // ----------------------------------------------------------
@@ -478,9 +495,24 @@ export class PathLayer extends ShapeLayer {
       return
     }
     if (this._specialDrag === 'center') {
-      const dx = point.x - this._dragStartPtr.x
-      const dy = point.y - this._dragStartPtr.y
-      this._points = this._dragStartPts.map(p => ({ x: p.x + dx, y: p.y + dy }))
+      const rawDx = point.x - this._dragStartPtr.x
+      const rawDy = point.y - this._dragStartPtr.y
+      const rawCentroid = { x: this._dragStartCenter.x + rawDx, y: this._dragStartCenter.y + rawDy }
+      const edges = collectSnapEdges(this, 3)
+      let snappedDx = rawDx, snappedDy = rawDy
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const b  = this.getSnapBounds() ?? { minX: 0, maxX: 0, minY: 0, maxY: 0 }
+        const offX = (b.maxX - b.minX) / 2, offY = (b.maxY - b.minY) / 2
+        const snapped = snapPointToEdges(rawCentroid, edges, EDGE_SNAP_THRESHOLD,
+          [-offX, 0, offX], [-offY, 0, offY],
+        )
+        snappedDx = snapped.x - this._dragStartCenter.x
+        snappedDy = snapped.y - this._dragStartCenter.y
+        this._pathEdgeSnapX = snapped.snapLineX; this._pathEdgeSnapY = snapped.snapLineY
+      } else {
+        this._pathEdgeSnapX = null; this._pathEdgeSnapY = null
+      }
+      this._points = this._dragStartPts.map(p => ({ x: p.x + snappedDx, y: p.y + snappedDy }))
       this.markDirty()
       return
     }
@@ -507,16 +539,26 @@ export class PathLayer extends ShapeLayer {
       return
     }
     if (this._dragIndex >= 0) {
-      this._points[this._dragIndex] = { ...point }
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const snapped = snapPointToEdges(point, edges, EDGE_SNAP_THRESHOLD)
+        this._points[this._dragIndex] = { x: snapped.x, y: snapped.y }
+        this._pathEdgeSnapX = snapped.snapLineX; this._pathEdgeSnapY = snapped.snapLineY
+      } else {
+        this._points[this._dragIndex] = { ...point }
+        this._pathEdgeSnapX = null; this._pathEdgeSnapY = null
+      }
       this.markDirty()
     }
   }
 
   override handlePointerUp(): void {
-    this._specialDrag     = null
-    this._dragIndex       = -1
+    this._specialDrag      = null
+    this._dragIndex        = -1
     this._strokeSliderDrag = false
     this._radiusSliderDrag = false
+    this._pathEdgeSnapX    = null
+    this._pathEdgeSnapY    = null
     this.markDirty()
   }
 

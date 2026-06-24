@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -140,6 +141,10 @@ export class TransformLayer extends Layer implements ImageSource {
   private _snapSnapped  = false
   private _snapProgress = 0
   private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
+
+  // Edge snap guide lines
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
@@ -430,9 +435,21 @@ export class TransformLayer extends Layer implements ImageSource {
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
-      this._manualPosition = {
+      const rawPos = {
         x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
         y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      }
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const b = this._transformedSnapBounds(rawPos)
+        const offsetsX = b ? [b.cx - rawPos.x - b.extX, b.cx - rawPos.x, b.cx - rawPos.x + b.extX] : [0]
+        const offsetsY = b ? [b.cy - rawPos.y - b.extY, b.cy - rawPos.y, b.cy - rawPos.y + b.extY] : [0]
+        const snapped = snapPointToEdges(rawPos, edges, EDGE_SNAP_THRESHOLD, offsetsX, offsetsY)
+        this._manualPosition = { x: snapped.x, y: snapped.y }
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._manualPosition = rawPos
+        this._edgeSnapX = null; this._edgeSnapY = null
       }
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
@@ -450,6 +467,7 @@ export class TransformLayer extends Layer implements ImageSource {
     this._opacityDrag = false
     this._drag = null
     this._clearRotDwellTimer()
+    this._edgeSnapX = null; this._edgeSnapY = null
   }
 
   private _applySnapRotation(raw: number): void {
@@ -664,8 +682,55 @@ export class TransformLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
+  // Compute the canvas-space AABB of the transformed source content.
+  // Returns null when there is no source or no source snap bounds to work from.
+  private _transformedSnapBounds(pos: Point): { cx: number; cy: number; extX: number; extY: number } | null {
+    if (!this._sourceSlot.isActive) return null
+    const src = this._sourceSlot.source
+    const srcBounds = (src instanceof Layer) ? src.getSnapBounds() : null
+
+    let srcCX: number, srcCY: number, halfSW: number, halfSH: number
+    if (srcBounds !== null) {
+      srcCX  = (srcBounds.minX + srcBounds.maxX) / 2
+      srcCY  = (srcBounds.minY + srcBounds.maxY) / 2
+      halfSW = (srcBounds.maxX - srcBounds.minX) / 2
+      halfSH = (srcBounds.maxY - srcBounds.minY) / 2
+    } else {
+      // Source fills the canvas (e.g. FillLayer, NoiseLayer)
+      srcCX  = Node.canvasWidth  / 2
+      srcCY  = Node.canvasHeight / 2
+      halfSW = Node.canvasWidth  / 2
+      halfSH = Node.canvasHeight / 2
+    }
+
+    // The drawImage call is ctx.drawImage(src, -sw/2, -sh/2, sw, sh),
+    // centering the source at the origin. A source pixel at (srcCX, srcCY)
+    // is offset (srcCX - cw/2, srcCY - ch/2) from that origin. Apply scale,
+    // then the translate/rotate of the TransformLayer (assuming centrePoint ≈ pos).
+    const s    = this._scale
+    const cosR = Math.cos(this._rotation), sinR = Math.sin(this._rotation)
+    const cx   = this._centrePoint.x, cy = this._centrePoint.y
+
+    const pu = (srcCX - Node.canvasWidth  / 2) * s + (pos.x - cx)
+    const pv = (srcCY - Node.canvasHeight / 2) * s + (pos.y - cy)
+
+    return {
+      cx:   pu * cosR - pv * sinR + cx,
+      cy:   pu * sinR + pv * cosR + cy,
+      extX: Math.abs(halfSW * s * cosR) + Math.abs(halfSH * s * sinR),
+      extY: Math.abs(halfSW * s * sinR) + Math.abs(halfSH * s * cosR),
+    }
+  }
+
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    const b = this._transformedSnapBounds(this._position)
+    if (b === null) return null
+    return { minX: b.cx - b.extX, maxX: b.cx + b.extX, minY: b.cy - b.extY, maxY: b.cy + b.extY }
+  }
+
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // Standard slot-row pill, then an opacity slider pill, then a reflect pill.

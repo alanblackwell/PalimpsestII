@@ -14,6 +14,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -94,6 +95,10 @@ export class ImageLayer extends Layer implements ImageSource {
   private _snapProgress = 0
   private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
+  // Edge snap guide lines
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
+
   // Resolved values (updated in recompute)
   private _position: Point  = { x: Node.viewportWidth / 2, y: Node.viewportHeight / 2 }
   private _opacity:  number = 1.0
@@ -115,6 +120,17 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   getImage(): ImageValue { return this._bitmap !== null ? this._offscreen : null }
+
+  override getSnapBounds() {
+    if (this._bitmap === null || this._natW === 0 || this._natH === 0) return null
+    const halfW = this._natW * this._scale / 2
+    const halfH = this._natH * this._scale / 2
+    const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+    const { x, y } = this._position
+    const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+    const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+    return { minX: x - extX, maxX: x + extX, minY: y - extY, maxY: y + extY }
+  }
 
   // ----------------------------------------------------------
   // Slot accessors
@@ -308,9 +324,24 @@ export class ImageLayer extends Layer implements ImageSource {
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
-      this._manualPosition = {
+      const rawPos = {
         x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
         y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
+      }
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const halfW = this._natW * this._scale / 2
+        const halfH = this._natH * this._scale / 2
+        const cosA  = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
+        const extX  = Math.abs(halfW * cosA) + Math.abs(halfH * sinA)
+        const extY  = Math.abs(halfW * sinA) + Math.abs(halfH * cosA)
+        const snapped = snapPointToEdges(rawPos, edges, EDGE_SNAP_THRESHOLD,
+          [-extX, 0, extX], [-extY, 0, extY])
+        this._manualPosition = { x: snapped.x, y: snapped.y }
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._manualPosition = rawPos
+        this._edgeSnapX = null; this._edgeSnapY = null
       }
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
@@ -328,6 +359,7 @@ export class ImageLayer extends Layer implements ImageSource {
   handlePointerUp(): void {
     this._drag = null
     this._clearRotDwellTimer()
+    this._edgeSnapX = null; this._edgeSnapY = null
   }
 
   private _applySnapRotation(raw: number): void {
@@ -384,6 +416,7 @@ export class ImageLayer extends Layer implements ImageSource {
 
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   // ── Stack panel ─────────────────────────────────────────────

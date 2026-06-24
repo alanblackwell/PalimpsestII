@@ -13,6 +13,8 @@ import {
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { AngleSnapper } from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 
 // ------------------------------------------------------------
 // LineLayer — a straight line with configurable endpoints,
@@ -43,6 +45,10 @@ const HANDLE_R    = 7            // handle circle radius (px)
 const HANDLE_HIT  = 14           // pointer hit radius for handles (px)
 const MAX_STROKE_W = 30          // Amount [0,1] → width [0.5, 30] px
 const INIT_MARGIN = 0.15         // fraction of canvas kept clear on random init
+const SNAP_COL    = '#7ecfcf'    // snap highlight colour (Direction accent)
+const LINE_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
+const LINE_SNAP_THRESHOLD = Math.PI / 12  // 15°
+const LINE_SNAP_DWELL_MS  = 700
 // Minimum extension of arrowhead wing beyond the stroke edge (px each side).
 const ARROW_MIN_EXTEND = 5
 
@@ -98,6 +104,16 @@ export class LineLayer extends Layer implements ImageSource {
   private _lastDraggedHandle: HandleDrag | null = null
   private _sliderDrag = false
 
+  // Angle snap
+  private readonly _lineSnapper = new AngleSnapper(LINE_SNAP_ANGLES, LINE_SNAP_THRESHOLD, LINE_SNAP_DWELL_MS)
+  private _snapSnapped  = false
+  private _snapProgress = 0
+  private _snapDwellTimer: ReturnType<typeof setInterval> | null = null
+
+  // Edge snap guide lines
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
+
   // Button bounds written in renderPanel, read in hitTestSelf
   private _arrowStartBounds: BBox | null = null
   private _arrowEndBounds:   BBox | null = null
@@ -133,6 +149,14 @@ export class LineLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   getImage(): ImageValue { return this._canvas }
+
+  override getSnapBounds() {
+    const minX = Math.min(this._start.x, this._end.x)
+    const maxX = Math.max(this._start.x, this._end.x)
+    const minY = Math.min(this._start.y, this._end.y)
+    const maxY = Math.max(this._start.y, this._end.y)
+    return { minX, maxX, minY, maxY }
+  }
 
   // ----------------------------------------------------------
   // Persistence
@@ -397,6 +421,7 @@ export class LineLayer extends Layer implements ImageSource {
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   private _drawSimplePill(ctx: Ctx2D, b: BBox): void {
@@ -490,20 +515,25 @@ export class LineLayer extends Layer implements ImageSource {
   }
 
   private _drawHandles(ctx: Ctx2D): void {
-    const dirMode = this._dirTranslateMode
-    this._drawHandle(ctx, dirMode ? this._renderedStart : this._start, this.startSlot.isActive)
-    this._drawHandle(ctx, dirMode ? this._renderedEnd   : this._end,   this.endSlot.isActive)
+    const dirMode   = this._dirTranslateMode
+    const dragHandle = this._drag
+    const startSnapping = dragHandle === 'start' && this._snapSnapped
+    const endSnapping   = dragHandle === 'end'   && this._snapSnapped
+    this._drawHandle(ctx, dirMode ? this._renderedStart : this._start, this.startSlot.isActive,
+      startSnapping, startSnapping ? this._snapProgress : 0)
+    this._drawHandle(ctx, dirMode ? this._renderedEnd   : this._end,   this.endSlot.isActive,
+      endSnapping,   endSnapping   ? this._snapProgress : 0)
   }
 
-  private _drawHandle(ctx: Ctx2D, pt: Point, bound: boolean): void {
+  private _drawHandle(ctx: Ctx2D, pt: Point, bound: boolean, snapping = false, snapProgress = 0): void {
     const glow = bound ? '#666688' : '#ffffff'
-    // Filled white circle with coloured glow
+    // Filled circle — cyan when snapping, white otherwise
     ctx.save()
     ctx.shadowColor = glow
     ctx.shadowBlur  = 14
     ctx.beginPath()
     ctx.arc(pt.x, pt.y, HANDLE_R, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.95)'
+    ctx.fillStyle = snapping ? SNAP_COL : 'rgba(255,255,255,0.95)'
     ctx.fill()
     ctx.restore()
     // Dark outline (no shadow)
@@ -520,6 +550,17 @@ export class LineLayer extends Layer implements ImageSource {
     ctx.moveTo(pt.x - cr, pt.y); ctx.lineTo(pt.x + cr, pt.y)
     ctx.moveTo(pt.x, pt.y - cr); ctx.lineTo(pt.x, pt.y + cr)
     ctx.stroke()
+    // Dwell arc sweeping while snapped
+    if (snapping && snapProgress > 0) {
+      ctx.save()
+      ctx.strokeStyle = SNAP_COL
+      ctx.lineWidth   = 1.5
+      ctx.globalAlpha = 0.85
+      ctx.beginPath()
+      ctx.arc(pt.x, pt.y, HANDLE_R + 5, -Math.PI / 2, -Math.PI / 2 + snapProgress * 2 * Math.PI)
+      ctx.stroke()
+      ctx.restore()
+    }
   }
 
   // ----------------------------------------------------------
@@ -633,6 +674,52 @@ export class LineLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Angle snap helpers
+  // ----------------------------------------------------------
+
+  private _applySnapAngle(rawPt: Point, fixedPt: Point): Point {
+    const dx  = rawPt.x - fixedPt.x
+    const dy  = rawPt.y - fixedPt.y
+    const len = Math.hypot(dx, dy)
+    if (len < 0.5) {
+      this._snapSnapped  = false
+      this._snapProgress = 0
+      return rawPt
+    }
+    const result = this._lineSnapper.update(Math.atan2(dy, dx))
+    this._snapSnapped  = result.snapped
+    this._snapProgress = result.progress
+    if (result.snapped && this._snapDwellTimer === null) {
+      this._snapDwellTimer = setInterval(() => {
+        // Feed current stored angle back into snapper to advance dwell timer.
+        const [fixed, moving] = this._drag === 'end'
+          ? [this._start, this._end] : [this._end, this._start]
+        const adx = moving.x - fixed.x, ady = moving.y - fixed.y
+        const r = this._lineSnapper.update(Math.atan2(ady, adx))
+        this._snapSnapped  = r.snapped
+        this._snapProgress = r.progress
+        this.markDirty()
+        if (this._lineSnapper.isRefining) this._clearSnapDwellTimer()
+      }, 16)
+    } else if (!result.snapped) {
+      this._clearSnapDwellTimer()
+    }
+    return {
+      x: fixedPt.x + Math.cos(result.angle) * len,
+      y: fixedPt.y + Math.sin(result.angle) * len,
+    }
+  }
+
+  private _clearSnapDwellTimer(): void {
+    if (this._snapDwellTimer !== null) {
+      clearInterval(this._snapDwellTimer)
+      this._snapDwellTimer = null
+    }
+    this._snapSnapped  = false
+    this._snapProgress = 0
+  }
+
+  // ----------------------------------------------------------
   // Hit testing
   // ----------------------------------------------------------
 
@@ -694,6 +781,7 @@ export class LineLayer extends Layer implements ImageSource {
           this._lastDraggedHandle = null
           this._drag = 'start'; this._dragStartMouse = { ...point }
           this._dragStartPt = { ...this._start }; this._dragStartOtherPt = null
+          this._lineSnapper.reset()
           return true
         }
         this._lastDraggedHandle = 'start'
@@ -705,6 +793,7 @@ export class LineLayer extends Layer implements ImageSource {
       if (this.startSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.startSlot)?.toggle()
       this._drag = 'start'; this._dragStartMouse = { ...point }
       this._dragStartPt = { ...this._start }; this._dragStartOtherPt = null
+      this._lineSnapper.reset()
       return true
     }
 
@@ -717,6 +806,7 @@ export class LineLayer extends Layer implements ImageSource {
           this._lastDraggedHandle = null
           this._drag = 'end'; this._dragStartMouse = { ...point }
           this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
+          this._lineSnapper.reset()
           return true
         }
         this._lastDraggedHandle = 'end'
@@ -728,6 +818,7 @@ export class LineLayer extends Layer implements ImageSource {
       if (this.endSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.endSlot)?.toggle()
       this._drag = 'end'; this._dragStartMouse = { ...point }
       this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
+      this._lineSnapper.reset()
       return true
     }
 
@@ -745,12 +836,28 @@ export class LineLayer extends Layer implements ImageSource {
     if (this._dragStartOtherPt !== null) {
       // Translate-both: _dragStartPt = _start at begin, _dragStartOtherPt = _end at begin.
       // Apply the same delta to both regardless of which handle (_drag) was clicked.
+      // No angle snap in translate mode — the angle doesn't change.
       this._start = { x: this._dragStartPt.x + dx, y: this._dragStartPt.y + dy }
       this._end   = { x: this._dragStartOtherPt.x + dx, y: this._dragStartOtherPt.y + dy }
+      this._edgeSnapX = null; this._edgeSnapY = null
     } else {
-      const newPt = { x: this._dragStartPt.x + dx, y: this._dragStartPt.y + dy }
-      if (this._drag === 'start') this._start = newPt
-      else                        this._end   = newPt
+      const rawPt = { x: this._dragStartPt.x + dx, y: this._dragStartPt.y + dy }
+      // Apply angle snap first (preserves distance, adjusts direction).
+      const anglePt = this._drag === 'start'
+        ? this._applySnapAngle(rawPt, this._end)
+        : this._applySnapAngle(rawPt, this._start)
+      // Then apply edge snap to the (possibly angle-snapped) point.
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const snapped = snapPointToEdges(anglePt, edges, EDGE_SNAP_THRESHOLD)
+        if (this._drag === 'start') this._start = { x: snapped.x, y: snapped.y }
+        else                        this._end   = { x: snapped.x, y: snapped.y }
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        if (this._drag === 'start') this._start = anglePt
+        else                        this._end   = anglePt
+        this._edgeSnapX = null; this._edgeSnapY = null
+      }
     }
     this.markDirty()
   }
@@ -761,6 +868,8 @@ export class LineLayer extends Layer implements ImageSource {
     this._dragStartPt      = null
     this._dragStartOtherPt = null
     this._sliderDrag       = false
+    this._clearSnapDwellTimer()
+    this._edgeSnapX = null; this._edgeSnapY = null
     // _lastDraggedHandle intentionally kept: it persists across drag sessions so
     // that switching to the other handle on a subsequent drag disables direction.
   }

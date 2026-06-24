@@ -58,6 +58,7 @@ export class CollectionLayer extends Layer implements ImageSource {
   private _layers:          Layer[] = []
   private _compositeCanvas: OffscreenCanvas | null = null
   private _ejectCallback:   (() => void) | null = null
+  private _snapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null
 
   // When bound and active, selects a single item (by index, mod N) as the
   // collection's image value instead of the full composite.
@@ -148,6 +149,7 @@ export class CollectionLayer extends Layer implements ImageSource {
   protected recompute(): void {
     if (this._layers.length === 0) {
       this._compositeCanvas = null
+      this._snapBounds = null
       return
     }
 
@@ -165,16 +167,31 @@ export class CollectionLayer extends Layer implements ImageSource {
     const ctx = this._compositeCanvas.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
 
-    if (this._indexSlot.isActive) {
-      const layer = this._layers[this.selectedIndex()]!
+    let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity
+
+    const renderAndAccum = (layer: Layer): void => {
       layer.evaluate()
       layer.renderSelf(ctx)
-    } else {
-      for (const layer of this._layers) {
-        layer.evaluate()
-        layer.renderSelf(ctx)
+      const b = layer.getSnapBounds()
+      if (b !== null) {
+        if (b.minX < bMinX) bMinX = b.minX
+        if (b.maxX > bMaxX) bMaxX = b.maxX
+        if (b.minY < bMinY) bMinY = b.minY
+        if (b.maxY > bMaxY) bMaxY = b.maxY
       }
     }
+
+    if (this._indexSlot.isActive) {
+      renderAndAccum(this._layers[this.selectedIndex()]!)
+    } else {
+      for (const layer of this._layers) renderAndAccum(layer)
+    }
+
+    this._snapBounds = isFinite(bMinX) ? { minX: bMinX, maxX: bMaxX, minY: bMinY, maxY: bMaxY } : null
+  }
+
+  override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    return this._snapBounds
   }
 
   // The currently-selected item index (indexSlot's Count, modulo the number

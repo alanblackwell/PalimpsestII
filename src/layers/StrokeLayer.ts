@@ -14,6 +14,7 @@ import {
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { AngleSnapper }  from '../interaction/AngleSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -136,6 +137,10 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   private _snapProgress = 0
   private _rotDwellTimer: ReturnType<typeof setInterval> | null = null
 
+  // Edge snap guide lines
+  private _edgeSnapX: number | null = null
+  private _edgeSnapY: number | null = null
+
   // Opacity — computed each recompute from slot; 1.0 when unbound
   private _opacity = 1.0
 
@@ -192,6 +197,16 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   getImage(): ImageValue { return this._imageCanvas }
   getMask():  MaskValue  { return this._maskCanvas }
+
+  override getSnapBounds() {
+    if (this._arcSamples.length === 0) return null
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+    for (const p of this._arcSamples) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y
+    }
+    return { minX, maxX, minY, maxY }
+  }
 
   // Actual canvas-space endpoints — used by main.ts to initialise a
   // PointLayer at the correct position when an empty slot is clicked.
@@ -507,6 +522,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     if (this._hasStroke && !this._drawMode) {
       this._renderHandles(ctx)
     }
+    drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
   override renderSlots(ctx: Ctx2D): void {
@@ -733,8 +749,23 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
-      this._cx = this._drag.startCx + point.x - this._drag.startMouse.x
-      this._cy = this._drag.startCy + point.y - this._drag.startMouse.y
+      const rawCx = this._drag.startCx + point.x - this._drag.startMouse.x
+      const rawCy = this._drag.startCy + point.y - this._drag.startMouse.y
+      const edges = collectSnapEdges(this, 3)
+      if (edges.xs.length > 0 || edges.ys.length > 0) {
+        const b = this.getSnapBounds()
+        const offX = b !== null ? (b.maxX - b.minX) / 2 : 0
+        const offY = b !== null ? (b.maxY - b.minY) / 2 : 0
+        const snapped = snapPointToEdges(
+          { x: rawCx, y: rawCy }, edges, EDGE_SNAP_THRESHOLD,
+          [-offX, 0, offX], [-offY, 0, offY],
+        )
+        this._cx = snapped.x; this._cy = snapped.y
+        this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
+      } else {
+        this._cx = rawCx; this._cy = rawCy
+        this._edgeSnapX = null; this._edgeSnapY = null
+      }
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
       this._scale = Math.max(0.05, this._drag.startScale * (d / this._drag.startDist))
@@ -756,6 +787,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     this._drag = null
     this._strokeSliderDrag = false
     this._clearRotDwellTimer()
+    this._edgeSnapX = null; this._edgeSnapY = null
     this.markDirty()
   }
 

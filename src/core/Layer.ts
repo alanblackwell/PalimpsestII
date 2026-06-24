@@ -138,6 +138,13 @@ export abstract class Layer extends Node {
     if (!this.isHiddenHelper) this.renderSelf(ctx)
   }
 
+  // Axis-aligned bounding box of this layer's content in canvas coordinates,
+  // used by EdgeSnapper to collect snap candidates from nearby layers.
+  // Returns null for layers with no meaningful spatial extent.
+  getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    return null
+  }
+
   // Render just this layer's own content. Subclasses may override.
   renderSelf(_ctx: Ctx2D): void {}
 
