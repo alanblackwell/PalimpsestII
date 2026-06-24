@@ -290,8 +290,11 @@ export class ImageLayer extends Layer implements ImageSource {
       return true
     }
 
-    // Scale handle — only when scaleSlot is unbound
-    if (!this._scaleSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) {
+    // Scale handle — suspends scaleSlot binding (if any) and takes manual control
+    if (ptDist(point, hp.scale) <= HANDLE_HIT) {
+      if (this._scaleSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._scaleSlot)?.toggle()
+      }
       this._drag = {
         type:       'scale',
         center:     { ...this._position },
@@ -301,8 +304,11 @@ export class ImageLayer extends Layer implements ImageSource {
       return true
     }
 
-    // Move handle — only when positionSlot is unbound
-    if (!this._positionSlot.isActive && ptDist(point, hp.move) <= HANDLE_HIT) {
+    // Move handle — suspends positionSlot binding (if any) and takes manual control
+    if (ptDist(point, hp.move) <= HANDLE_HIT) {
+      if (this._positionSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._positionSlot)?.toggle()
+      }
       this._drag = {
         type:       'move',
         startMouse: { ...point },
