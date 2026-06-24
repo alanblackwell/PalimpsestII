@@ -653,17 +653,14 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._drawMode) return this
-
     if (this._drag !== null) return this
-
-    if (this._drawBtnBounds !== null && this._inBox(point, this._drawBtnBounds)) return this
-
-    if (this._strokeSliderHit(point)) return this
-
+    // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
     if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    if (this._drawBtnBounds !== null && this._inBox(point, this._drawBtnBounds)) return this
+    if (this._strokeSliderHit(point)) return this
     return null
   }
 
@@ -672,24 +669,14 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (this._drawBtnBounds !== null && this._inBox(point, this._drawBtnBounds)) {
-      this._enterDrawMode()
-      return true
-    }
-
+    // Draw mode captures all points for painting; exits via button re-click
     if (this._drawMode) {
       this._rawPoints = [{ ...point }]
       this.markDirty()
       return true
     }
 
-    if (this._strokeSliderHit(point)) {
-      this._strokeSliderDrag = true
-      this._setStrokeWidthFromPointer(point.x)
-      this.markDirty()
-      return true
-    }
-
+    // Handles take priority over pill controls
     const hp = this._handlePos()
 
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
@@ -728,6 +715,18 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
         startCx:   this._cx,
         startCy:   this._cy,
       }
+      this.markDirty()
+      return true
+    }
+
+    // Pill controls — checked after handles
+    if (this._drawBtnBounds !== null && this._inBox(point, this._drawBtnBounds)) {
+      this._enterDrawMode()
+      return true
+    }
+    if (this._strokeSliderHit(point)) {
+      this._strokeSliderDrag = true
+      this._setStrokeWidthFromPointer(point.x)
       this.markDirty()
       return true
     }

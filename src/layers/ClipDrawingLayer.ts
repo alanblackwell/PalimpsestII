@@ -133,6 +133,30 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
   // Rendering
   // ----------------------------------------------------------
 
+  // Draw the source image as a guide before the mask overlay so users can see
+  // what they are painting over. The inherited _drawMaskOverlay (called by
+  // super.renderPanel) dims excluded areas; _renderBeforeUI then draws the
+  // extracted result with a drop shadow to show what has been lifted out.
+  override renderPanel(ctx: Ctx2D): void {
+    if (this.imageSlot.isActive) {
+      const src = (this.imageSlot.source as ImageSource).getImage()
+      if (src !== null) {
+        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+      }
+    }
+    super.renderPanel(ctx)
+  }
+
+  protected override _renderBeforeUI(ctx: Ctx2D): void {
+    ctx.save()
+    ctx.shadowColor   = 'rgba(0,0,0,0.75)'
+    ctx.shadowBlur    = 18
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 3
+    ctx.drawImage(this._clippedImage, 0, 0)
+    ctx.restore()
+  }
+
   override renderSelf(ctx: Ctx2D): void {
     ctx.drawImage(this._clippedImage, 0, 0)
   }

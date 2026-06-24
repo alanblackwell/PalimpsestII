@@ -225,12 +225,16 @@ export class MaskLayer extends Layer implements MaskSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._drawMaskOverlay(ctx)
+    this._renderBeforeUI(ctx)
     this._drawStripPill(ctx)
     this._drawToolsPanel(ctx)
     if ((this._activeTool !== null || this._sliderDragging) && this._cursorPoint !== null) {
       this._drawBrushCursor(ctx)
     }
   }
+
+  // Hook for subclasses to inject rendering after the mask overlay but before UI controls.
+  protected _renderBeforeUI(_ctx: Ctx2D): void {}
 
   // Renders the 4 shape-binding slots as their normal pill, then a second
   // pill directly below for the invert slot + its manual toggle button.

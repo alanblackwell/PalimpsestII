@@ -273,12 +273,6 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Load button (panel strip) — highest priority
-    if (boundingBoxContains(this._loadBtnBounds(), point)) {
-      this.openFilePicker()
-      return true
-    }
-
     const hp = this._handlePos()
 
     // Rotate handle — suspends rotationSlot binding (if any) and takes manual control
@@ -314,6 +308,12 @@ export class ImageLayer extends Layer implements ImageSource {
         startMouse: { ...point },
         startPos:   { ...this._position },
       }
+      return true
+    }
+
+    // Load button — checked after handles so a handle visually on top of it wins
+    if (boundingBoxContains(this._loadBtnBounds(), point)) {
+      this.openFilePicker()
       return true
     }
 
@@ -390,15 +390,15 @@ export class ImageLayer extends Layer implements ImageSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    // Panel strip
-    if (boundingBoxContains(this.canvasBounds, point)) return this
     // Capture all events while dragging
     if (this._drag !== null) return this
-    // Transform handles (canvas space)
+    // Transform handles take priority over the panel pill
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
     if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    // Panel strip (load button, etc.)
+    if (boundingBoxContains(this.canvasBounds, point)) return this
     return null
   }
 

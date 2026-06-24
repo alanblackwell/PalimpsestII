@@ -599,23 +599,21 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
-    // Toggle checkbox
-    if (this._toggleBounds !== null) {
-      const b = this._toggleBounds
-      if (point.x >= b.x && point.x <= b.x + b.width &&
-          point.y >= b.y && point.y <= b.y + b.height) return this
-    }
-    // Stroke-width slider
-    if (this._strokeSliderHit(point)) return this
-    // Scale slider
-    if (this._scaleSliderHit(point)) return this
-    // Shape handles
+    // Shape handles take priority over pill controls
     const r2 = HIT_R * HIT_R
     for (const h of this._handlePositions()) {
       const dx = point.x - h.x
       const dy = point.y - h.y
       if (dx * dx + dy * dy <= r2) return this
     }
+    // Pill controls
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return this
+    }
+    if (this._strokeSliderHit(point)) return this
+    if (this._scaleSliderHit(point)) return this
     return null
   }
 
@@ -624,39 +622,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Toggle fill/outline via button click
-    if (this._toggleBounds !== null) {
-      const b = this._toggleBounds
-      if (point.x >= b.x && point.x <= b.x + b.width &&
-          point.y >= b.y && point.y <= b.y + b.height) {
-        if (this.fillModeSlot.state === SlotState.Bound) {
-          this.fillModeSlot.suspend()
-        } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
-          this.fillModeSlot.resume()
-        } else {
-          this._filled = !this._filled
-        }
-        this.markDirty()
-        return true
-      }
-    }
-
-    // Stroke-width slider
-    if (this._strokeSliderHit(point)) {
-      this._strokeSliderDrag = true
-      this._setStrokeWidthFromPointer(point.x)
-      this.markDirty()
-      return true
-    }
-
-    // Scale slider
-    if (this._scaleSliderHit(point)) {
-      this._scaleSliderDrag = true
-      this._setScaleFromPointer(point.x)
-      this.markDirty()
-      return true
-    }
-
+    // Shape handles take priority over pill controls so a handle rendered on top wins
     const handles = this._handlePositions()
     let best = -1, bestD2 = HIT_R * HIT_R
     for (let i = 0; i < handles.length; i++) {
@@ -664,7 +630,38 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       const d2 = (point.x - h.x) ** 2 + (point.y - h.y) ** 2
       if (d2 < bestD2) { bestD2 = d2; best = i }
     }
-    if (best < 0) return false
+
+    if (best < 0) {
+      // No handle hit — fall through to pill controls
+      if (this._toggleBounds !== null) {
+        const b = this._toggleBounds
+        if (point.x >= b.x && point.x <= b.x + b.width &&
+            point.y >= b.y && point.y <= b.y + b.height) {
+          if (this.fillModeSlot.state === SlotState.Bound) {
+            this.fillModeSlot.suspend()
+          } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
+            this.fillModeSlot.resume()
+          } else {
+            this._filled = !this._filled
+          }
+          this.markDirty()
+          return true
+        }
+      }
+      if (this._strokeSliderHit(point)) {
+        this._strokeSliderDrag = true
+        this._setStrokeWidthFromPointer(point.x)
+        this.markDirty()
+        return true
+      }
+      if (this._scaleSliderHit(point)) {
+        this._scaleSliderDrag = true
+        this._setScaleFromPointer(point.x)
+        this.markDirty()
+        return true
+      }
+      return false
+    }
 
     this._dragHandle     = best
     this._dragStartPtr   = { ...point }

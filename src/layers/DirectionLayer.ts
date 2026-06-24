@@ -274,24 +274,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // ── Rotation pill buttons ────────────────────────────────
-    if (this._rotateToggleBounds !== null && boundingBoxContains(this._rotateToggleBounds, point)) {
-      this._handleRotateToggle()
-      return true
-    }
-    if (this._cwBounds !== null && boundingBoxContains(this._cwBounds, point)) {
-      this._handleCwToggle()
-      return true
-    }
-
-    // ── Speed slider ─────────────────────────────────────────
-    if (this._speedSliderHit(point)) {
-      this._speedSliderDrag = true
-      this._setSpeedFromPointer(point.x)
-      return true
-    }
-
-    // ── Dial handles ─────────────────────────────────────────
+    // ── Dial handles — checked first so they win over pill controls ──────
     if (ptDist(point, this._rotateHandlePos()) <= ROT_HANDLE_HIT) {
       if (this._handleSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._handleSlot)?.toggle()
@@ -322,6 +305,22 @@ export class DirectionLayer extends Layer implements DirectionSource {
       this._applyPointer(point)
       return true
     }
+
+    // ── Pill controls — checked after dial handles ────────────────────────
+    if (this._rotateToggleBounds !== null && boundingBoxContains(this._rotateToggleBounds, point)) {
+      this._handleRotateToggle()
+      return true
+    }
+    if (this._cwBounds !== null && boundingBoxContains(this._cwBounds, point)) {
+      this._handleCwToggle()
+      return true
+    }
+    if (this._speedSliderHit(point)) {
+      this._speedSliderDrag = true
+      this._setSpeedFromPointer(point.x)
+      return true
+    }
+
     return false
   }
 
@@ -353,12 +352,14 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
   protected override hitTestSelf(point: Point) {
     if (this._drag !== null) return this
-    if (this._rotateToggleBounds !== null && boundingBoxContains(this._rotateToggleBounds, point)) return this
-    if (this._cwBounds           !== null && boundingBoxContains(this._cwBounds, point))           return this
-    if (this._speedSliderHit(point)) return this
+    // Dial handles take priority over pill controls
     const dist = Math.hypot(point.x - this._position.x, point.y - this._position.y)
     if (dist <= DIAL_R) return this
     if (ptDist(point, this._rotateHandlePos()) <= ROT_HANDLE_HIT) return this
+    // Pill controls
+    if (this._rotateToggleBounds !== null && boundingBoxContains(this._rotateToggleBounds, point)) return this
+    if (this._cwBounds           !== null && boundingBoxContains(this._cwBounds, point))           return this
+    if (this._speedSliderHit(point)) return this
     return null
   }
 

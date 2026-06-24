@@ -826,38 +826,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Edit button (in main pill)
-    if (boundingBoxContains(this._editBtnBounds(), point)) {
-      this.openEditDialog()
-      return true
-    }
-
-    // Controls row
-    if (boundingBoxContains(this._ctrlPanelBounds(), point)) {
-      if (boundingBoxContains(this._fontBtnBounds(), point)) {
-        this.openFontPicker()
-        return true
-      }
-      if (boundingBoxContains(this._boldBtnBounds(), point)) {
-        this.toggleBold()
-        return true
-      }
-      if (boundingBoxContains(this._italicBtnBounds(), point)) {
-        this.toggleItalic()
-        return true
-      }
-      if (boundingBoxContains(this._sizeMinusBounds(), point)) {
-        this.adjustSize(-4)
-        return true
-      }
-      if (boundingBoxContains(this._sizePlusBounds(), point)) {
-        this.adjustSize(+4)
-        return true
-      }
-      return false
-    }
-
-    // Transform handles
+    // Transform handles take priority over pill controls
     const hp = this._handlePos()
 
     // Rotate handle — suspends rotationSlot binding (if any), then rotates
@@ -898,6 +867,35 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         startPos:   { ...this._position },
       }
       return true
+    }
+
+    // Pill controls — checked after handles
+    if (boundingBoxContains(this._editBtnBounds(), point)) {
+      this.openEditDialog()
+      return true
+    }
+    if (boundingBoxContains(this._ctrlPanelBounds(), point)) {
+      if (boundingBoxContains(this._fontBtnBounds(), point)) {
+        this.openFontPicker()
+        return true
+      }
+      if (boundingBoxContains(this._boldBtnBounds(), point)) {
+        this.toggleBold()
+        return true
+      }
+      if (boundingBoxContains(this._italicBtnBounds(), point)) {
+        this.toggleItalic()
+        return true
+      }
+      if (boundingBoxContains(this._sizeMinusBounds(), point)) {
+        this.adjustSize(-4)
+        return true
+      }
+      if (boundingBoxContains(this._sizePlusBounds(), point)) {
+        this.adjustSize(+4)
+        return true
+      }
+      return false
     }
 
     return false
@@ -970,15 +968,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    if (boundingBoxContains(this.canvasBounds, point)) return this
-    if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     if (this._drag !== null) return this
-
+    // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) return this
     if (!this._positionSlot.isActive && !this._maskSlot.isActive
         && ptDist(point, hp.move) <= HANDLE_HIT) return this
+    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     return null
   }
 

@@ -348,38 +348,22 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    if (boundingBoxContains(this.canvasBounds, point)) return this
-    if (boundingBoxContains(this._opacityPillBounds(), point)) return this
-    if (boundingBoxContains(this._reflectPillBounds(), point)) return this
     if (this._drag !== null || this._opacityDrag) return this
+    // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
     if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (boundingBoxContains(this._opacityPillBounds(), point)) return this
+    if (boundingBoxContains(this._reflectPillBounds(), point)) return this
     return null
   }
 
   handlePointerDown(point: Point): boolean {
-    if (this._reflectBtnBounds !== null && boundingBoxContains(this._reflectBtnBounds, point)) {
-      const turningOff = this._reflectEnabled
-      this._reflectEnabled = !this._reflectEnabled
-      if (turningOff && this._reflectSlot.state === SlotState.Bound) {
-        BindingLayer.findForSlot(this._reflectSlot)?.toggle()
-      }
-      this.markDirty()
-      return true
-    }
-
-    const og = this._opacitySliderGeom()
-    if (point.x >= og.sld0 - 6 && point.x <= og.sldR + 6 &&
-        point.y >= og.b.y    && point.y <= og.b.y + og.b.height) {
-      this._opacityDrag = true
-      this._setOpacityFromPointer(point.x)
-      return true
-    }
-
     const hp = this._handlePos()
 
+    // Handles take priority over pills so a handle rendered on top of a control wins
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
       if (this._rotateSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._rotateSlot)?.toggle()
@@ -421,6 +405,25 @@ export class TransformLayer extends Layer implements ImageSource {
         startMouse: { ...point },
         startPos:   { ...this._position },
       }
+      return true
+    }
+
+    // Pill controls — checked after handles so a handle rendered on top wins
+    if (this._reflectBtnBounds !== null && boundingBoxContains(this._reflectBtnBounds, point)) {
+      const turningOff = this._reflectEnabled
+      this._reflectEnabled = !this._reflectEnabled
+      if (turningOff && this._reflectSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._reflectSlot)?.toggle()
+      }
+      this.markDirty()
+      return true
+    }
+
+    const og = this._opacitySliderGeom()
+    if (point.x >= og.sld0 - 6 && point.x <= og.sldR + 6 &&
+        point.y >= og.b.y    && point.y <= og.b.y + og.b.height) {
+      this._opacityDrag = true
+      this._setOpacityFromPointer(point.x)
       return true
     }
 
