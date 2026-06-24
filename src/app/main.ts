@@ -703,7 +703,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
           : null
       if (pos !== null) {
         const newLayer = new PointLayer(pos)
-        Layer.assignDebugName(newLayer)
+        Layer.assignSlotCreatedName(newLayer, consumer, slot)
         newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
         newLayer.insertAbove(consumer)
         BindingLayer.create(newLayer, slot)
@@ -723,7 +723,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
           : null
       if (pos !== null) {
         const newLayer = new PointLayer(pos)
-        Layer.assignDebugName(newLayer)
+        Layer.assignSlotCreatedName(newLayer, consumer, slot)
         newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
         newLayer.insertAbove(consumer)
         BindingLayer.create(newLayer, slot)
@@ -748,7 +748,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
           const d = def as Direction
           newLayer = new DirectionLayer(d.angle, d.magnitude)
         }
-        Layer.assignDebugName(newLayer)
+        Layer.assignSlotCreatedName(newLayer, consumer, slot)
         newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
         newLayer.insertAbove(consumer)
         BindingLayer.create(newLayer, slot)
@@ -762,7 +762,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // mode, instead of the slot type's normal canonical default.
     if (consumer.wantsShapeForSlot(slot)) {
       const newLayer = randomClosedShapeLayer(Node.viewportWidth, Node.viewportHeight)
-      Layer.assignDebugName(newLayer)
+      Layer.assignSlotCreatedName(newLayer, consumer, slot)
       newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
       newLayer.insertAbove(consumer)
       BindingLayer.create(newLayer, slot)
@@ -785,7 +785,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
       }
 
       const maskLayer = new MaskLayer()
-      Layer.assignDebugName(maskLayer)
+      Layer.assignSlotCreatedName(maskLayer, consumer, slot)
       // Insert temporarily so BindingLayer.create has a live stack position
       // to attach to; both it and the resulting BindingLayer move to
       // Background immediately afterwards, leaving shapeLayer's position
@@ -804,7 +804,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     if (factory === undefined) return
 
     const newLayer = factory(Node.viewportWidth, Node.viewportHeight)
-    Layer.assignDebugName(newLayer)
+    Layer.assignSlotCreatedName(newLayer, consumer, slot)
     newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
     newLayer.insertAbove(consumer)
     BindingLayer.create(newLayer, slot)

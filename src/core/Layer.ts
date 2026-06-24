@@ -343,6 +343,67 @@ export abstract class Layer extends Node {
     layer.debugName = `${base} ${n}`
   }
 
+  // 3-letter acronyms keyed by the base name used in assignDebugName
+  // (displayBaseName if set, otherwise class name with "Layer" stripped).
+  static readonly LAYER_ACRONYMS: ReadonlyMap<string, string> = new Map([
+    ['Amount',      'Amt'],
+    ['Animate',     'Anm'],  // AnimationPathLayer
+    ['AnimPath',    'APt'],  // AnimPathLayer
+    ['Blend',       'Bln'],  // CompositeLayer
+    ['Calculate',   'Clc'],  // MathLayer
+    ['Capture',     'Cap'],
+    ['Choose',      'Cho'],  // SelectLayer
+    ['ClipDrawing', 'CDr'],
+    ['ClipEllipse', 'CEp'],
+    ['ClipPath',    'CPt'],
+    ['ClipRect',    'CRc'],
+    ['ClipText',    'CTx'],
+    ['Colour',      'Clr'],
+    ['Direction',   'Dir'],
+    ['Ellipse',     'Elp'],
+    ['Event',       'Evt'],
+    ['Fill',        'Fil'],
+    ['Filter',      'Flt'],
+    ['Flash',       'Fls'],
+    ['Geometry',    'Geo'],  // TransformLayer
+    ['Image',       'Img'],
+    ['Index',       'Idx'],  // CountLayer
+    ['Line',        'Lin'],
+    ['Mask',        'Msk'],
+    ['Media',       'Med'],
+    ['Noise',       'Nse'],
+    ['Path',        'Pth'],
+    ['Point',       'Pnt'],
+    ['Rate',        'Rat'],
+    ['Rectangle',   'Rct'],  // RectLayer
+    ['Root',        'Roo'],
+    ['Rotate',      'Rot'],
+    ['Sequence',    'Seq'],  // SequencerLayer
+    ['Stroke',      'Str'],
+    ['Text',        'Txt'],
+    ['Tile',        'Til'],
+    ['Trace',       'Trc'],
+    ['Trail',       'Trl'],  // MotionBlurLayer
+    ['Video',       'Vid'],
+    ['Warp',        'Wrp'],
+  ])
+
+  // Assign a name of the form "<Acr><n> - <slot>" for layers created by
+  // clicking an empty slot on a consumer layer. Still increments the new
+  // layer's own type counter so later assignDebugName calls stay unique.
+  static assignSlotCreatedName(newLayer: Layer, consumer: Layer, slot: ParameterSlot): void {
+    const base = newLayer.displayBaseName ?? newLayer.constructor.name.replace(/Layer$/, '')
+    const n = (Layer._typeCounters.get(base) ?? 0) + 1
+    Layer._typeCounters.set(base, n)
+
+    const consumerBase = consumer.displayBaseName ?? consumer.constructor.name.replace(/Layer$/, '')
+    const acronym = Layer.LAYER_ACRONYMS.get(consumerBase) ?? consumerBase.slice(0, 3)
+    const numMatch = consumer.debugName.match(/(\d+)$/)
+    const consumerN = numMatch ? numMatch[1] : ''
+
+    newLayer.debugName = `${acronym}${consumerN} - ${slot.label}`
+  }
+
   // For an unbound Point/Amount/Direction slot, returns the value currently
   // shown by this layer's manual control for that slot (handle position,
   // slider value, etc) — so a layer created via the slot-click-to-create
