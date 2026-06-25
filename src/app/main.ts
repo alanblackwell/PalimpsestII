@@ -309,18 +309,20 @@ const container = document.createElement('div')
 container.style.cssText = 'position:relative;width:100%;height:100%;overflow:hidden'
 app.appendChild(container)
 
-// Content canvas: CSS-transformed for pan/zoom; always at least as large as
-// the viewport (never shrinks). touch-action:none prevents the browser from
-// intercepting swipe/pinch gestures before InteractionSystem sees them.
+// Content canvas: CSS-transformed for pan/zoom. touch-action:none prevents
+// the browser from intercepting swipe/pinch gestures before InteractionSystem.
 //
-// On small viewports (mobile) the canvas starts larger than the viewport so
-// the startup/menu/tutorial content can be laid out at full size; the user
-// can pinch-to-zoom and pan to reach content that extends off-screen.
+// Desktop: canvas starts at least 800×600 and only ever grows — shrinking the
+//   window does not reduce it, so large layouts remain reachable via pan/zoom.
+// Mobile: canvas matches the screen exactly and tracks orientation changes.
+//   Users pinch-to-zoom to reach off-screen controls (Menu, Filter etc.);
+//   the shake gesture restores the 1:1 view.
+const _initMobile = window.matchMedia('(pointer: coarse)').matches
 const MIN_CANVAS_W = 800   // enough for 4 menu columns at full width
 const MIN_CANVAS_H = 600   // enough for all menu rows / tutorial content
 const canvas = document.createElement('canvas')
-canvas.width  = Math.max(window.innerWidth,  MIN_CANVAS_W)
-canvas.height = Math.max(window.innerHeight, MIN_CANVAS_H)
+canvas.width  = _initMobile ? window.innerWidth  : Math.max(window.innerWidth,  MIN_CANVAS_W)
+canvas.height = _initMobile ? window.innerHeight : Math.max(window.innerHeight, MIN_CANVAS_H)
 canvas.style.cssText = 'position:absolute;top:0;left:0;touch-action:none;transform-origin:0 0'
 container.appendChild(canvas)
 
@@ -1202,8 +1204,15 @@ window.addEventListener('resize', () => {
   const w = window.innerWidth, h = window.innerHeight
   const prevCW = evaluator.contentWidth, prevCH = evaluator.contentHeight
   evaluator.setViewport(w, h)
-  // Only resize root when the content canvas actually grew (it never shrinks).
   if (evaluator.contentWidth !== prevCW || evaluator.contentHeight !== prevCH) {
+    root.resize(evaluator.contentWidth, evaluator.contentHeight)
+  }
+})
+// screen.orientation.change fires after window.innerWidth/Height have settled
+// on iOS/Android, making it more reliable than 'resize' alone for orientation flips.
+screen.orientation?.addEventListener('change', () => {
+  if (Node.isMobileDevice) {
+    evaluator.setViewport(window.innerWidth, window.innerHeight)
     root.resize(evaluator.contentWidth, evaluator.contentHeight)
   }
 })

@@ -168,6 +168,16 @@ export class ImageLayer extends Layer implements ImageSource {
       this._filename = file.name
       this._natW     = bitmap.width
       this._natH     = bitmap.height
+      // On mobile, fit the image to the viewport so it is fully visible in the
+      // current orientation. The default position (viewport centre) already
+      // centres it; we only need to set the scale.
+      if (Node.isMobileDevice && bitmap.width > 0 && bitmap.height > 0) {
+        const fitScale = Math.min(
+          Node.viewportWidth  / bitmap.width,
+          Node.viewportHeight / bitmap.height,
+        )
+        this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale))
+      }
       this.markDirty()
     } catch {
       // Unsupported format or decode error — leave previous bitmap intact.

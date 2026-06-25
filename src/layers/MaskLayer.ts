@@ -628,8 +628,13 @@ export class MaskLayer extends Layer implements MaskSource {
   private _ensureCanvases(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
-    if (this._painted.width !== w || this._painted.height !== h) {
-      const next = new OffscreenCanvas(w, h)
+    // _painted only grows — never shrink it. On mobile, rotating the phone
+    // reduces canvasWidth/Height; paint strokes outside the new bounds must be
+    // preserved so they reappear when the device is rotated back.
+    if (this._painted.width < w || this._painted.height < h) {
+      const newW = Math.max(this._painted.width, w)
+      const newH = Math.max(this._painted.height, h)
+      const next = new OffscreenCanvas(newW, newH)
       next.getContext('2d')!.drawImage(this._painted, 0, 0)
       this._painted = next
     }

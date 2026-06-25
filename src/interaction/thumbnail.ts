@@ -62,7 +62,15 @@ export function drawLayerThumbnail(
   if (t.has(ValueType.Image)) {
     const img = l['getImage']?.()
     if (img != null) {
-      try { ctx.drawImage(img as CanvasImageSource, 0, 0, w, h) } catch { /* skip */ }
+      try {
+        // Letterbox: scale to contain, centred. Prevents distortion when the
+        // source canvas aspect ratio differs from the card (e.g. portrait
+        // camera feed on a landscape canvas).
+        const src = img as CanvasImageSource & { width: number; height: number }
+        const sc  = Math.min(w / src.width, h / src.height)
+        const dw  = src.width * sc, dh = src.height * sc
+        ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh)
+      } catch { /* skip */ }
       drawLabel(ctx, layer, w, h)
       return
     }
@@ -72,7 +80,12 @@ export function drawLayerThumbnail(
   if (t.has(ValueType.Mask)) {
     const mask = l['getMask']?.()
     if (mask != null) {
-      try { ctx.drawImage(mask as CanvasImageSource, 0, 0, w, h) } catch { /* skip */ }
+      try {
+        const src = mask as CanvasImageSource & { width: number; height: number }
+        const sc  = Math.min(w / src.width, h / src.height)
+        const dw  = src.width * sc, dh = src.height * sc
+        ctx.drawImage(src, (w - dw) / 2, (h - dh) / 2, dw, dh)
+      } catch { /* skip */ }
       drawLabel(ctx, layer, w, h)
       return
     }

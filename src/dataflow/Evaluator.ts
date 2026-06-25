@@ -71,8 +71,12 @@ export class Evaluator {
   // Viewport / content canvas sizing
   // ----------------------------------------------------------
 
-  // The content canvas only ever grows — shrinking the window does not reduce
-  // it. The widget canvas always matches the current viewport exactly.
+  // Desktop: content canvas only ever grows — shrinking the window does not
+  //   reduce it; the widget canvas always matches the viewport exactly.
+  // Mobile: content canvas tracks the screen size exactly, including shrinking
+  //   on orientation change. Layer content outside the new bounds is clipped
+  //   by normal canvas drawing rules; painted raster content is preserved by
+  //   layers that keep their own backing stores at the high-water mark.
   setViewport(width: number, height: number): void {
     Node.viewportWidth  = width
     Node.viewportHeight = height
@@ -80,8 +84,8 @@ export class Evaluator {
       this._widgetCanvas.width  = width
       this._widgetCanvas.height = height
     }
-    const newW = Math.max(this.canvas.width,  width)
-    const newH = Math.max(this.canvas.height, height)
+    const newW = Node.isMobileDevice ? width  : Math.max(this.canvas.width,  width)
+    const newH = Node.isMobileDevice ? height : Math.max(this.canvas.height, height)
     if (newW !== this.canvas.width || newH !== this.canvas.height) {
       this.canvas.width  = newW
       this.canvas.height = newH
