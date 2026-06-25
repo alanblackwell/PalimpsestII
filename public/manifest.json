@@ -1,0 +1,24 @@
+{
+  "name": "Palimpsest II",
+  "short_name": "Palimpsest",
+  "description": "Reactive dataflow canvas for live visual performance",
+  "start_url": "/PalimpsestII/",
+  "scope": "/PalimpsestII/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#888888",
+  "theme_color": "#16161e",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

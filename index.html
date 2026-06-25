@@ -3,7 +3,17 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PalimpsestII</title>
+  <title>Palimpsest II</title>
+
+  <!-- PWA manifest and theme -->
+  <link rel="manifest" href="%BASE_URL%manifest.json">
+  <meta name="theme-color" content="#16161e">
+
+  <!-- iOS home-screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Palimpsest">
+  <link rel="apple-touch-icon" href="%BASE_URL%icons/icon-192.png">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #888; overflow: hidden; }
@@ -13,5 +23,12 @@
 <body>
   <div id="app"></div>
   <script type="module" src="/src/app/main.ts"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () =>
+        navigator.serviceWorker.register('%BASE_URL%sw.js')
+      )
+    }
+  </script>
 </body>
 </html>
