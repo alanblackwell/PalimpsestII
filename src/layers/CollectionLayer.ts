@@ -79,7 +79,8 @@ export class CollectionLayer extends Layer implements ImageSource {
     super()
     this._indexSlot = new ParameterSlot(ValueType.Count, this, 'index')
     this.slots.push(this._indexSlot)
-    this.debugName = 'Collection'
+    this.displayBaseName = 'Collect'
+    this.debugName = 'Collect'
     graph.register(this)
   }
 
@@ -403,7 +404,7 @@ export class CollectionLayer extends Layer implements ImageSource {
     ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('Collection', x + 12, midY)
+    ctx.fillText('Collect', x + 12, midY)
 
     const n = this._layers.length
     ctx.fillStyle = 'rgba(255,255,255,0.45)'

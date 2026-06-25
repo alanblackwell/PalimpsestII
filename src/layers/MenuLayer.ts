@@ -8,7 +8,6 @@ import { rndColour }       from '../core/colour.js'
 import { AmountLayer }     from './AmountLayer.js'
 import { ColourLayer }     from './ColourLayer.js'
 import { PointLayer }      from './PointLayer.js'
-import { RateLayer }       from './RateLayer.js'
 import { PathLayer }       from './PathLayer.js'
 import { RectLayer }       from './RectLayer.js'
 import { EllipseLayer }    from './EllipseLayer.js'
@@ -16,18 +15,15 @@ import { SelectLayer }     from './SelectLayer.js'
 import { CountLayer }      from './CountLayer.js'
 import { EventLayer }      from './EventLayer.js'
 import { DirectionLayer }  from './DirectionLayer.js'
-import { MathLayer }       from './MathLayer.js'
 import { TextLayer }       from './TextLayer.js'
 import { ImageLayer }      from './ImageLayer.js'
 import { TraceLayer }      from './TraceLayer.js'
-import { MaskLayer }       from './MaskLayer.js'
 import { CompositeLayer }  from './CompositeLayer.js'
 import { FilterLayer }     from './FilterLayer.js'
 import { CollectionLayer } from './CollectionLayer.js'
 import { NoiseLayer }      from './NoiseLayer.js'
 import { FillLayer }       from './FillLayer.js'
 import { TransformLayer }  from './TransformLayer.js'
-import { SequencerLayer }  from './SequencerLayer.js'
 import { AnimPathLayer }   from './AnimPathLayer.js'
 import { ClipLayer }       from './ClipLayer.js'
 import { TileLayer }       from './TileLayer.js'
@@ -119,12 +115,11 @@ const COLUMNS: ColDef[] = [
       { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer() },
       { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer() },
       { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer() },
-      { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
     ],
     bottom: [
       { label: 'Animate',  colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
-      { label: 'Mask',     colour: '#cfcf7e', factory: ()          => new MaskLayer() },
-      { label: 'Clip',      colour: '#7ecf7e', factory: ()          => new ClipLayer() },
+      { label: 'Modify',    colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
+      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer(), selectAfterCreate: true },
     ],
   },
 
@@ -135,13 +130,13 @@ const COLUMNS: ColDef[] = [
       { label: 'Colour',    colour: '#e8944a', height: 170, factory: ()          => new ColourLayer(rndColour()) },
       { label: 'Point',     colour: '#cf7ecf',              factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
       { label: 'Amount',    colour: '#4a8fe8',              factory: ()          => new AmountLayer(rnd()) },
-      { label: 'Direction', colour: '#7ecfcf',              factory: ()          => new DirectionLayer(rnd() * Math.PI * 2, 1) },
+      { label: 'Angle',     colour: '#7ecfcf',              factory: ()          => new DirectionLayer(rnd() * Math.PI * 2, 1) },
     ],
     bottom: [
-      { label: 'Event',      colour: '#e0e060', factory: () => new EventLayer() },
-      { label: 'Index',      colour: '#a0a0a0', factory: () => new CountLayer(0) },
-      { label: 'Choose',     colour: '#7ecf7e', factory: () => new SelectLayer() },
-      { label: 'Collection', colour: '#7ecf7e', factory: () => new CollectionLayer() },
+      { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
+      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
+      { label: 'Trail',      colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
+      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
     ],
   },
 
@@ -149,18 +144,17 @@ const COLUMNS: ColDef[] = [
   {
     name: 'Media',
     top: [
-      { label: 'Image',   colour: '#7ecf7e',              factory: ()          => new ImageLayer() },
-      { label: 'Video',   colour: '#7ecf7e',              factory: ()          => new VideoLayer() },
-      { label: 'Capture', colour: '#7ecf7e',              factory: ()          => new CaptureLayer() },
-      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
+      { label: 'Image',   colour: '#7ecf7e', factory: () => new ImageLayer(),   selectAfterCreate: true },
+      { label: 'Video',   colour: '#7ecf7e', factory: () => new VideoLayer(),   selectAfterCreate: true },
+      { label: 'Capture', colour: '#7ecf7e', factory: () => new CaptureLayer(), selectAfterCreate: true },
     ],
     bottom: [
+//      { label: 'Mask',     colour: '#cfcf7e', factory: ()          => new MaskLayer() },
+      { label: 'Clip',      colour: '#7ecf7e', factory: ()          => new ClipLayer() },
       { label: 'Blend',     colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h), selectAfterCreate: true },
       { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer(),        selectAfterCreate: true },
-      { label: 'Geometry',  colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
-      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
       { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer(),          selectAfterCreate: true },
-      { label: 'Trail',      colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
+      { label: 'Trace',     colour: '#cf9f7e', factory: ()          => new TraceLayer() },
     ],
   },
 
@@ -169,13 +163,11 @@ const COLUMNS: ColDef[] = [
     name: 'Control',
     top: [
       { label: 'Tutorial',  colour: '#a0a4b8', factory: ()          => new TutorialLayer() },
-      { label: 'Rate',      colour: '#e87e7e', factory: ()          => new RateLayer(rndR(0.1, 2.0)) },
-      { label: 'Flash',     colour: '#e0e060', factory: ()          => new FlashLayer() },
-      { label: 'Sequence',  colour: '#a0a4b8', factory: (_,__,w,h) => new SequencerLayer(w, h) },
-      // Not yet assigned to a column — move to the appropriate place:
-      { label: 'Calculate', colour: '#4a8fe8', factory: ()          => new MathLayer(2) },
-      { label: 'Trace',     colour: '#cf9f7e', factory: ()          => new TraceLayer() },
-      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer(), selectAfterCreate: true },
+      { label: 'Event',      colour: '#e0e060', factory: () => new EventLayer() },
+      { label: 'Flash',     colour: '#e0e060', factory: ()          => new FlashLayer(), selectAfterCreate: true },
+      { label: 'Index',      colour: '#a0a0a0', factory: () => new CountLayer(0) },
+      { label: 'Choose',     colour: '#7ecf7e', factory: () => new SelectLayer() },
+      { label: 'Collect',    colour: '#7ecf7e', factory: () => new CollectionLayer() },
     ],
     bottom: [
       { label: 'Load', colour: '#a0a4b8', kind: 'load' },
@@ -206,7 +198,17 @@ const COLUMNS: ColDef[] = [
 //
 //   BindingLayer — created automatically when a slot is bound
 //     via drag-and-drop; not directly user-facing.
-
+//
+//   MaskLayer - usually created in support of Clip operations
+//
+//   RateLayer - created automatically to support animations
+//
+//   SequenceLayer - inherited from original Palimpsest, but doesn't
+//     seem to have much utility here
+//   
+//   CalculateLayer - inherited from original Palimpsest, but doesn't
+//     seem to have much utility here
+//   
 // ── MenuLayer ─────────────────────────────────────────────────
 
 type BBox = { x: number; y: number; width: number; height: number }

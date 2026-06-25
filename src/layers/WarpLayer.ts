@@ -107,7 +107,7 @@ export class WarpLayer extends Layer implements ImageSource {
 
     this.imageSlot  = new ParameterSlot(ValueType.Image, this, 'image')
     this.pointSlots = Array.from({ length: N_HANDLES }, (_, i) =>
-      new ParameterSlot(ValueType.Point, this, `point ${i + 1}`))
+      new ParameterSlot(ValueType.Point, this, `handle ${i + 1}`))
     this.shapeSlot  = new ParameterSlot(ValueType.Mask, this, 'shape')
 
     this.slots.push(this.imageSlot, ...this.pointSlots, this.shapeSlot)
@@ -473,7 +473,7 @@ export class WarpLayer extends Layer implements ImageSource {
       : { ...this._handlePos[i]! }
 
     const pl = new PointLayer({ ...startPos })
-    Layer.assignDebugName(pl)
+    Layer.assignSlotCreatedName(pl, this, slot)
     pl.isHiddenHelper = true
     pl.helperHost     = this
     pl.insertAbove(this)

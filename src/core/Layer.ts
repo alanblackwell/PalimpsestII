@@ -359,13 +359,13 @@ export abstract class Layer extends Node {
     ['ClipRect',    'CRc'],
     ['ClipText',    'CTx'],
     ['Colour',      'Clr'],
-    ['Direction',   'Dir'],
+    ['Angle',       'Ang'],
     ['Ellipse',     'Elp'],
     ['Event',       'Evt'],
     ['Fill',        'Fil'],
     ['Filter',      'Flt'],
     ['Flash',       'Fls'],
-    ['Geometry',    'Geo'],  // TransformLayer
+    ['Modify',      'Mod'],  // TransformLayer
     ['Image',       'Img'],
     ['Index',       'Idx'],  // CountLayer
     ['Line',        'Lin'],
@@ -381,6 +381,7 @@ export abstract class Layer extends Node {
     ['Sequence',    'Seq'],  // SequencerLayer
     ['Stroke',      'Str'],
     ['Text',        'Txt'],
+    ['Collect',     'Col'],  // CollectionLayer
     ['Tile',        'Til'],
     ['Trace',       'Trc'],
     ['Trail',       'Trl'],  // MotionBlurLayer

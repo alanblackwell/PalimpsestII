@@ -8,7 +8,10 @@ import {
   type ImageValue, type ImageSource,
   type Point, type Ctx2D,
 } from '../core/types.js'
-import { graph } from '../dataflow/Graph.js'
+import { graph }         from '../dataflow/Graph.js'
+import { BindingLayer }  from './BindingLayer.js'
+import { EventLayer }    from './EventLayer.js'
+import { drawIcon }      from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // FlashLayer — brief image burst triggered by an event
@@ -40,6 +43,7 @@ import { graph } from '../dataflow/Graph.js'
 const ACCENT       = '#e0e060'          // Event type colour
 const MIN_DUR_MS   = 16                 // shortest flash: one frame at 60 fps
 const MAX_DUR_MS   = 4000               // longest flash: 4 s
+const TRIG_W       = 22                 // trigger button width in the pill
 
 // Param value at which fast mode transitions to slow mode.
 // Derived: log(200/16) / log(4000/16) ≈ 0.457
@@ -61,7 +65,8 @@ export class FlashLayer extends Layer implements EventSource {
   private _timeoutId:        ReturnType<typeof setTimeout> | null = null
 
   private _dragSlider  = false
-  private _trackBounds: BBox | null = null
+  private _trackBounds:  BBox | null = null
+  private _trigBtnBounds: BBox | null = null
 
   constructor() {
     super()
@@ -202,13 +207,19 @@ export class FlashLayer extends Layer implements EventSource {
 
     // Layout constants
     const LABEL_W  = 52   // "Flash" label area
+    const TRIG_GAP = 4    // gap between label and trigger button
     const MODE_W   = 40   // "FAST"/"SLOW" badge
     const VAL_W    = 46   // duration text
     const TRACK_PL = 8    // left padding before track
     const TRACK_PR = 8    // right padding after track
 
-    const trackX = x + 4 + LABEL_W + TRACK_PL
-    const trackW = w - 4 - LABEL_W - TRACK_PL - TRACK_PR - MODE_W - VAL_W - 6
+    const trigBtnH = h - 10
+    const trigBtnX = x + 4 + LABEL_W + TRIG_GAP
+    const trigBtnY = y + 5
+    this._trigBtnBounds = { x: trigBtnX, y: trigBtnY, width: TRIG_W, height: trigBtnH }
+
+    const trackX = x + 4 + LABEL_W + TRIG_GAP + TRIG_W + TRACK_PL
+    const trackW = w - 4 - LABEL_W - TRIG_GAP - TRIG_W - TRACK_PL - TRACK_PR - MODE_W - VAL_W - 6
     const trackH = 5
     const trackY = midY - Math.floor(trackH / 2)
 
@@ -237,6 +248,14 @@ export class FlashLayer extends Layer implements EventSource {
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText('Flash', x + 12, midY)
+
+    // Trigger button — fires a hidden EventLayer on click
+    ctx.fillStyle = 'rgba(224,224,96,0.15)'
+    ctx.beginPath()
+    ctx.roundRect(trigBtnX, trigBtnY, TRIG_W, trigBtnH, 4)
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    drawIcon(ctx, 'lightning', trigBtnX + TRIG_W / 2, trigBtnY + trigBtnH / 2, trigBtnH - 4)
 
     // Slider track — fast zone (blue-tinted, left) and slow zone (amber, right)
     ctx.fillStyle = 'rgba(100,180,255,0.22)'
@@ -327,6 +346,35 @@ export class FlashLayer extends Layer implements EventSource {
   }
 
   // ----------------------------------------------------------
+  // Trigger button — fire the bound EventLayer, or create one on first press
+  // ----------------------------------------------------------
+
+  private _fireTrigger(): void {
+    const slot = this.triggerSlot
+
+    if (slot.isActive) {
+      if (slot.source instanceof EventLayer) {
+        // Already bound to an EventLayer (including Background) — fire it.
+        (slot.source as EventLayer).fire()
+      } else {
+        // Bound to a non-EventLayer EventSource — fire the flash directly.
+        this._startFlash()
+      }
+      return
+    }
+
+    // Slot is unbound: create a named EventLayer, bind it to the slot, and
+    // send it to BackgroundLayer so it stays live without cluttering the stack.
+    // The user can retrieve it by clicking the (now-bound) trigger slot.
+    const el = new EventLayer()
+    Layer.assignSlotCreatedName(el, this, slot)
+    el.bounds = { ...this.bounds }
+    BindingLayer.create(el, slot)
+    Node.sendToBackground?.(el)
+    el.fire()
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 
@@ -337,6 +385,10 @@ export class FlashLayer extends Layer implements EventSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    if (this._trigBtnBounds !== null && boundingBoxContains(this._trigBtnBounds, point)) {
+      this._fireTrigger()
+      return true
+    }
     const tb = this._trackBounds
     if (tb === null) return false
     if (point.x >= tb.x && point.x <= tb.x + tb.width &&

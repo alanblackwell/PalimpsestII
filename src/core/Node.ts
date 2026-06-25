@@ -97,6 +97,12 @@ export abstract class Node {
   // toggle.
   static renderStackWidget: ((ctx: Ctx2D) => void) | null = null
 
+  // Set by main.ts to `(node) => backgroundLayer.add(node)`. Lets layers
+  // auto-create a source that stays live (evaluated each frame via the
+  // BackgroundLayer) without appearing in the main stack. The user can
+  // retrieve it by clicking the bound slot.
+  static sendToBackground: ((layer: Node) => void) | null = null
+
   // Set by InteractionSystem when a touch swipe gesture is recognised; read
   // by Evaluator to briefly flash a direction arrow over the canvas (or
   // stack widget) centre — visual confirmation that the swipe registered,

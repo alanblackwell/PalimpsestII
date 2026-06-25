@@ -130,7 +130,8 @@ export class DirectionLayer extends Layer implements DirectionSource {
       this._positionSlot, this._handleSlot, this._magnitudeSlot,
       this._rotateToggleSlot, this._speedSlot, this._cwSlot,
     )
-    this.debugName = 'DirectionLayer'
+    this.displayBaseName = 'Angle'
+    this.debugName = 'Angle'
     graph.register(this)
   }
 

@@ -26,8 +26,8 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 // The final mask is the union of all active shapes plus the painted layer.
 //
 // Controls (panel above the slot rows at x=300):
-//   [✎ paint]  — activate paint tool (white / include)
-//   [◻ erase]  — activate erase tool (removes painted areas)
+//   [✏]        — paint tool icon (white / include); click to enable, click again to idle
+//   [⌫]        — erase tool icon (remove painted areas); same toggle; switches modes
 //   sz ──●──   — brush-size slider (4–100 px), drag to adjust
 //   [✕]        — clear all freehand paint
 //   [↺]        — clear paint and unbind all shape slots
@@ -69,7 +69,7 @@ export class MaskLayer extends Layer implements MaskSource {
 
   readonly blockPixelPick = true
 
-  private _activeTool:    'paint' | 'erase' | null = 'paint'
+  private _activeTool:    'paint' | 'erase' | null = null
   private _brushSize      = BRUSH_DEFAULT
   private _isDrawing      = false
   private _sliderDragging = false
@@ -368,9 +368,9 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.roundRect(px, ty, 4, TOOLS_H, [4, 0, 0, 4])
     ctx.fill()
 
-    // Tool buttons
-    this._drawToolBtn(ctx, this._paintBtnBounds(), '✎  paint', this._activeTool === 'paint', midY)
-    this._drawToolBtn(ctx, this._eraseBtnBounds(), '◻  erase', this._activeTool === 'erase', midY)
+    // Tool buttons (icon-only; square)
+    this._drawToolBtn(ctx, this._paintBtnBounds(), 'pencil', this._activeTool === 'paint')
+    this._drawToolBtn(ctx, this._eraseBtnBounds(), 'eraser', this._activeTool === 'erase')
 
     // "sz" label
     ctx.fillStyle    = 'rgba(255,255,255,0.35)'
@@ -446,7 +446,9 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.save()
     ctx.strokeStyle = this._activeTool === 'paint'
       ? 'rgba(255,255,255,0.80)'
-      : 'rgba(255,140,140,0.80)'
+      : this._activeTool === 'erase'
+        ? 'rgba(255,140,140,0.80)'
+        : 'rgba(200,200,200,0.50)'
     ctx.lineWidth   = 1.5
     ctx.setLineDash([3, 3])
     ctx.beginPath()
@@ -477,12 +479,20 @@ export class MaskLayer extends Layer implements MaskSource {
     if (boundingBoxContains(this._sliderBounds(),   point)) return this
     if (boundingBoxContains(this._clearBtnBounds(), point)) return this
     if (boundingBoxContains(this._resetBtnBounds(), point)) return this
+    // In idle mode, claim any content-area click (x >= contentLeft, i.e. not
+    // hidden by the stack widget) so handlePointerDown can auto-enable paint.
+    if (point.x >= contentLeft(Node.canvasWidth)) return this
     return null
   }
 
   // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
+
+  resetActiveTool(): void {
+    this._activeTool = null
+    this.markDirty()
+  }
 
   handlePointerDown(point: Point): boolean {
     if (boundingBoxContains(this._paintBtnBounds(), point)) {
@@ -507,6 +517,12 @@ export class MaskLayer extends Layer implements MaskSource {
     }
     if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) {
       this._handleInvertToggle(); return true
+    }
+
+    // Content-area click in idle mode: auto-enable paint and start stroke.
+    if (this._activeTool === null && point.x >= contentLeft(Node.canvasWidth)) {
+      this._activeTool = 'paint'
+      this.markDirty()
     }
 
     if (this._activeTool !== null) {
@@ -634,12 +650,12 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private _paintBtnBounds() {
     const ty = this._toolsY
-    return { x: this._panelX + 8, y: ty + 8, width: 54, height: 28 }
+    return { x: this._panelX + 8, y: ty + 8, width: 28, height: 28 }
   }
 
   private _eraseBtnBounds() {
     const ty = this._toolsY
-    return { x: this._panelX + 66, y: ty + 8, width: 54, height: 28 }
+    return { x: this._panelX + 44, y: ty + 8, width: 28, height: 28 }
   }
 
   // Slider track area (pointer hit zone).
@@ -665,9 +681,8 @@ export class MaskLayer extends Layer implements MaskSource {
   private _drawToolBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
+    icon: IconName,
     active: boolean,
-    midY: number,
   ): void {
     ctx.fillStyle = active ? 'rgba(207,207,126,0.22)' : 'rgba(255,255,255,0.07)'
     ctx.beginPath()
@@ -680,11 +695,8 @@ export class MaskLayer extends Layer implements MaskSource {
       ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
       ctx.stroke()
     }
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.55)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, midY)
+    ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   private _drawBtn(

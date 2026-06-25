@@ -164,8 +164,8 @@ export class TransformLayer extends Layer implements ImageSource {
     // standard slot-row group and draws it inside the reflect pill instead.
     this.slots.push(this._sourceSlot, this._positionSlot, this._scaleSlot,
                     this._rotateSlot, this._centreSlot, this._opacitySlot, this._reflectSlot)
-    this.displayBaseName = 'Geometry'
-    this.debugName = 'Geometry'
+    this.displayBaseName = 'Modify'
+    this.debugName = 'Modify'
     graph.register(this)
   }
 

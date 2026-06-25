@@ -399,6 +399,7 @@ Node.selectLayer = (layer) => {
 // Lets any layer render the LayerStackWidget into its own canvas — see
 // CaptureLayer's stack-capture toggle.
 Node.renderStackWidget = (ctx) => widget.render(ctx, true)
+Node.sendToBackground = (node) => { if (node instanceof Layer) backgroundLayer.add(node) }
 
 const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
@@ -532,6 +533,7 @@ menuLayer.setSaveLoadCallbacks(handleSave, handleLoad)
 deletionLayer.setRestoreCallback((layer) => {
   layer.insertAbove(deletionLayer)
   layer.forceDirty()
+  if (layer instanceof MaskLayer) layer.resetActiveTool()
   refreshStack(layer)
 })
 
@@ -839,6 +841,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // Restart any self-perpetuating frame loop that died while outsideStack
     // was true (see the DeletionLayer restore callback above).
     source.forceDirty()
+    if (source instanceof MaskLayer) source.resetActiveTool()
   }
   refreshStack(source)
 })
