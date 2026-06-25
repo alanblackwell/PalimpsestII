@@ -15,6 +15,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -488,7 +489,7 @@ export class ImageLayer extends Layer implements ImageSource {
     }
 
     // [📁] load button
-    this._drawBtn(ctx, loadB, '📁', 'rgba(255,255,255,0.75)')
+    this._drawBtn(ctx, loadB, 'rgba(255,255,255,0.75)')
 
     ctx.restore()
   }
@@ -668,17 +669,13 @@ export class ImageLayer extends Layer implements ImageSource {
   private _drawBtn(
     ctx: Ctx2D,
     b: { x: number; y: number; width: number; height: number },
-    label: string,
     colour: string,
   ): void {
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
     ctx.beginPath()
     ctx.roundRect(b.x, b.y, b.width, b.height, 4)
     ctx.fill()
-    ctx.font         = '14px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+    ctx.fillStyle = colour
+    drawIcon(ctx, 'folder-open', b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 }
