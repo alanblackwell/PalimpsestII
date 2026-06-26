@@ -167,6 +167,12 @@ export class MaskLayer extends Layer implements MaskSource {
       ctx.drawImage(this._scratch, 0, 0)
       ctx.globalCompositeOperation = 'source-over'
     }
+
+    // Keep redrawing while a tool is active so the brush cursor follows
+    // the pointer between clicks (reads Node.pointerCanvas each frame).
+    if (this._activeTool !== null && !this.outsideStack) {
+      queueMicrotask(() => this.forceDirty())
+    }
   }
 
   override autoBindRules(): ReturnType<Layer['autoBindRules']> {
@@ -229,7 +235,7 @@ export class MaskLayer extends Layer implements MaskSource {
     this._renderBeforeUI(ctx)
     this._drawStripPill(ctx)
     this._drawToolsPanel(ctx)
-    if ((this._activeTool !== null || this._sliderDragging) && this._cursorPoint !== null) {
+    if (this._activeTool !== null && (this._cursorPoint ?? Node.pointerCanvas) !== null) {
       this._drawBrushCursor(ctx)
     }
   }
@@ -442,7 +448,9 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   private _drawBrushCursor(ctx: Ctx2D): void {
-    const { x, y } = this._cursorPoint!
+    const pt = this._cursorPoint ?? Node.pointerCanvas
+    if (pt === null) return
+    const { x, y } = pt
     ctx.save()
     ctx.strokeStyle = this._activeTool === 'paint'
       ? 'rgba(255,255,255,0.80)'
@@ -550,6 +558,7 @@ export class MaskLayer extends Layer implements MaskSource {
     this._sliderDragging = false
     this._isDrawing      = false
     this._lastPoint      = null
+    this._cursorPoint    = null  // revert to Node.pointerCanvas for hover
   }
 
   // ----------------------------------------------------------

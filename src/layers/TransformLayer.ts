@@ -93,8 +93,8 @@ const ROT_SNAP_COL = '#7ecfcf'
 
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
-  | { type: 'scale';  startDist: number; startScale: number; center: Point }
-  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+  | { type: 'scale';  startDist: number; startScale: number; center: Point; vec: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point; vec: Point }
 
 function ptDist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
@@ -164,8 +164,8 @@ export class TransformLayer extends Layer implements ImageSource {
     // standard slot-row group and draws it inside the reflect pill instead.
     this.slots.push(this._sourceSlot, this._positionSlot, this._scaleSlot,
                     this._rotateSlot, this._centreSlot, this._opacitySlot, this._reflectSlot)
-    this.displayBaseName = 'Modify'
-    this.debugName = 'Modify'
+    this.displayBaseName = 'Move'
+    this.debugName = 'Move'
     graph.register(this)
   }
 
@@ -373,12 +373,17 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._centreSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._centreSlot)?.toggle()
       }
+      if (this._positionSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._positionSlot)?.toggle()
+      }
+      this._manualPosition = { ...this._position }
       this._rotSnapper.reset()
       this._drag = {
         type:       'rotate',
-        center:     { ...this._centrePoint },
-        startAngle: Math.atan2(point.y - this._centrePoint.y, point.x - this._centrePoint.x),
+        center:     { ...hp.move },
+        startAngle: Math.atan2(point.y - hp.move.y, point.x - hp.move.x),
         startRot:   this._rotation,
+        vec:        { x: hp.move.x - this._position.x, y: hp.move.y - this._position.y },
       }
       return true
     }
@@ -387,12 +392,17 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._scaleSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._scaleSlot)?.toggle()
       }
+      if (this._positionSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._positionSlot)?.toggle()
+      }
+      this._manualPosition = { ...this._position }
       this._manualScale = this._scale
       this._drag = {
         type:       'scale',
-        center:     { ...this._position },
-        startDist:  Math.max(1, ptDist(point, this._position)),
+        center:     { ...hp.move },
+        startDist:  Math.max(1, ptDist(point, hp.move)),
         startScale: this._scale,
+        vec:        { x: hp.move.x - this._position.x, y: hp.move.y - this._position.y },
       }
       return true
     }
@@ -460,10 +470,23 @@ export class TransformLayer extends Layer implements ImageSource {
       const d = Math.max(1, ptDist(point, this._drag.center))
       const s = this._drag.startScale * (d / this._drag.startDist)
       this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
+      // Keep content centre fixed: P_new = C − (s_new/s_0) · vec
+      const k = this._manualScale / this._drag.startScale
+      this._manualPosition = {
+        x: this._drag.center.x - this._drag.vec.x * k,
+        y: this._drag.center.y - this._drag.vec.y * k,
+      }
     } else {
       const angle  = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
       const rawRot = this._drag.startRot + (angle - this._drag.startAngle)
       this._applySnapRotation(rawRot)
+      // Keep content centre fixed: P_new = C − R(dθ) · vec
+      const dθ  = this._rotation - this._drag.startRot
+      const cos = Math.cos(dθ), sin = Math.sin(dθ)
+      this._manualPosition = {
+        x: this._drag.center.x - (this._drag.vec.x * cos - this._drag.vec.y * sin),
+        y: this._drag.center.y - (this._drag.vec.x * sin + this._drag.vec.y * cos),
+      }
     }
     this.markDirty()
   }
@@ -516,7 +539,10 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   private _handlePos() {
-    const { x: px, y: py } = this._position
+    const snapB = this._transformedSnapBounds(this._position)
+    const { x: px, y: py } = snapB !== null
+      ? { x: snapB.cx, y: snapB.cy }
+      : this._position
     const cos = Math.cos(this._rotation)
     const sin = Math.sin(this._rotation)
     return {

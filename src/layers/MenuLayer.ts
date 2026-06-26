@@ -118,7 +118,7 @@ const COLUMNS: ColDef[] = [
     ],
     bottom: [
       { label: 'Animate',  colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
-      { label: 'Modify',    colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
+      { label: 'Move',      colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
       { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer(), selectAfterCreate: true },
     ],
   },
