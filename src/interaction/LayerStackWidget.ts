@@ -68,6 +68,7 @@ export class LayerStackWidget {
   // ── Drag state ───────────────────────────────────────────────
   private _visible     = true
   private _dragging    = false
+  private _helpBtnBounds: { x: number; y: number; w: number; h: number } | null = null
   private _dragLayer:    Layer | null = null
   private _dragOffsetY = 0      // pointer y relative to card top when drag started
   private _dragY       = 0      // current absolute pointer y
@@ -120,7 +121,13 @@ export class LayerStackWidget {
   // to being navigated to (e.g. DeletionLayer defaults to its Background
   // toggle when it has no archived layers).
   private _select(l: Layer | null): void {
-    if (l !== null && l !== this._selected) l.onSelected()
+    if (l !== this._selected) {
+      // Preserve help when navigating to a CaptureLayer in edit-capture mode
+      // so it can be included in an edit-capture composite.
+      const capturesHelp = (l as { capturesHelpOverlay?: boolean }).capturesHelpOverlay ?? false
+      if (!capturesHelp) Node.helpVisible = false
+      if (l !== null) l.onSelected()
+    }
     this._selected = l
   }
 
@@ -514,6 +521,23 @@ export class LayerStackWidget {
       ctx.textAlign    = 'left'
       ctx.textBaseline = 'middle'
       ctx.fillText(`▸ ${this._selected.debugName}`, 8, lh / 2)
+
+      // ? help button — right end of the strip
+      const bw = lh - 2
+      const bx = this._widgetW() - bw - 2
+      const by = 1
+      this._helpBtnBounds = { x: bx, y: by, w: bw, h: lh - 2 }
+      const active = Node.helpVisible
+      ctx.fillStyle = active ? 'rgba(180,200,255,0.22)' : 'rgba(255,255,255,0.07)'
+      ctx.beginPath()
+      ctx.roundRect(bx, by, bw, lh - 2, 3)
+      ctx.fill()
+      ctx.fillStyle = active ? 'rgba(200,220,255,0.95)' : 'rgba(255,255,255,0.50)'
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('?', bx + bw / 2, by + (lh - 2) / 2)
+    } else {
+      this._helpBtnBounds = null
     }
     ctx.restore()
   }
@@ -586,6 +610,15 @@ export class LayerStackWidget {
   handlePointerDown(pt: Point): boolean {
     if (!this.inBounds(pt)) return false
     this._canvas.focus()   // ensure canvas receives subsequent key events
+
+    // ? help button — top-right of the name strip
+    const hb = this._helpBtnBounds
+    if (hb !== null && pt.x >= hb.x && pt.x < hb.x + hb.w && pt.y >= hb.y && pt.y < hb.y + hb.h) {
+      Node.helpVisible = !Node.helpVisible
+      Node.scheduleFrame?.()
+      return true
+    }
+
     const hit = this._hitTest(pt)
     if (hit !== null) {
       this._dragLayer   = hit

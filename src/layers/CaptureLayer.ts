@@ -1,6 +1,7 @@
 import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
+import { drawHelpOverlay } from '../ui/helpText.js'
 import {
   ValueType, SlotState,
   boundingBoxContains,
@@ -131,6 +132,10 @@ export class CaptureLayer extends Layer implements ImageSource {
 
     graph.register(this)
   }
+
+  // LayerStackWidget checks this when navigating to CaptureLayer: if true,
+  // the help overlay is kept visible so it can be included in the capture.
+  get capturesHelpOverlay(): boolean { return this._editCapture }
 
   // ── ImageSource ───────────────────────────────────────────────
 
@@ -358,6 +363,9 @@ export class CaptureLayer extends Layer implements ImageSource {
       current.renderPanel(ctx)
       current.renderSlots(ctx)
     }
+
+    // Include the help overlay if it was visible when the capture was triggered.
+    drawHelpOverlay(ctx, current instanceof Layer ? current : null)
 
     this._drawCursor(ctx)
   }

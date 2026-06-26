@@ -5,6 +5,7 @@ import type { Point } from '../core/types.js'
 import { Clock }     from './Clock.js'
 import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
+import { drawHelpOverlay } from '../ui/helpText.js'
 
 // Duration of the swipe-gesture direction-arrow flash (see Node.gestureFlash).
 const GESTURE_FLASH_MS = 350
@@ -286,6 +287,9 @@ export class Evaluator {
       if (clipX > 0) wctx.restore()
       renderTop.renderSlots(wctx)
       renderTop.renderOverlay(wctx)
+      // Help overlay — drawn last so it sits above all other UI.
+      // Node.canvasWidth is still vw here, giving correct contentLeft positioning.
+      drawHelpOverlay(wctx, this._layerStackWidget?.selected ?? null)
       Node.canvasWidth = savedCW
     } else {
       // Mobile / legacy: pills move with the content canvas (pan/zoom magnifies
@@ -312,6 +316,8 @@ export class Evaluator {
       }
       this._layerStackWidget?.render(wctx)
       renderTop.renderOverlay(this.ctx)
+      // Help overlay — mobile path draws on the main canvas, moves with pan/zoom.
+      drawHelpOverlay(this.ctx, this._layerStackWidget?.selected ?? null)
     }
 
     // Bind-drag cursor overlay — small card following the pointer.
