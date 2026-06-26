@@ -3,6 +3,7 @@ import { Node }      from '../core/Node.js'
 import type { Ctx2D, Point } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 import { stackWidgetWidth } from './layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // LayerStackWidget — overlapping thumbnail card stack
@@ -522,20 +523,15 @@ export class LayerStackWidget {
       ctx.textBaseline = 'middle'
       ctx.fillText(`▸ ${this._selected.debugName}`, 8, lh / 2)
 
-      // ? help button — right end of the strip
-      const bw = lh - 2
-      const bx = this._widgetW() - bw - 2
-      const by = 1
-      this._helpBtnBounds = { x: bx, y: by, w: bw, h: lh - 2 }
-      const active = Node.helpVisible
-      ctx.fillStyle = active ? 'rgba(180,200,255,0.22)' : 'rgba(255,255,255,0.07)'
-      ctx.beginPath()
-      ctx.roundRect(bx, by, bw, lh - 2, 3)
-      ctx.fill()
-      ctx.fillStyle = active ? 'rgba(200,220,255,0.95)' : 'rgba(255,255,255,0.50)'
-      ctx.textAlign    = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('?', bx + bw / 2, by + (lh - 2) / 2)
+      // ? help button — right end of the strip, icon fills nearly the full bar height
+      const iconSz = lh - 2
+      const bx     = this._widgetW() - iconSz - 3
+      const by     = 1
+      this._helpBtnBounds = { x: bx, y: by, w: iconSz, h: iconSz }
+      ctx.fillStyle = Node.helpVisible
+        ? 'rgba(200,220,255,0.90)'
+        : 'rgba(255,255,255,0.45)'
+      drawIcon(ctx, 'question', bx + iconSz / 2, by + iconSz / 2, iconSz)
     } else {
       this._helpBtnBounds = null
     }
