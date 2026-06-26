@@ -8,6 +8,8 @@ import {
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
 
+const PILL_GAP = 8  // matches MaskLayer's internal gap between slot pills
+
 // ------------------------------------------------------------
 // ClipDrawingLayer — a MaskLayer that renders a clipped image
 // ------------------------------------------------------------
@@ -132,6 +134,19 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
   // ----------------------------------------------------------
   // Rendering
   // ----------------------------------------------------------
+
+  // Append an extra pill for imageSlot + maskSlot below MaskLayer's two pills
+  // (shape slots + invert). MaskLayer.renderSlots only renders its own private
+  // slots, so these would otherwise be invisible.
+  override renderSlots(ctx: Ctx2D): void {
+    super.renderSlots(ctx)
+    let bottom = this.panelBottom
+    for (const b of this._slotBounds.values()) {
+      const rowBottom = b.y + b.height
+      if (rowBottom > bottom) bottom = rowBottom
+    }
+    this.renderSlotGroup(ctx, [this.imageSlot, this.maskSlot], bottom + PILL_GAP)
+  }
 
   // Draw the source image as a guide before the mask overlay so users can see
   // what they are painting over. The inherited _drawMaskOverlay (called by

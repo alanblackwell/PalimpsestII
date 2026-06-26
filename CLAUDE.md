@@ -132,7 +132,12 @@ Provides cycle detection at bind time — `graph.canBind(source, consumer)`.
 7. Implement `renderSelf(ctx)` for canvas content, `renderPanel(ctx)` for the control strip,
    and `renderOverlay(ctx)` for canvas-space drag handles (see "renderOverlay" below)
 8. Override `hitTestSelf` and add `handlePointerDown/Move/Up` if the layer is interactive
-9. Add an entry to the `BUTTONS` array in `src/layers/MenuLayer.ts`
+9. Add an entry to the `BUTTONS` array in `src/layers/MenuLayer.ts`. Set
+   `selectAfterCreate: true` for any image-processing layer that uses
+   `sendToBackgroundAfterBind` for its image input — when the source is sent
+   to Background, the user must land on the new processor layer rather than
+   the now-invisible source. All of Filter, Blend, Warp, Trail, Tile, Move,
+   Rotate, Flash, Clip, and Choose follow this rule.
 10. Export from `src/layers/index.ts`
 11. Optional: override `autoBindRules()` to auto-bind slots on creation (see
     "Default binding rules" below)
@@ -305,6 +310,14 @@ order — but invisible: no `LayerStackWidget` thumbnail, and
 `recompute()` calls `super.recompute()`, then composites `imageSlot`'s image
 through `this.getMask()` via `source-over` + `destination-in` into an
 offscreen canvas that `renderSelf`/`getImage()` use.
+
+`ClipDrawingLayer` extends `MaskLayer`, whose `renderSlots` only renders its
+own private shape slots and invert slot (not the full `this.slots[]` array).
+`ClipDrawingLayer` therefore overrides `renderSlots`: calls `super.renderSlots`,
+scans `_slotBounds.values()` to find the bottom of the last rendered row, then
+calls `renderSlotGroup` once more to append a third pill for `imageSlot` and
+`maskSlot`. Any future `MaskLayer` subclass that adds slots to `this.slots[]`
+must do the same — the base `renderSlots` will not pick them up automatically.
 
 `postInsertLayer` (`main.ts`) inserts a plain hidden `MaskLayer` directly
 **below** the new layer (`helperBelow = true`), links it via
@@ -539,6 +552,20 @@ output through a reflection axis (left-right flip by default). An optional `refl
 (Direction) sets the axis angle: `dirAngle = 0` → `axisAngle = π/2` → left-right flip; any
 other direction rotates the axis accordingly. When the slot is first bound, reflect is
 auto-enabled; pressing `↔` while the slot is bound suspends the binding.
+
+### `MaskLayer` / `ClipDrawingLayer` — paint-mode slot interaction
+
+In idle mode (`_activeTool === null`), `MaskLayer.hitTestSelf` returns `null`
+for any click on a slot row, deferring it to the slot-click / binding-inspector
+logic in `InteractionSystem`. In paint or erase mode, this deferral is skipped:
+`hitTestSelf` returns `this`, and `handlePointerDown` starts a brush stroke.
+This lets the user paint anywhere on the canvas — including over the slot-row
+pills — without needing to switch off the tool first.
+
+Right-click on a slot row still opens the binding inspector in all modes,
+because `InteractionSystem._onContext` calls `selected.hitTestSlot()` directly
+and never goes through `hitTestSelf`. `ClipDrawingLayer` inherits this
+behaviour from `MaskLayer`.
 
 ### `FilterLayer` — `gradient-map` filter
 

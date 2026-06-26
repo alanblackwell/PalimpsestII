@@ -492,12 +492,12 @@ export class MaskLayer extends Layer implements MaskSource {
     // before the slot-row check below hands the click to the slot-click /
     // binding-inspector logic.
     if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) return this
-    // Parameter-slot rows take priority over painting, so clicks (and
-    // right-clicks) there reach the slot-click / binding-inspector logic
-    // in InteractionSystem instead of starting a brush stroke. Painting
-    // under a slot row is still possible by starting the stroke just
-    // outside it and dragging in.
-    if (this.hitTestSlot(point) !== null) return null
+    // In idle mode, slot rows take priority so left-clicks reach the
+    // slot-click / binding-inspector logic. In paint/erase mode, a click
+    // on a slot row starts a brush stroke instead — right-click still
+    // reaches the inspector via the separate _onContext path, which calls
+    // hitTestSlot directly and never goes through hitTestSelf.
+    if (this._activeTool === null && this.hitTestSlot(point) !== null) return null
     // When a tool is active, don't claim pointer-downs in the widget strip —
     // let those reach the StackWidget. Strokes that already started outside the
     // strip continue into it freely (move/up go directly to _active, bypassing

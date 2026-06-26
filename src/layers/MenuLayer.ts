@@ -150,7 +150,7 @@ const COLUMNS: ColDef[] = [
     ],
     bottom: [
 //      { label: 'Mask',     colour: '#cfcf7e', factory: ()          => new MaskLayer() },
-      { label: 'Clip',      colour: '#7ecf7e', factory: ()          => new ClipLayer() },
+      { label: 'Clip',      colour: '#7ecf7e', factory: ()          => new ClipLayer(),          selectAfterCreate: true },
       { label: 'Blend',     colour: '#7ecf7e', factory: (_,__,w,h) => new CompositeLayer(w, h), selectAfterCreate: true },
       { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer(),        selectAfterCreate: true },
       { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer(),          selectAfterCreate: true },
@@ -166,7 +166,7 @@ const COLUMNS: ColDef[] = [
       { label: 'Event',      colour: '#e0e060', factory: () => new EventLayer() },
       { label: 'Flash',     colour: '#e0e060', factory: ()          => new FlashLayer(), selectAfterCreate: true },
       { label: 'Index',      colour: '#a0a0a0', factory: () => new CountLayer(0) },
-      { label: 'Choose',     colour: '#7ecf7e', factory: () => new SelectLayer() },
+      { label: 'Choose',     colour: '#7ecf7e', factory: () => new SelectLayer(), selectAfterCreate: true },
       { label: 'Collect',    colour: '#7ecf7e', factory: () => new CollectionLayer() },
     ],
     bottom: [
