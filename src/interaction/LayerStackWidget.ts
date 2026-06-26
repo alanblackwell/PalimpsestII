@@ -145,6 +145,7 @@ export class LayerStackWidget {
 
   setVisible(v: boolean): void {
     this._visible = v
+    Node.widgetVisible = v
     Node.scheduleFrame?.()
   }
 

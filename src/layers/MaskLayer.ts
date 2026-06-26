@@ -64,8 +64,13 @@ export class MaskLayer extends Layer implements MaskSource {
   private readonly _invertSlot: ParameterSlot
 
   private _painted:   OffscreenCanvas
+  private _erased:    OffscreenCanvas   // erasure mask — subtracted from composited result
   private _offscreen: OffscreenCanvas
   private _scratch:   OffscreenCanvas
+
+  // One-level undo state — saved at the start of each stroke.
+  private _undoPainted: OffscreenCanvas | null = null
+  private _undoErased:  OffscreenCanvas | null = null
 
   readonly blockPixelPick = true
 
@@ -91,6 +96,7 @@ export class MaskLayer extends Layer implements MaskSource {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
     this._painted   = new OffscreenCanvas(w, h)
+    this._erased    = new OffscreenCanvas(w, h)
     this._offscreen = new OffscreenCanvas(w, h)
     this._scratch   = new OffscreenCanvas(w, h)
 
@@ -146,6 +152,11 @@ export class MaskLayer extends Layer implements MaskSource {
       if (mask !== null) ctx.drawImage(mask, 0, 0)
     }
 
+    // Subtract the erasure mask from the composited result.
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.drawImage(this._erased, 0, 0)
+    ctx.globalCompositeOperation = 'source-over'
+
     // Invert toggle — each rising edge flips _inverted.
     if (this._invertSlot.isActive) {
       const t = (this._invertSlot.source as EventSource).getEventTime()
@@ -192,6 +203,7 @@ export class MaskLayer extends Layer implements MaskSource {
   override serializeState(): Record<string, unknown> {
     return {
       painted:    this._painted,
+      erased:     this._erased,
       brushSize:  this._brushSize,
       inverted:   this._inverted,
       activeTool: this._activeTool,
@@ -209,6 +221,12 @@ export class MaskLayer extends Layer implements MaskSource {
       const ctx = this._painted.getContext('2d')!
       ctx.clearRect(0, 0, this._painted.width, this._painted.height)
       ctx.drawImage(state.painted, 0, 0)
+    }
+    if (state.erased instanceof ImageBitmap) {
+      this._ensureCanvases()
+      const ctx = this._erased.getContext('2d')!
+      ctx.clearRect(0, 0, this._erased.width, this._erased.height)
+      ctx.drawImage(state.erased, 0, 0)
     }
   }
 
@@ -480,7 +498,16 @@ export class MaskLayer extends Layer implements MaskSource {
     // under a slot row is still possible by starting the stroke just
     // outside it and dragging in.
     if (this.hitTestSlot(point) !== null) return null
-    if (this._activeTool !== null || this._sliderDragging) return this
+    // When a tool is active, don't claim pointer-downs in the widget strip —
+    // let those reach the StackWidget. Strokes that already started outside the
+    // strip continue into it freely (move/up go directly to _active, bypassing
+    // hitTestSelf, so no further check is needed).
+    const inWidgetArea = Node.widgetVisible && point.x < contentLeft(Node.canvasWidth)
+    if (this._activeTool !== null) {
+      if (inWidgetArea) return null
+      return this
+    }
+    if (this._sliderDragging) return this
     if (boundingBoxContains(this.canvasBounds, point))      return this
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
@@ -521,7 +548,7 @@ export class MaskLayer extends Layer implements MaskSource {
       this._clearPaint(); return true
     }
     if (boundingBoxContains(this._resetBtnBounds(), point)) {
-      this._reset(); return true
+      this._handleResetBtn(); return true
     }
     if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) {
       this._handleInvertToggle(); return true
@@ -534,6 +561,9 @@ export class MaskLayer extends Layer implements MaskSource {
     }
 
     if (this._activeTool !== null) {
+      // Save one-level undo state before the stroke begins.
+      this._undoPainted = MaskLayer._cloneCanvas(this._painted)
+      this._undoErased  = MaskLayer._cloneCanvas(this._erased)
       this._isDrawing   = true
       this._lastPoint   = null
       this._cursorPoint = point
@@ -578,47 +608,87 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private _applyBrush(point: Point): void {
     this._ensureCanvases()
-    const ctx = this._painted.getContext('2d')!
-    const r   = this._brushSize / 2
+    const r = this._brushSize / 2
+
+    const _stroke = (ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
+      if (this._lastPoint === null) {
+        ctx.beginPath()
+        ctx.arc(point.x, point.y, r, 0, Math.PI * 2)
+        ctx.fill()
+      } else {
+        const dx    = point.x - this._lastPoint.x
+        const dy    = point.y - this._lastPoint.y
+        const dist  = Math.sqrt(dx * dx + dy * dy)
+        const step  = Math.max(1, r * 0.4)
+        const steps = Math.ceil(dist / step)
+        for (let i = 0; i <= steps; i++) {
+          const t = i / Math.max(1, steps)
+          ctx.beginPath()
+          ctx.arc(
+            this._lastPoint.x + dx * t,
+            this._lastPoint.y + dy * t,
+            r, 0, Math.PI * 2,
+          )
+          ctx.fill()
+        }
+      }
+      ctx.globalCompositeOperation = 'source-over'
+    }
 
     if (this._activeTool === 'paint') {
+      // Add to the painted mask.
+      const ctx = this._painted.getContext('2d')!
       ctx.globalCompositeOperation = 'source-over'
       ctx.fillStyle = 'white'
+      _stroke(ctx)
+      // Also remove the same area from the erasure mask.
+      const ectx = this._erased.getContext('2d')!
+      ectx.globalCompositeOperation = 'destination-out'
+      ectx.fillStyle = 'rgba(0,0,0,1)'
+      _stroke(ectx)
     } else {
-      ctx.globalCompositeOperation = 'destination-out'
-      ctx.fillStyle = 'rgba(0,0,0,1)'
+      // Add to the erasure mask (subtracted in recompute).
+      const ectx = this._erased.getContext('2d')!
+      ectx.globalCompositeOperation = 'source-over'
+      ectx.fillStyle = 'white'
+      _stroke(ectx)
     }
 
-    if (this._lastPoint === null) {
-      ctx.beginPath()
-      ctx.arc(point.x, point.y, r, 0, Math.PI * 2)
-      ctx.fill()
-    } else {
-      const dx    = point.x - this._lastPoint.x
-      const dy    = point.y - this._lastPoint.y
-      const dist  = Math.sqrt(dx * dx + dy * dy)
-      const step  = Math.max(1, r * 0.4)
-      const steps = Math.ceil(dist / step)
-      for (let i = 0; i <= steps; i++) {
-        const t = i / Math.max(1, steps)
-        ctx.beginPath()
-        ctx.arc(
-          this._lastPoint.x + dx * t,
-          this._lastPoint.y + dy * t,
-          r, 0, Math.PI * 2,
-        )
-        ctx.fill()
-      }
-    }
-
-    ctx.globalCompositeOperation = 'source-over'
     this._lastPoint = { ...point }
     this.markDirty()
   }
 
+  // Undo the last brush stroke. Called by the [↺] button (first press) and
+  // by Cmd/Ctrl+Z via InteractionSystem.
+  undoLastStroke(): void {
+    if (this._undoPainted === null) return
+    const pctx = this._painted.getContext('2d')!
+    pctx.clearRect(0, 0, this._painted.width, this._painted.height)
+    pctx.drawImage(this._undoPainted, 0, 0)
+    const ectx = this._erased.getContext('2d')!
+    ectx.clearRect(0, 0, this._erased.width, this._erased.height)
+    ectx.drawImage(this._undoErased!, 0, 0)
+    this._undoPainted = null
+    this._undoErased  = null
+    this.markDirty()
+  }
+
+  // [↺] button: undo last stroke on first press; full reset on second press.
+  private _handleResetBtn(): void {
+    if (this._undoPainted !== null) {
+      this.undoLastStroke()
+    } else {
+      this._reset()
+    }
+  }
+
   private _clearPaint(): void {
-    const ctx = this._painted.getContext('2d')!
-    ctx.clearRect(0, 0, this._painted.width, this._painted.height)
+    const pctx = this._painted.getContext('2d')!
+    pctx.clearRect(0, 0, this._painted.width, this._painted.height)
+    const ectx = this._erased.getContext('2d')!
+    ectx.clearRect(0, 0, this._erased.width, this._erased.height)
+    this._undoPainted = null
+    this._undoErased  = null
     this.markDirty()
   }
 
@@ -630,6 +700,12 @@ export class MaskLayer extends Layer implements MaskSource {
     this.markDirty()
   }
 
+  private static _cloneCanvas(src: OffscreenCanvas): OffscreenCanvas {
+    const clone = new OffscreenCanvas(src.width, src.height)
+    clone.getContext('2d')!.drawImage(src, 0, 0)
+    return clone
+  }
+
   // ----------------------------------------------------------
   // Canvas management
   // ----------------------------------------------------------
@@ -637,8 +713,8 @@ export class MaskLayer extends Layer implements MaskSource {
   private _ensureCanvases(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
-    // _painted only grows — never shrink it. On mobile, rotating the phone
-    // reduces canvasWidth/Height; paint strokes outside the new bounds must be
+    // _painted and _erased only grow — never shrink. On mobile, rotating the
+    // phone reduces canvasWidth/Height; strokes outside the new bounds must be
     // preserved so they reappear when the device is rotated back.
     if (this._painted.width < w || this._painted.height < h) {
       const newW = Math.max(this._painted.width, w)
@@ -646,6 +722,13 @@ export class MaskLayer extends Layer implements MaskSource {
       const next = new OffscreenCanvas(newW, newH)
       next.getContext('2d')!.drawImage(this._painted, 0, 0)
       this._painted = next
+    }
+    if (this._erased.width < w || this._erased.height < h) {
+      const newW = Math.max(this._erased.width, w)
+      const newH = Math.max(this._erased.height, h)
+      const next = new OffscreenCanvas(newW, newH)
+      next.getContext('2d')!.drawImage(this._erased, 0, 0)
+      this._erased = next
     }
     if (this._offscreen.width !== w || this._offscreen.height !== h) {
       this._offscreen = new OffscreenCanvas(w, h)

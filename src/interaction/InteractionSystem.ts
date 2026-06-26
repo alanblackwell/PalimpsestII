@@ -974,6 +974,14 @@ export class InteractionSystem {
       e.preventDefault()
       return
     }
+    if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      const sel = this._widget?.selected ?? null
+      if (sel !== null && typeof (sel as unknown as { undoLastStroke?: () => void }).undoLastStroke === 'function') {
+        ;(sel as unknown as { undoLastStroke: () => void }).undoLastStroke()
+      }
+      e.preventDefault()
+      return
+    }
     if (this._widget !== null) {
       const key = e.shiftKey ? `Shift+${e.key}` : e.key
       const isEditModeKey = key === 'h' || key === 'H' ||

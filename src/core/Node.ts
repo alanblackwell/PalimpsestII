@@ -41,6 +41,7 @@ export abstract class Node {
   // ----------------------------------------------------------
   static scheduleFrame: (() => void) | null = null
   static clock: { readonly paused: boolean } | null = null
+  static widgetVisible = true
 
   // Shared bind-drag state — set by LayerStackWidget, read by Layer.renderSlots
   // and Evaluator to draw the cursor overlay.
