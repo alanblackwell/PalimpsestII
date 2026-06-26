@@ -101,6 +101,26 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
   // Rendering
   // ----------------------------------------------------------
 
+  override renderPanel(ctx: Ctx2D): void {
+    if (this.imageSlot.isActive) {
+      const src = (this.imageSlot.source as ImageSource).getImage()
+      if (src !== null) {
+        ctx.save()
+        ctx.globalAlpha = 0.4
+        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        ctx.restore()
+        ctx.save()
+        ctx.shadowColor   = 'rgba(0,0,0,0.75)'
+        ctx.shadowBlur    = 18
+        ctx.shadowOffsetX = 0
+        ctx.shadowOffsetY = 3
+        ctx.drawImage(this._offscreen, 0, 0)
+        ctx.restore()
+      }
+    }
+    super.renderPanel(ctx)
+  }
+
   override renderSelf(ctx: Ctx2D): void {
     ctx.drawImage(this._offscreen, 0, 0)
   }

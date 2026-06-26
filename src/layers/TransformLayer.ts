@@ -93,8 +93,8 @@ const ROT_SNAP_COL = '#7ecfcf'
 
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
-  | { type: 'scale';  startDist: number; startScale: number; center: Point; vec: Point }
-  | { type: 'rotate'; startAngle: number; startRot: number; center: Point; vec: Point }
+  | { type: 'scale';  startDist: number; startScale: number; center: Point }
+  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
 
 function ptDist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
@@ -205,7 +205,7 @@ export class TransformLayer extends Layer implements ImageSource {
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this._positionSlot) return this._manualPosition ?? this._position
+    if (slot === this._positionSlot) { const hp = this._handlePos(); return { ...hp.move } }
     if (slot === this._scaleSlot) {
       const scale = this._manualScale ?? this._scale
       return Math.max(0, Math.min(1, (scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)))
@@ -271,10 +271,8 @@ export class TransformLayer extends Layer implements ImageSource {
       ? (this._sourceSlot.source as ImageSource).getImage()
       : null
 
-    this._position = this._positionSlot.isActive
-      ? (this._positionSlot.source as PointSource).getPoint()
-      : this._manualPosition ?? { x: w / 2, y: h / 2 }
-
+    // Scale and rotation must be resolved before position: _pivotFromContentCentre
+    // uses them to back-compute the canvas-transform pivot.
     if (this._scaleSlot.isActive) {
       const t = (this._scaleSlot.source as AmountSource).getAmount() as Amount
       this._scale = MIN_SCALE + t * (MAX_SCALE - MIN_SCALE)
@@ -286,6 +284,16 @@ export class TransformLayer extends Layer implements ImageSource {
       const dir: Direction = (this._rotateSlot.source as DirectionSource).getDirection()
       this._rotation = dir.angle
     }
+
+    // positionSlot and _manualPosition store the *content centre* (the visible
+    // handle position). _position (the canvas-transform pivot) is back-computed
+    // from that so the image actually lands at the content centre.
+    const contentCentre: Point | null = this._positionSlot.isActive
+      ? (this._positionSlot.source as PointSource).getPoint()
+      : this._manualPosition
+    this._position = contentCentre !== null
+      ? this._pivotFromContentCentre(contentCentre)
+      : { x: w / 2, y: h / 2 }
 
     this._centrePoint = this._centreSlot.isActive
       ? (this._centreSlot.source as PointSource).getPoint()
@@ -376,14 +384,13 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._positionSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._positionSlot)?.toggle()
       }
-      this._manualPosition = { ...this._position }
+      this._manualPosition = { ...hp.move }  // content centre stays fixed
       this._rotSnapper.reset()
       this._drag = {
         type:       'rotate',
         center:     { ...hp.move },
         startAngle: Math.atan2(point.y - hp.move.y, point.x - hp.move.x),
         startRot:   this._rotation,
-        vec:        { x: hp.move.x - this._position.x, y: hp.move.y - this._position.y },
       }
       return true
     }
@@ -395,14 +402,13 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._positionSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._positionSlot)?.toggle()
       }
-      this._manualPosition = { ...this._position }
+      this._manualPosition = { ...hp.move }  // content centre stays fixed
       this._manualScale = this._scale
       this._drag = {
         type:       'scale',
         center:     { ...hp.move },
         startDist:  Math.max(1, ptDist(point, hp.move)),
         startScale: this._scale,
-        vec:        { x: hp.move.x - this._position.x, y: hp.move.y - this._position.y },
       }
       return true
     }
@@ -411,11 +417,11 @@ export class TransformLayer extends Layer implements ImageSource {
       if (this._positionSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._positionSlot)?.toggle()
       }
-      this._manualPosition = { ...this._position }
+      this._manualPosition = { ...hp.move }  // content centre
       this._drag = {
         type:       'move',
         startMouse: { ...point },
-        startPos:   { ...this._position },
+        startPos:   { ...hp.move },  // track content centre, not pivot
       }
       return true
     }
@@ -454,11 +460,12 @@ export class TransformLayer extends Layer implements ImageSource {
         x: this._drag.startPos.x + point.x - this._drag.startMouse.x,
         y: this._drag.startPos.y + point.y - this._drag.startMouse.y,
       }
+      // rawPos is content centre; derive pivot to compute actual snap bounds
       const edges = collectSnapEdges(this, 3)
       if (edges.xs.length > 0 || edges.ys.length > 0) {
-        const b = this._transformedSnapBounds(rawPos)
-        const offsetsX = b ? [b.cx - rawPos.x - b.extX, b.cx - rawPos.x, b.cx - rawPos.x + b.extX] : [0]
-        const offsetsY = b ? [b.cy - rawPos.y - b.extY, b.cy - rawPos.y, b.cy - rawPos.y + b.extY] : [0]
+        const b = this._transformedSnapBounds(this._pivotFromContentCentre(rawPos))
+        const offsetsX = b ? [-b.extX, 0, b.extX] : [0]
+        const offsetsY = b ? [-b.extY, 0, b.extY] : [0]
         const snapped = snapPointToEdges(rawPos, edges, EDGE_SNAP_THRESHOLD, offsetsX, offsetsY)
         this._manualPosition = { x: snapped.x, y: snapped.y }
         this._edgeSnapX = snapped.snapLineX; this._edgeSnapY = snapped.snapLineY
@@ -470,23 +477,12 @@ export class TransformLayer extends Layer implements ImageSource {
       const d = Math.max(1, ptDist(point, this._drag.center))
       const s = this._drag.startScale * (d / this._drag.startDist)
       this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, s))
-      // Keep content centre fixed: P_new = C − (s_new/s_0) · vec
-      const k = this._manualScale / this._drag.startScale
-      this._manualPosition = {
-        x: this._drag.center.x - this._drag.vec.x * k,
-        y: this._drag.center.y - this._drag.vec.y * k,
-      }
+      // _manualPosition (content centre) stays fixed; recompute() back-computes pivot
     } else {
       const angle  = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)
       const rawRot = this._drag.startRot + (angle - this._drag.startAngle)
       this._applySnapRotation(rawRot)
-      // Keep content centre fixed: P_new = C − R(dθ) · vec
-      const dθ  = this._rotation - this._drag.startRot
-      const cos = Math.cos(dθ), sin = Math.sin(dθ)
-      this._manualPosition = {
-        x: this._drag.center.x - (this._drag.vec.x * cos - this._drag.vec.y * sin),
-        y: this._drag.center.y - (this._drag.vec.x * sin + this._drag.vec.y * cos),
-      }
+      // _manualPosition (content centre) stays fixed; recompute() back-computes pivot
     }
     this.markDirty()
   }
@@ -537,6 +533,28 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
   // Handle helpers
   // ----------------------------------------------------------
+
+  // Inverse of the content-centre forward transform: given the desired canvas
+  // position of the source-content centre (cc), return the pivot (_position)
+  // that achieves it under the current rotation and scale.
+  // Returns cc unchanged when the source has no offset snap bounds or when
+  // centreSlot is active (separate pivot semantics apply).
+  private _pivotFromContentCentre(cc: Point): Point {
+    if (!this._sourceSlot.isActive || this._centreSlot.isActive) return { ...cc }
+    const src = this._sourceSlot.source
+    if (!(src instanceof Layer)) return { ...cc }
+    const srcBounds = src.getSnapBounds()
+    if (srcBounds === null) return { ...cc }
+    const w    = this._offscreen.width, h = this._offscreen.height
+    const offX = (srcBounds.minX + srcBounds.maxX) / 2 - w / 2
+    const offY = (srcBounds.minY + srcBounds.maxY) / 2 - h / 2
+    const cos  = Math.cos(this._rotation), sin = Math.sin(this._rotation)
+    const s    = this._scale
+    return {
+      x: cc.x - (offX * s * cos - offY * s * sin),
+      y: cc.y - (offX * s * sin + offY * s * cos),
+    }
+  }
 
   private _handlePos() {
     const snapB = this._transformedSnapBounds(this._position)
