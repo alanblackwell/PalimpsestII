@@ -814,7 +814,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
           newLayer = new DirectionLayer(d.angle, d.magnitude)
         }
         Layer.assignSlotCreatedName(newLayer, consumer, slot)
-        newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+        newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
         newLayer.insertAbove(consumer)
         BindingLayer.create(newLayer, slot)
         refreshStack(newLayer)

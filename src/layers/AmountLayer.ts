@@ -111,7 +111,7 @@ export class AmountLayer extends Layer implements AmountSource {
       }
       if (yActive) {
         const pt = (this._ySlot.source as PointSource).getPoint()
-        sum += Math.max(0, Math.min(1, pt.y / H))
+        sum += Math.max(0, Math.min(1, 1 - pt.y / H))
         count++
       }
       this._value = sum / count as Amount

@@ -375,13 +375,7 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._toggleBounds !== null) {
-      const b = this._toggleBounds
-      if (point.x >= b.x && point.x <= b.x + b.width &&
-          point.y >= b.y && point.y <= b.y + b.height) return this
-    }
-    if (this._strokeSliderHit(point)) return this
-    if (this._radiusSliderHit(point)) return this
+    // Canvas-space handles take priority over pill controls.
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) return this
@@ -390,37 +384,20 @@ export class PathLayer extends ShapeLayer {
     const rh = this._rotateHandlePos()
     if ((point.x - rh.x) ** 2 + (point.y - rh.y) ** 2 <= r2) return this
     if (this._nearest(point) >= 0) return this
-    return this._curveHit(point) !== null ? this : null
-  }
-
-  override handlePointerDown(point: Point): boolean {
+    if (this._curveHit(point) !== null) return this
+    // Pill controls
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
-          point.y >= b.y && point.y <= b.y + b.height) {
-        if (this.fillModeSlot.state === SlotState.Bound) {
-          this.fillModeSlot.suspend()
-        } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
-          this.fillModeSlot.resume()
-        } else {
-          this._filled = !this._filled
-        }
-        this.markDirty()
-        return true
-      }
+          point.y >= b.y && point.y <= b.y + b.height) return this
     }
-    if (this._strokeSliderHit(point)) {
-      this._strokeSliderDrag = true
-      this._setStrokeWidthFromPointer(point.x)
-      this.markDirty()
-      return true
-    }
-    if (this._radiusSliderHit(point)) {
-      this._radiusSliderDrag = true
-      this._setRadiusFromPointer(point.x)
-      this.markDirty()
-      return true
-    }
+    if (this._strokeSliderHit(point)) return this
+    if (this._radiusSliderHit(point)) return this
+    return null
+  }
+
+  override handlePointerDown(point: Point): boolean {
+    // Canvas-space handles take priority over pill controls.
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
     if ((point.x - c.x) ** 2 + (point.y - c.y) ** 2 <= r2) {
@@ -468,6 +445,34 @@ export class PathLayer extends ShapeLayer {
     if (hit !== null) {
       this._points.splice(hit.insertAt, 0, { ...hit.pos })
       this._dragIndex = hit.insertAt
+      this.markDirty()
+      return true
+    }
+    // Pill controls
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) {
+        if (this.fillModeSlot.state === SlotState.Bound) {
+          this.fillModeSlot.suspend()
+        } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
+          this.fillModeSlot.resume()
+        } else {
+          this._filled = !this._filled
+        }
+        this.markDirty()
+        return true
+      }
+    }
+    if (this._strokeSliderHit(point)) {
+      this._strokeSliderDrag = true
+      this._setStrokeWidthFromPointer(point.x)
+      this.markDirty()
+      return true
+    }
+    if (this._radiusSliderHit(point)) {
+      this._radiusSliderDrag = true
+      this._setRadiusFromPointer(point.x)
       this.markDirty()
       return true
     }
