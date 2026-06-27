@@ -119,8 +119,9 @@ export class LineLayer extends Layer implements ImageSource {
   private _arrowStartBounds: BBox | null = null
   private _arrowEndBounds:   BBox | null = null
 
-  constructor() {
+  constructor(colour?: Colour) {
     super()
+    if (colour !== undefined) this._colour = colour
     const W = Node.canvasWidth
     const H = Node.canvasHeight
     const m = INIT_MARGIN
@@ -183,7 +184,8 @@ export class LineLayer extends Layer implements ImageSource {
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
   }
 
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
+    if (slot === this.colourSlot)    return this._colour
     if (slot === this.startSlot)     return { ...this._start }
     if (slot === this.endSlot)       return { ...this._end   }
     if (slot === this.widthSlot)     return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))

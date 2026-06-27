@@ -90,7 +90,7 @@ export class BindingLayer extends Layer
   private _enabled = true
   // Value captured from getSlotDefault at the moment the binding was suspended.
   // Used on resume to decide whether the user actually changed the control.
-  private _valueAtSuspend: Point | number | Direction | null = null
+  private _valueAtSuspend: Point | number | Direction | Colour | null = null
 
   // Button geometry — derived from bounds, computed on demand.
   private static readonly BTN = 24   // button size in px
@@ -182,8 +182,8 @@ export class BindingLayer extends Layer
   }
 
   private _slotValuesEqual(
-    a: Point | number | Direction | null,
-    b: Point | number | Direction | null,
+    a: Point | number | Direction | Colour | null,
+    b: Point | number | Direction | Colour | null,
   ): boolean {
     if (a === b) return true
     if (a === null || b === null) return false
@@ -192,6 +192,8 @@ export class BindingLayer extends Layer
       return a.x === (b as Point).x && a.y === (b as Point).y
     if ('angle' in a && typeof b === 'object' && 'angle' in b)
       return a.angle === (b as Direction).angle && a.magnitude === (b as Direction).magnitude
+    if ('r' in a && typeof b === 'object' && 'r' in b)
+      return a.r === (b as Colour).r && a.g === (b as Colour).g && a.b === (b as Colour).b && a.a === (b as Colour).a
     return false
   }
 

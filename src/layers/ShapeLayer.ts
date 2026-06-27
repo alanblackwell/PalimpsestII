@@ -150,6 +150,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._width  = width
     this._height = height
     if (colour !== undefined) this._colour = colour
+    if (Node.outlineMode) this._filled = false
 
     this.positionSlot  = new ParameterSlot(ValueType.Point,     this, 'position')
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
@@ -196,8 +197,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
     if (slot === this.positionSlot) return { x: this._cx, y: this._cy }
+    if (slot === this.colourSlot)   return this._colour
     if (slot === this.opacitySlot)  return this._opacity
     if (slot === this.scaleSlot)    return this._scale / MAX_SCALE
     if (slot === this.rotationSlot) return { angle: this._angle, magnitude: 1 }

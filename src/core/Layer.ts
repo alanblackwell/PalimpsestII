@@ -1,7 +1,7 @@
 import { Node } from './Node.js'
 import { ParameterSlot } from './ParameterSlot.js'
 import { ValueType, SlotState } from './types.js'
-import type { Ctx2D, Point, Direction }  from './types.js'
+import type { Ctx2D, Point, Direction, Colour }  from './types.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 const SLOT_TC: Partial<Record<ValueType, string>> = {
@@ -410,7 +410,7 @@ export abstract class Layer extends Node {
   // slider value, etc) — so a layer created via the slot-click-to-create
   // gesture starts as a no-op binding. Return null to fall back to the
   // slot type's canonical default (DEFAULT_VALUE_LAYER in main.ts).
-  getSlotDefault(_slot: ParameterSlot): Point | number | Direction | null {
+  getSlotDefault(_slot: ParameterSlot): Point | number | Direction | Colour | null {
     return null
   }
 
@@ -433,7 +433,7 @@ export abstract class Layer extends Node {
   //   2. Apply val as the new manual value and mark dirty.
   // Default is a no-op; only source layers with controllable outputs need it.
   // Do not call directly — use pushResumedValue on the consumer.
-  protected receiveValue(_type: ValueType | null, _val: Point | number | Direction): void {}
+  protected receiveValue(_type: ValueType | null, _val: Point | number | Direction | Colour): void {}
 
   // True if `slot` is conventionally filled with a freshly-created closed
   // shape (Rect/Ellipse/Path, in outline mode) via the slot-click-to-create

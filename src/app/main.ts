@@ -4,9 +4,9 @@ import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { Node }              from '../core/Node.js'
 import { ValueType, SlotState } from '../core/types.js'
-import type { Point, Direction } from '../core/types.js'
+import type { Point, Direction, Colour } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
-import { rndColour }         from '../core/colour.js'
+import { rndColour, OUTLINE_COLOUR } from '../core/colour.js'
 import { graph }             from '../dataflow/Graph.js'
 import { BindingLayer }      from '../layers/BindingLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
@@ -53,9 +53,24 @@ function bindRateClock(rate: RateLayer): void {
   if (!rate.timeSlot.isActive) BindingLayer.create(clock, rate.timeSlot)
 }
 
+// Create a hidden helper RateLayer directly above `host`, bind it to
+// `phaseSlot`, and wire its timeSlot to the singleton Clock.
+// `rateHz` is the initial rate; pass `1.0` for the default.
+function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number): void {
+  const rate = new RateLayer(rateHz)
+  Layer.assignDebugName(rate)
+  rate.bounds = { ...host.bounds }
+  rate.insertAbove(host)
+  rate.isHiddenHelper = true
+  rate.helperHost = host
+  host.hiddenHelper = rate
+  bindRateClock(rate)
+  BindingLayer.create(rate, phaseSlot)
+}
+
 // Auto-bind a phase slot to a Rate or Clock layer, creating a hidden helper
 // RateLayer above `host` (fed by the shared singleton Clock) if neither is
-// found nearby. Shared by AnimPathLayer and RotateLayer.
+// found nearby. Used by RotateLayer.
 function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   if (phaseSlot.isActive) return
 
@@ -70,23 +85,18 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   }
 
   if (phaseSource === null) {
-    // The Rate layer is created as a hidden helper directly above the
-    // host, bound to its phase slot. It stays with the host as it moves,
-    // and has no thumbnail in the stack widget unless exposed (by clicking
-    // the phase slot it's bound to).
-    const rate = new RateLayer(1.0)
-    Layer.assignDebugName(rate)
-    rate.bounds = { ...host.bounds }
-    rate.insertAbove(host)
-    rate.isHiddenHelper = true
-    rate.helperHost = host
-    host.hiddenHelper = rate
-
-    bindRateClock(rate)
-    phaseSource = rate
+    createHiddenRate(host, phaseSlot, 1.0)
+    return
   }
 
   BindingLayer.create(phaseSource, phaseSlot)
+}
+
+// Log-uniform random rate in [0.1, 1.5] Hz — spread across octaves so each
+// new AnimPath feels distinct from others.
+function randomAnimRate(): number {
+  const logMin = Math.log(0.1), logMax = Math.log(1.5)
+  return Math.exp(logMin + Math.random() * (logMax - logMin))
 }
 
 // All per-type setup that runs after a new layer is inserted into the stack.
@@ -122,8 +132,11 @@ function postInsertLayer(newLayer: Layer): void {
       }
     }
 
-    // Auto-bind phase slot to a Rate or Clock layer, creating both if needed.
-    ensurePhaseSource(newLayer, newLayer.phaseSlot)
+    // Always create a fresh hidden Rate layer for each AnimPath, with a random
+    // rate, so multiple AnimPaths don't share the same speed by default.
+    if (!newLayer.phaseSlot.isActive) {
+      createHiddenRate(newLayer, newLayer.phaseSlot, randomAnimRate())
+    }
   }
 
   if (newLayer instanceof RotateLayer) {
@@ -257,10 +270,11 @@ function wireTutorialLayer(tl: TutorialLayer): void {
 function randomClosedShapeLayer(canvasW: number, canvasH: number): Layer {
   const s = rndShape(canvasW, canvasH)
   const pick = Math.floor(Math.random() * 3)
+  const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour()
   const shape =
-    pick === 0 ? new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) :
-    pick === 1 ? new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) :
-    new PathLayer(undefined, s.cx, s.cy, rndColour())
+    pick === 0 ? new RectLayer(s.cx, s.cy, s.sw, s.sh, c) :
+    pick === 1 ? new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) :
+    new PathLayer(undefined, s.cx, s.cy, c)
   shape.setFilled(false)
   return shape
 }
@@ -357,6 +371,8 @@ evaluator.setViewport(window.innerWidth, window.innerHeight)
 // at the narrowest widget width, with margin for label text overflow.
 const X = 8
 const W = 100
+
+Node.outlineMode = true
 
 const root = new RootLayer(canvas.width, canvas.height)
 
@@ -740,7 +756,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // this slot (handle position, slider value, dial angle, ...), seed the
     // new layer with that value so the binding is a no-op until the user
     // changes it.
-    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction) {
+    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction || (slot.type === ValueType.Colour && !Node.outlineMode)) {
       const def = consumer.getSlotDefault(slot)
       if (def !== null) {
         let newLayer: Layer
@@ -748,6 +764,8 @@ interaction.setSlotClickCallback((consumer, slot) => {
           newLayer = new PointLayer(def as Point)
         } else if (slot.type === ValueType.Amount) {
           newLayer = new AmountLayer(def as number)
+        } else if (slot.type === ValueType.Colour) {
+          newLayer = new ColourLayer(def as Colour)
         } else {
           const d = def as Direction
           newLayer = new DirectionLayer(d.angle, d.magnitude)

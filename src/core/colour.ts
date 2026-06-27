@@ -7,6 +7,8 @@ import type { Colour } from './types.js'
 // Random colour across the full hue range, avoiding near-black and near-white.
 // Saturation 0.25–1.0 (allows pastels but not grey); value 0.30–0.82.
 
+export const OUTLINE_COLOUR: Colour = { r: 0.45, g: 0.45, b: 0.45, a: 1 }
+
 export function rndColour(): Colour {
   const h = Math.random() * 360
   const s = 0.25 + Math.random() * 0.75

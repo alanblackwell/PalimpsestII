@@ -148,8 +148,9 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // Draw-button bounds (written during renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BBox | null = null
 
-  constructor() {
+  constructor(colour?: Colour) {
     super()
+    if (colour !== undefined) this._colour = colour
     this._cx = Node.canvasWidth  / 2
     this._cy = Node.canvasHeight / 2
     this._computedCx       = this._cx
@@ -224,7 +225,8 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
+    if (slot === this.colourSlot)   return this._colour
     if (slot === this.widthSlot)    return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
     if (slot === this.rotationSlot) return { angle: this._rotation, magnitude: 1 }
     if (slot === this.opacitySlot)  return this._opacity

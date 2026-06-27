@@ -196,7 +196,7 @@ export class PathLayer extends ShapeLayer {
     if (typeof state.radius === 'number')   this._radius = state.radius
   }
 
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
     if (slot === this.positionSlot) return { ...this._centroid() }
     if (slot === this.radiusSlot)   return Math.max(0, Math.min(1, this._radius / MAX_RADIUS))
     return super.getSlotDefault(slot)

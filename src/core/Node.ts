@@ -132,6 +132,8 @@ export abstract class Node {
   // fit/fill toggle so the video aligns with the physical screen.
   static resetViewTransform: (() => void) | null = null
 
+  static outlineMode = false
+
   // ----------------------------------------------------------
   // Dependency management
   // ----------------------------------------------------------

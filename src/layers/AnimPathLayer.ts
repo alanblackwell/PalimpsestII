@@ -141,7 +141,9 @@ export class AnimPathLayer extends Layer implements PointSource {
   // Rendering
   // ----------------------------------------------------------
 
-  renderSelf(ctx: Ctx2D): void {
+  renderSelf(_ctx: Ctx2D): void { /* marker drawn in renderOverlay — selected layer only */ }
+
+  override renderOverlay(ctx: Ctx2D): void {
     const { x, y } = this._currentPoint
     ctx.save()
     ctx.globalAlpha = this._running ? 1 : 0.45

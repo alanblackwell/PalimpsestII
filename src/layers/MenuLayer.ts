@@ -3,7 +3,8 @@ import { Node }            from '../core/Node.js'
 import { ValueType }       from '../core/types.js'
 import type { Point, Ctx2D } from '../core/types.js'
 import { contentLeft }     from '../interaction/layout.js'
-import { rndColour }       from '../core/colour.js'
+import { drawIcon }        from '../ui/icons.js'
+import { rndColour, OUTLINE_COLOUR } from '../core/colour.js'
 
 import { AmountLayer }     from './AmountLayer.js'
 import { ColourLayer }     from './ColourLayer.js'
@@ -109,17 +110,16 @@ const COLUMNS: ColDef[] = [
   {
     name: 'Shapes',
     top: [
-      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
-      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new PathLayer(undefined, s.cx, s.cy, rndColour()) } },
-      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); return new RectLayer(s.cx, s.cy, s.sw, s.sh, rndColour()) } },
-      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer() },
-      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer() },
-      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer() },
+      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new PathLayer(undefined, s.cx, s.cy, c) } },
+      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new RectLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer(undefined, Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer(Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer(Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
     ],
     bottom: [
       { label: 'Animate',  colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
       { label: 'Move',      colour: '#7ecf7e', factory: (_,__,w,h) => new TransformLayer(w, h),  selectAfterCreate: true },
-      { label: 'Rotate',    colour: '#7ecf7e', factory: ()          => new RotateLayer(), selectAfterCreate: true },
     ],
   },
 
@@ -208,7 +208,9 @@ const COLUMNS: ColDef[] = [
 //   
 //   CalculateLayer - inherited from original Palimpsest, but doesn't
 //     seem to have much utility here
-//   
+//
+//   RotateLayer - functionality now provided by rotation of Angle
+//
 // ── MenuLayer ─────────────────────────────────────────────────
 
 type BBox = { x: number; y: number; width: number; height: number }
@@ -222,8 +224,9 @@ export class MenuLayer extends Layer {
   private _onSave: (() => void) | null = null
   private _onLoad: (() => void) | null = null
 
-  private _cpBounds:  BBox | null  = null
-  private _btnBounds: PlacedBtn[]  = []
+  private _cpBounds:     BBox | null  = null
+  private _btnBounds:    PlacedBtn[]  = []
+  private _toggleBounds: BBox | null  = null
 
   constructor(onAdded: (layer: Layer, selectAfterCreate: boolean) => void) {
     super()
@@ -256,10 +259,27 @@ export class MenuLayer extends Layer {
     const b = this._cpBounds
     if (point.x < b.x || point.x > b.x + b.width ||
         point.y < b.y || point.y > b.y + b.height) return null
-    return this._btnIndexAt(point) >= 0 ? this : null
+    if (this._btnIndexAt(point) >= 0) return this
+    if (this._toggleBounds !== null) {
+      const t = this._toggleBounds
+      if (point.x >= t.x && point.x <= t.x + t.width &&
+          point.y >= t.y && point.y <= t.y + t.height) return this
+    }
+    return null
   }
 
   handlePointerDown(point: Point): boolean {
+    if (this._toggleBounds !== null) {
+      const t = this._toggleBounds
+      if (point.x >= t.x && point.x <= t.x + t.width &&
+          point.y >= t.y && point.y <= t.y + t.height) {
+        Node.outlineMode = !Node.outlineMode
+        this.markDirty()
+        Node.scheduleFrame?.()
+        return true
+      }
+    }
+
     const idx = this._btnIndexAt(point)
     if (idx < 0) return false
 
@@ -373,6 +393,14 @@ export class MenuLayer extends Layer {
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText('Add layer', panX + 14, PANEL_Y + HEADER_H / 2)
+
+    // Outline-mode toggle icon — top right of header, same grey as heading
+    const iconSz  = 15
+    const iconCX  = panX + panW - PAD - iconSz / 2
+    const iconCY  = PANEL_Y + HEADER_H / 2
+    this._toggleBounds = { x: iconCX - iconSz / 2 - 3, y: PANEL_Y, width: iconSz + 6, height: HEADER_H }
+    ctx.fillStyle = 'rgba(255,255,255,0.55)'
+    drawIcon(ctx, Node.outlineMode ? 'shapes' : 'dots-nine', iconCX, iconCY, iconSz)
 
     for (let c = 0; c < resolved.length; c++) {
       const col = resolved[c]!

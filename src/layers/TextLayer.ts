@@ -225,8 +225,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _dragHoverActive:  boolean = false   // OS text drag hovering this layer
   private _isDefaultText:    boolean = true    // true until the user provides real content
 
-  constructor(text?: string) {
+  constructor(text?: string, colour?: Colour) {
     super()
+    if (colour !== undefined) this._colour = colour
     this._maskCanvas   = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._imageCanvas  = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
     this._isDefaultText = text === undefined
@@ -258,7 +259,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
+    if (slot === this._colourSlot)   return this._colour
     if (slot === this._positionSlot) return this._manualPosition ?? this._position
     if (slot === this._sizeSlot) {
       const size = this._manualSize
@@ -658,6 +660,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       manualSize:     this._manualSize,
       manualPosition: this._manualPosition,
       rotation:       this._rotation,
+      colour:         this._colour,
     }
   }
 
@@ -668,6 +671,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (typeof state.italic === 'boolean')    this._italic     = state.italic
     if (typeof state.manualSize === 'number') this._manualSize = state.manualSize
     if (typeof state.rotation === 'number')   this._rotation   = state.rotation
+    if (state.colour && typeof state.colour === 'object')   this._colour = state.colour as Colour
     if (state.manualPosition && typeof state.manualPosition === 'object') {
       this._manualPosition = state.manualPosition as Point
     } else {
@@ -690,9 +694,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ? (this._positionSlot.source as PointSource).getPoint()
       : (this._manualPosition ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 })
 
-    this._colour = this._colourSlot.isActive
-      ? (this._colourSlot.source as ColourSource).getColour()
-      : DEFAULT_COLOUR
+    if (this._colourSlot.isActive) {
+      this._colour = (this._colourSlot.source as ColourSource).getColour()
+    }
 
     if (this._sizeSlot.isActive) {
       const t = (this._sizeSlot.source as AmountSource).getAmount() as Amount
