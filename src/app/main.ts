@@ -46,6 +46,8 @@ import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import * as Persistence      from '../persistence/Persistence.js'
+import * as MobileStore      from '../persistence/MobileStore.js'
+import { openGallery }       from '../ui/MobileGallery.js'
 
 // Bind a RateLayer's timeSlot to the shared singleton Clock, if not already
 // bound, so its phase starts advancing immediately.
@@ -474,11 +476,39 @@ menuLayer.bounds    = { x: X, y: 24, width: W, height: 36 }
 
 // ------------------------------------------------------------------
 // Save / Load — wired to MenuLayer's "Save"/"Load" buttons.
+// On mobile: IndexedDB gallery with preview thumbnails.
+// On desktop: download/upload JSON files.
 // ------------------------------------------------------------------
+const isMobile = navigator.maxTouchPoints > 1
+
 const persistenceCtx: Persistence.PersistenceContext = {
   root, clock, deletionLayer, backgroundLayer, menuLayer, selected: null,
 }
 
+// ── Shared: apply a loaded SaveFile to the running session ──────
+async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
+  let selected: Layer | null = null
+  try {
+    selected = await Persistence.deserialize(json, persistenceCtx)
+  } catch (err) {
+    console.warn('Persistence: failed to load save file', err)
+    return
+  }
+  // Restore eject callbacks on any CollectionLayers in the loaded stack or
+  // archive — Persistence.deserialize doesn't call main.ts callbacks.
+  let scanL: Layer | null = root
+  while (scanL !== null) {
+    if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
+    scanL = scanL.layerAbove
+  }
+  for (const archived of deletionLayer.archivedLayers) {
+    if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
+  }
+  widget.setVisible(true)
+  refreshStack(selected ?? menuLayer)
+}
+
+// ── Desktop: download / upload ──────────────────────────────────
 function downloadJSON(filename: string, json: string): void {
   const blob = new Blob([json], { type: 'application/json' })
   const url  = URL.createObjectURL(blob)
@@ -491,13 +521,13 @@ function downloadJSON(filename: string, json: string): void {
   URL.revokeObjectURL(url)
 }
 
-async function handleSave(): Promise<void> {
+async function handleSaveDesktop(): Promise<void> {
   persistenceCtx.selected = widget.selected
   const saveFile = await Persistence.serialize(persistenceCtx)
   downloadJSON('palimpsest.json', JSON.stringify(saveFile))
 }
 
-function handleLoad(): void {
+function handleLoadDesktop(): void {
   const input = document.createElement('input')
   input.type   = 'file'
   input.accept = 'application/json'
@@ -515,31 +545,44 @@ function handleLoad(): void {
         console.warn('Persistence: failed to parse save file')
         return
       }
-      let selected: Layer | null = null
-      try {
-        selected = await Persistence.deserialize(json, persistenceCtx)
-      } catch (err) {
-        console.warn('Persistence: failed to load save file', err)
-        return
-      }
-      // Restore eject callbacks on any CollectionLayers in the loaded stack or
-      // archive — Persistence.deserialize doesn't call main.ts callbacks.
-      let scanL: Layer | null = root
-      while (scanL !== null) {
-        if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
-        scanL = scanL.layerAbove
-      }
-      for (const archived of deletionLayer.archivedLayers) {
-        if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
-      }
-      widget.setVisible(true)
-      refreshStack(selected ?? menuLayer)
+      await applyLoadedSession(json)
     })()
   }
   input.click()
 }
 
-menuLayer.setSaveLoadCallbacks(handleSave, handleLoad)
+// ── Mobile: IndexedDB gallery ───────────────────────────────────
+function capturePreview(): string {
+  const w = 320, h = 180
+  const thumb = document.createElement('canvas')
+  thumb.width = w; thumb.height = h
+  thumb.getContext('2d')!.drawImage(canvas, 0, 0, w, h)
+  return thumb.toDataURL('image/jpeg', 0.75)
+}
+
+function fmtSaveName(ts: number): string {
+  return new Date(ts).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
+async function handleSaveMobile(): Promise<void> {
+  persistenceCtx.selected = widget.selected
+  const saveFile = await Persistence.serialize(persistenceCtx)
+  const preview  = capturePreview()
+  const id       = crypto.randomUUID()
+  const savedAt  = Date.now()
+  await MobileStore.writeSave({ id, name: fmtSaveName(savedAt), savedAt, preview, session: saveFile })
+  openGallery({ onLoad: s => void applyLoadedSession(s as Persistence.SaveFile) }, id)
+}
+
+function handleLoadMobile(): void {
+  openGallery({ onLoad: s => void applyLoadedSession(s as Persistence.SaveFile) })
+}
+
+// ── Wire callbacks ──────────────────────────────────────────────
+menuLayer.setSaveLoadCallbacks(
+  isMobile ? handleSaveMobile  : handleSaveDesktop,
+  isMobile ? handleLoadMobile  : handleLoadDesktop,
+)
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
 // forceDirty() restarts any self-perpetuating frame loop (VideoLayer,
