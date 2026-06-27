@@ -2,6 +2,7 @@ import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import { drawHelpOverlay } from '../ui/helpText.js'
+import { drawOutlineGrid } from '../ui/grid.js'
 import {
   ValueType, SlotState,
   boundingBoxContains,
@@ -336,6 +337,7 @@ export class CaptureLayer extends Layer implements ImageSource {
 
       ctx.save()
       if (i === currentIdx) {
+        if (Node.outlineMode) drawOutlineGrid(ctx, w, h)
         ctx.shadowColor   = 'rgba(0,0,0,0.60)'
         ctx.shadowBlur    = 18
         ctx.shadowOffsetY = 6

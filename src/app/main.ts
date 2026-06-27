@@ -372,8 +372,6 @@ evaluator.setViewport(window.innerWidth, window.innerHeight)
 const X = 8
 const W = 100
 
-Node.outlineMode = true
-
 const root = new RootLayer(canvas.width, canvas.height)
 
 // Singleton Clock — created once at startup, hidden (outsideStack) until

@@ -123,23 +123,6 @@ const COLUMNS: ColDef[] = [
     ],
   },
 
-  // ── Values ─────────────────────────────────────────────────────────
-  {
-    name: 'Values',
-    top: [
-      { label: 'Colour',    colour: '#e8944a', height: 170, factory: ()          => new ColourLayer(rndColour()) },
-      { label: 'Point',     colour: '#cf7ecf',              factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
-      { label: 'Amount',    colour: '#4a8fe8',              factory: ()          => new AmountLayer(rnd()) },
-      { label: 'Angle',     colour: '#7ecfcf',              factory: ()          => new DirectionLayer(rnd() * Math.PI * 2, 1) },
-    ],
-    bottom: [
-      { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
-      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
-      { label: 'Trail',      colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
-      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
-    ],
-  },
-
   // ── Media ──────────────────────────────────────────────────────────
   {
     name: 'Media',
@@ -155,6 +138,23 @@ const COLUMNS: ColDef[] = [
       { label: 'Filter',    colour: '#7ecf7e', factory: ()          => new FilterLayer(),        selectAfterCreate: true },
       { label: 'Warp',       colour: '#7ecf7e', factory: ()          => new WarpLayer(),          selectAfterCreate: true },
       { label: 'Trace',     colour: '#cf9f7e', factory: ()          => new TraceLayer() },
+    ],
+  },
+
+  // ── Values ─────────────────────────────────────────────────────────
+  {
+    name: 'Values',
+    top: [
+      { label: 'Colour',    colour: '#e8944a', height: 170, factory: ()          => new ColourLayer(rndColour()) },
+      { label: 'Point',     colour: '#cf7ecf',              factory: (_,__,w,h) => new PointLayer({ x: rndR(0.1,0.9)*w, y: rndR(0.1,0.9)*h }) },
+      { label: 'Amount',    colour: '#4a8fe8',              factory: ()          => new AmountLayer(rnd()) },
+      { label: 'Angle',     colour: '#7ecfcf',              factory: ()          => new DirectionLayer(rnd() * Math.PI * 2, 1) },
+    ],
+    bottom: [
+      { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
+      { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
+      { label: 'Trail',      colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
+      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
     ],
   },
 
