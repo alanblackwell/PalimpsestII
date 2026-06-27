@@ -66,6 +66,10 @@ export class AmountLayer extends Layer implements AmountSource {
 
   getAmount(): Amount { return this._value }
 
+  // Exposed so external wiring (e.g. AnimPathLayer's convenience button) can
+  // bind a PointSource to the y-position slot without reflection.
+  get ySlot(): ParameterSlot { return this._ySlot }
+
   // ----------------------------------------------------------
   // Value
   // ----------------------------------------------------------

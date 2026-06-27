@@ -33,6 +33,13 @@ const SLOT_H   = 30
 const SLOT_GAP = 4
 const LABEL_W  = 78
 
+// Bottom convenience button — "Amount": creates an AmountLayer below and
+// binds AnimPath's Point output to its y-position slot.
+const ADD_BTN_H       = 30
+const ADD_BTN_W       = 80
+const ADD_BTN_GAP     = 14   // gap from bottom edge of viewport
+const ADD_BTN_COLOUR  = '#4a8fe8'   // Amount accent
+
 export class AnimPathLayer extends Layer implements PointSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
@@ -46,6 +53,10 @@ export class AnimPathLayer extends Layer implements PointSource {
   private _lastEventTime: EventValue = null
   private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
 
+  // Set by main.ts after insertion (and after load) — invoked when the
+  // bottom "Amount" convenience button is pressed.
+  private _onAddAmount: (() => void) | null = null
+
   constructor(cx: number, cy: number) {
     super()
     this._currentPoint = { x: cx, y: cy }
@@ -57,6 +68,9 @@ export class AnimPathLayer extends Layer implements PointSource {
 
     graph.register(this)
   }
+
+  // Called from main.ts to wire the bottom "Amount" button.
+  setOnAddAmount(fn: () => void): void { this._onAddAmount = fn }
 
   // PointSource
   getPoint(): Point { return { ...this._currentPoint } }
@@ -157,6 +171,8 @@ export class AnimPathLayer extends Layer implements PointSource {
     ctx.arc(x, y, DOT_R, 0, Math.PI * 2)
     ctx.fill()
     ctx.restore()
+
+    this._renderAddButton(ctx)
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -201,6 +217,7 @@ export class AnimPathLayer extends Layer implements PointSource {
   get isInteractive(): boolean { return this._toggleBounds !== null }
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._addBtnHitTest(point)) return this
     if (this._toggleBounds === null) return null
     const b = this._toggleBounds
     if (point.x >= b.x && point.x <= b.x + b.width &&
@@ -209,6 +226,10 @@ export class AnimPathLayer extends Layer implements PointSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    if (this._addBtnHitTest(point)) {
+      this._onAddAmount?.()
+      return true
+    }
     if (this._toggleBounds === null) return false
     const b = this._toggleBounds
     if (point.x >= b.x && point.x <= b.x + b.width &&
@@ -225,6 +246,54 @@ export class AnimPathLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
   // Private
   // ----------------------------------------------------------
+
+  // ----------------------------------------------------------
+  // Bottom convenience button
+  // ----------------------------------------------------------
+
+  private _addBtnRect(): { x: number; y: number } {
+    const left = contentLeft(Node.canvasWidth)
+    const right = Node.viewportWidth
+    const x = left + Math.max(0, (right - left - ADD_BTN_W) / 2)
+    const y = Node.viewportHeight - ADD_BTN_H - ADD_BTN_GAP
+    return { x, y }
+  }
+
+  private _addBtnHitTest(point: Point): boolean {
+    const { x, y } = this._addBtnRect()
+    return point.x >= x && point.x <= x + ADD_BTN_W &&
+           point.y >= y && point.y <= y + ADD_BTN_H
+  }
+
+  private _renderAddButton(ctx: Ctx2D): void {
+    const { x, y } = this._addBtnRect()
+    const midY = y + ADD_BTN_H / 2
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(255,255,255,0.07)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, ADD_BTN_W, ADD_BTN_H, 5)
+    ctx.fill()
+
+    ctx.fillStyle = ADD_BTN_COLOUR + 'cc'
+    ctx.beginPath()
+    ctx.roundRect(x, y, 3, ADD_BTN_H, [5, 0, 0, 5])
+    ctx.fill()
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, y, ADD_BTN_W, ADD_BTN_H)
+    ctx.clip()
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('Amount', x + 10, midY)
+    ctx.restore()
+
+    ctx.restore()
+  }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
     const { x, y, width, height } = b

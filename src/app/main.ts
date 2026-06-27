@@ -122,6 +122,8 @@ function postInsertLayer(newLayer: Layer): void {
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
+    wireAnimPathLayer(newLayer)
+
     // Auto-bind shape slot to the first samplePerimeter-capable layer below.
     if (!newLayer.shapeSlot.isActive) {
       let l: Layer | null = newLayer.layerBelow
@@ -202,6 +204,21 @@ function postInsertLayer(newLayer: Layer): void {
 
     BindingLayer.create(maskHelper, newLayer.clipMaskSlot)
   }
+}
+
+// Wire an AnimPathLayer's bottom "Amount" convenience button: creates an
+// AmountLayer below, binds AnimPath's Point output to its y-position slot,
+// and keeps the AnimPath layer selected.
+function wireAnimPathLayer(animPath: AnimPathLayer): void {
+  animPath.setOnAddAmount(() => {
+    const amount = new AmountLayer()
+    Layer.assignDebugName(amount)
+    amount.bounds = { x: X, y: 24, width: W, height: 36 }
+    amount.insertBelow(animPath)
+    BindingLayer.create(animPath, amount.ySlot)
+    postInsertLayer(amount)
+    refreshStack()   // no arg → current selection (animPath) unchanged
+  })
 }
 
 // Wire a ClipLayer's bottom-row "replace with specialised Clip<Shape>"
@@ -494,15 +511,17 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     console.warn('Persistence: failed to load save file', err)
     return
   }
-  // Restore eject callbacks on any CollectionLayers in the loaded stack or
-  // archive — Persistence.deserialize doesn't call main.ts callbacks.
+  // Restore callbacks on any layers that need post-insert wiring —
+  // Persistence.deserialize doesn't call main.ts callbacks.
   let scanL: Layer | null = root
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
+    if (scanL instanceof AnimPathLayer)   wireAnimPathLayer(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
+    if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)
