@@ -524,7 +524,13 @@ function downloadJSON(filename: string, json: string): void {
 async function handleSaveDesktop(): Promise<void> {
   persistenceCtx.selected = widget.selected
   const saveFile = await Persistence.serialize(persistenceCtx)
-  downloadJSON('palimpsest.json', JSON.stringify(saveFile))
+  const now = new Date()
+  const stamp = now.getFullYear()
+    + '-' + String(now.getMonth() + 1).padStart(2, '0')
+    + '-' + String(now.getDate()).padStart(2, '0')
+    + '_' + String(now.getHours()).padStart(2, '0')
+    + String(now.getMinutes()).padStart(2, '0')
+  downloadJSON(`palimpsest_${stamp}.json`, JSON.stringify(saveFile))
 }
 
 function handleLoadDesktop(): void {
@@ -553,11 +559,7 @@ function handleLoadDesktop(): void {
 
 // ── Mobile: IndexedDB gallery ───────────────────────────────────
 function capturePreview(): string {
-  const w = 320, h = 180
-  const thumb = document.createElement('canvas')
-  thumb.width = w; thumb.height = h
-  thumb.getContext('2d')!.drawImage(canvas, 0, 0, w, h)
-  return thumb.toDataURL('image/jpeg', 0.75)
+  return evaluator.captureDisplayMode(320, 180)
 }
 
 function fmtSaveName(ts: number): string {

@@ -316,6 +316,10 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
     if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
     if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
+
+    // Restart the camera stream after restoring deviceIdx so the correct
+    // device is selected. Screen and file sources can't be auto-restarted.
+    if (this._sourceType === 'camera') void this._startCamera()
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────

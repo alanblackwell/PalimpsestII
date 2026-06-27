@@ -194,6 +194,39 @@ export class Evaluator {
 
   get displayMode(): boolean { return this._displayMode }
 
+  // Render the stack in display mode (plain composite, no panels or UI chrome)
+  // cropped to the visible viewport, then scaled to previewW × previewH.
+  // Returns a JPEG data URL suitable for embedding in a save record.
+  captureDisplayMode(previewW: number, previewH: number): string {
+    const renderTop = this._layerStackWidget?.selected ?? this._stackTop
+    if (renderTop === null) return ''
+
+    const vw  = Node.viewportWidth
+    const vh  = Node.viewportHeight
+    const cw  = this.canvas.width
+    const ch  = this.canvas.height
+
+    // Render display-mode composite at full canvas resolution into an offscreen canvas.
+    const full    = new OffscreenCanvas(cw, ch)
+    const fullCtx = full.getContext('2d')!
+    const savedCurrentLayer = Node.currentLayer
+    Node.currentLayer = null
+    renderTop.renderStack(fullCtx as unknown as CanvasRenderingContext2D)
+    Node.currentLayer = savedCurrentLayer
+
+    // Crop to the top-left viewport area (what the user sees at scale=1, pan=0)
+    // and blit into a preview-sized regular canvas so toDataURL is available.
+    const preview = document.createElement('canvas')
+    preview.width  = previewW
+    preview.height = previewH
+    preview.getContext('2d')!.drawImage(
+      full as unknown as CanvasImageSource,
+      0, 0, Math.min(vw, cw), Math.min(vh, ch),
+      0, 0, previewW, previewH,
+    )
+    return preview.toDataURL('image/jpeg', 0.75)
+  }
+
   private render(): void {
     if (this._stackTop === null) return
 
