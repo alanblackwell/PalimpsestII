@@ -467,10 +467,13 @@ export class StrokeLayer extends PathLayer {
 
   private _checkClosure(): void {
     const n = this._points.length
-    if (n < 3 || this._onClose === null) return
+    // Need ≥4 points so the closed path has ≥3 unique points after the duplicate is removed.
+    if (n < 4 || this._onClose === null) return
     const A = this._points[0]!, B = this._points[n - 1]!
     if (Math.hypot(B.x - A.x, B.y - A.y) < CLOSE_THRESHOLD) {
-      this._points[n - 1] = { ...A }   // snap to exact coincidence
+      // Remove the duplicate endpoint; closed samplePath wraps P[n-1]→P[0] as
+      // phantom neighbours, giving a smooth C1 join at the seam automatically.
+      this._points.pop()
       this._onClose(this)
     }
   }
