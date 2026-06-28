@@ -319,6 +319,21 @@ export abstract class Layer extends Node {
     return null
   }
 
+  // Return the SuspendedBound slot whose pause icon (⏸) was clicked, or null.
+  // The pause icon is drawn at the left end of the value box (LABEL_W px into
+  // the slot row); this exposes a ~20 px hit zone over it.
+  hitTestSlotResume(point: Point): ParameterSlot | null {
+    const LABEL_W = 78   // must match renderSlotGroup
+    const PAUSE_W = 20
+    for (const [slot, b] of this._slotBounds) {
+      if (slot.state !== SlotState.SuspendedBound) continue
+      const px = b.x + LABEL_W + 4
+      if (point.x >= px && point.x <= px + PAUSE_W &&
+          point.y >= b.y && point.y <= b.y + b.height) return slot
+    }
+    return null
+  }
+
   // Return the first unbound slot of the given type, or null.
   findEmptySlot(type: ValueType): ParameterSlot | null {
     for (const slot of this.slots) {

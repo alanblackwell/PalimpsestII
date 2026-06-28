@@ -323,6 +323,18 @@ export class InteractionSystem {
     this._createBindingMap = fn
   }
 
+  // Handle a tap/click on a slot row. If the slot is suspended and the click
+  // landed on the pause icon, resume it; otherwise delegate to _onSlotClick.
+  private _handleSlotTap(layer: Layer, slot: ParameterSlot, point: Point): void {
+    if (slot.state === SlotState.SuspendedBound && layer.hitTestSlotResume(point) === slot) {
+      slot.resume()
+      this._refreshCallback?.()
+      Node.scheduleFrame?.()
+      return
+    }
+    this._onSlotClick?.(layer, slot)
+  }
+
   // Remove all event listeners.  Call when the canvas is torn down.
   destroy(): void {
     this._closeInspector()
@@ -546,7 +558,7 @@ export class InteractionSystem {
         const sel = this._widget?.selected ?? null
         if (sel !== null) {
           const slot = sel.hitTestSlot(testPt)
-          if (slot !== null) this._onSlotClick?.(sel, slot)
+          if (slot !== null) this._handleSlotTap(sel, slot, testPt)
         }
         return
       }
@@ -762,7 +774,7 @@ export class InteractionSystem {
     if (selected !== null) {
       const slot = selected.hitTestSlot(testPt)
       if (slot !== null) {
-        this._onSlotClick?.(selected, slot)
+        this._handleSlotTap(selected, slot, testPt)
         return null
       }
     }
@@ -885,7 +897,7 @@ export class InteractionSystem {
             const sel = this._widget?.selected ?? null
             if (sel !== null) {
               const slot = sel.hitTestSlot(point)
-              if (slot !== null) this._onSlotClick?.(sel, slot)
+              if (slot !== null) this._handleSlotTap(sel, slot, point)
             }
           }
         } else {
