@@ -117,7 +117,7 @@ export class AnimationPathLayer extends Layer implements PointSource {
 
   constructor(points?: Point[]) {
     super()
-    this._posSlot = new ParameterSlot(ValueType.Amount, this)
+    this._posSlot = new ParameterSlot(ValueType.Amount, this, 'position')
     this._points  = points ?? ellipsePath(500, 300, 130, 85)
     this._currentPoint = samplePath(this._points, 0)
     this.slots.push(this._posSlot)

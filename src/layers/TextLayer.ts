@@ -236,7 +236,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._manualPosition = this._randomPosition()
     this._positionSlot = new ParameterSlot(ValueType.Point,     this)
     this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
-    this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this)
+    this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this, 'scale')
     this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
     this._rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
     this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')

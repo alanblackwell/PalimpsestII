@@ -68,7 +68,7 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
     super()
     this._rateHz     = Math.max(MIN_RATE, Math.min(MAX_RATE, initialRateHz))
     const sliderInit = hzToSlider(this._rateHz)
-    this._timeSlot   = new ParameterSlot(ValueType.Amount, this)
+    this._timeSlot   = new ParameterSlot(ValueType.Amount, this, 'time')
     this._rateSlider = new SliderRegion(this, sliderInit)
     this.slots.push(this._timeSlot)
     this.debugName = 'RateLayer'

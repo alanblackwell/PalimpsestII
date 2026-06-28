@@ -123,7 +123,7 @@ export class SequencerLayer extends Layer implements PointSource, AmountSource {
     super()
     this._canvasW   = canvasWidth
     this._canvasH   = canvasHeight
-    this._rateSlot  = new ParameterSlot(ValueType.Amount, this)
+    this._rateSlot  = new ParameterSlot(ValueType.Amount, this, 'rate')
     this._eventSlot = new ParameterSlot(ValueType.Event,  this)
     this.slots.push(this._rateSlot, this._eventSlot)
     this.displayBaseName = 'Sequence'

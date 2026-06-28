@@ -91,8 +91,8 @@ export class MathLayer extends Layer implements AmountSource {
   constructor(opIndex = 2) {
     super()
     this._opIndex = Math.max(0, Math.min(OPS.length - 1, opIndex))
-    this._slotA   = new ParameterSlot(ValueType.Amount, this)
-    this._slotB   = new ParameterSlot(ValueType.Amount, this)
+    this._slotA   = new ParameterSlot(ValueType.Amount, this, 'a')
+    this._slotB   = new ParameterSlot(ValueType.Amount, this, 'b')
     this.slots.push(this._slotA, this._slotB)
     this.displayBaseName = 'Calculate'
     this.debugName = 'Calculate'

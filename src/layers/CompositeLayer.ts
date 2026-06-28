@@ -132,7 +132,7 @@ export class CompositeLayer extends Layer implements ImageSource {
     this._leftSlot    = new ParameterSlot(ValueType.Image,  this)
     this._rightSlot   = new ParameterSlot(ValueType.Image,  this)
     this._maskSlot    = new ParameterSlot(ValueType.Mask,   this)
-    this._opacitySlot = new ParameterSlot(ValueType.Amount, this)
+    this._opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
     this._slider      = new SliderRegion(this, this._amount)
     this.slots.push(this._leftSlot, this._rightSlot, this._maskSlot, this._opacitySlot)
     this._slider.setOnDragStart(() => this._suspendAmountSlot())

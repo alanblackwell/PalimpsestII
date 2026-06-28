@@ -122,7 +122,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
     this._magnitude      = Math.max(0, Math.min(1, magnitude))
     this._positionSlot     = new ParameterSlot(ValueType.Point,  this, 'position')
     this._handleSlot       = new ParameterSlot(ValueType.Point,  this, 'handle')
-    this._magnitudeSlot    = new ParameterSlot(ValueType.Amount, this)
+    this._magnitudeSlot    = new ParameterSlot(ValueType.Amount, this, 'magnitude')
     this._rotateToggleSlot = new ParameterSlot(ValueType.Event,  this, 'rotate')
     this._speedSlot        = new ParameterSlot(ValueType.Amount, this, 'speed')
     this._cwSlot           = new ParameterSlot(ValueType.Event,  this, 'clockwise')
