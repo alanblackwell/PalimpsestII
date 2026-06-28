@@ -2,14 +2,16 @@ import { Layer }        from '../core/Layer.js'
 import { Node }         from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   type Amount, type AmountSource,
   type Point,  type PointSource,
   type EventValue, type EventSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
-import { contentLeft } from '../interaction/layout.js'
+import { BindingLayer } from './BindingLayer.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // AnimPathLayer — samples a shape layer's perimeter at a given phase
@@ -32,6 +34,7 @@ const DOT_R   = 3
 const SLOT_H   = 30
 const SLOT_GAP = 4
 const LABEL_W  = 78
+const BTN_SZ   = SLOT_H - 6   // square toggle-button size
 
 // Bottom convenience button — "Amount": creates an AmountLayer below and
 // binds AnimPath's Point output to its y-position slot.
@@ -46,12 +49,17 @@ export class AnimPathLayer extends Layer implements PointSource {
   readonly shapeSlot:   ParameterSlot
   readonly phaseSlot:   ParameterSlot
   readonly runModeSlot: ParameterSlot
+  readonly cwSlot:      ParameterSlot
 
   private _phase:         number = 0
+  private _phaseOffset:   number = 0   // keeps effectiveT continuous across direction flips
   private _currentPoint:  Point
   private _running        = true
+  private _clockwise      = true
   private _lastEventTime: EventValue = null
+  private _lastCwTime:    EventValue = null
   private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
+  private _cwBounds:      { x: number; y: number; width: number; height: number } | null = null
 
   // Set by main.ts after insertion (and after load) — invoked when the
   // bottom "Amount" convenience button is pressed.
@@ -66,7 +74,8 @@ export class AnimPathLayer extends Layer implements PointSource {
     this.shapeSlot   = new ParameterSlot(ValueType.Point,  this, 'shape')
     this.phaseSlot   = new ParameterSlot(ValueType.Amount, this, 'phase')
     this.runModeSlot = new ParameterSlot(ValueType.Event,  this, 'run mode')
-    this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot)
+    this.cwSlot      = new ParameterSlot(ValueType.Event,  this, 'clockwise')
+    this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot, this.cwSlot)
 
     graph.register(this)
   }
@@ -107,16 +116,20 @@ export class AnimPathLayer extends Layer implements PointSource {
   override serializeState(): Record<string, unknown> {
     return {
       phase:          this._phase,
+      phaseOffset:    this._phaseOffset,
       currentPoint:   this._currentPoint,
       running:        this._running,
+      clockwise:      this._clockwise,
       lastEventTime:  this._lastEventTime,
       addAmountDone:  this._addAmountDone,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
-    if (typeof state.phase === 'number')    this._phase   = state.phase
-    if (typeof state.running === 'boolean') this._running = state.running
+    if (typeof state.phase === 'number')        this._phase       = state.phase
+    if (typeof state.phaseOffset === 'number')  this._phaseOffset = state.phaseOffset
+    if (typeof state.running === 'boolean')     this._running     = state.running
+    if (typeof state.clockwise === 'boolean')   this._clockwise   = state.clockwise
     if (state.currentPoint && typeof state.currentPoint === 'object') {
       this._currentPoint = state.currentPoint as Point
     }
@@ -140,6 +153,15 @@ export class AnimPathLayer extends Layer implements PointSource {
       }
     }
 
+    // Flip CW/CCW on each new event pulse.
+    if (this.cwSlot.isActive) {
+      const t = (this.cwSlot.source as EventSource).getEventTime()
+      if (t !== null && t !== this._lastCwTime) {
+        this._lastCwTime = t
+        this._flipDirection()
+      }
+    }
+
     // Only advance the phase when running.
     if (this._running && this.phaseSlot.isActive) {
       this._phase = (this.phaseSlot.source as AmountSource).getAmount() as Amount
@@ -148,11 +170,29 @@ export class AnimPathLayer extends Layer implements PointSource {
     if (this.shapeSlot.isActive) {
       const src = this.shapeSlot.source as Record<string, unknown>
       if (typeof src['samplePerimeter'] === 'function') {
-        this._currentPoint = (src['samplePerimeter'] as (t: number) => Point)(this._phase)
+        this._currentPoint = (src['samplePerimeter'] as (t: number) => Point)(this._effectiveT())
       } else {
         this._currentPoint = (this.shapeSlot.source as PointSource).getPoint()
       }
     }
+  }
+
+  // Effective perimeter parameter [0,1] accounting for direction and offset.
+  private _effectiveT(): number {
+    const raw = this._clockwise
+      ? this._phase + this._phaseOffset
+      : this._phaseOffset - this._phase
+    return ((raw % 1) + 1) % 1
+  }
+
+  // Flip direction while keeping the current perimeter position unchanged.
+  private _flipDirection(): void {
+    const prevT = this._effectiveT()
+    this._clockwise = !this._clockwise
+    // Solve for new offset: frac(±_phase + offset_new) = prevT
+    this._phaseOffset = this._clockwise
+      ? ((prevT - this._phase) % 1 + 1) % 1
+      : ((prevT + this._phase) % 1 + 1) % 1
   }
 
   // ----------------------------------------------------------
@@ -184,34 +224,70 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._drawPill(ctx, this.canvasBounds)
   }
 
-  // Draw radio checkbox overlay on the runModeSlot row.
+  // Draw radio checkbox overlay on the runModeSlot row, and CW/CCW button on cwSlot row.
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)
 
-    const idx = this.slots.indexOf(this.runModeSlot)
-    if (idx < 0) return
-
     const PANEL_X = contentLeft(Node.canvasWidth)
-    const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
-    const midY = y + SLOT_H / 2
-    const cbx  = PANEL_X + LABEL_W - 14
-    const cbr  = 5
+    const PANEL_W = panelWidth(Node.canvasWidth)
 
-    this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+    // Run-mode radio checkbox
+    const runIdx = this.slots.indexOf(this.runModeSlot)
+    if (runIdx >= 0) {
+      const y    = this.panelBottom + runIdx * (SLOT_H + SLOT_GAP)
+      const midY = y + SLOT_H / 2
+      const cbx  = PANEL_X + LABEL_W - 14
+      const cbr  = 5
 
-    ctx.save()
-    ctx.strokeStyle = 'rgba(255,255,255,0.70)'
-    ctx.lineWidth   = 1.5
-    ctx.beginPath()
-    ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
-    ctx.stroke()
-    if (this._running) {
-      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+      ctx.lineWidth   = 1.5
       ctx.beginPath()
-      ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
-      ctx.fill()
+      ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
+      ctx.stroke()
+      if (this._running) {
+        ctx.fillStyle = 'rgba(255,255,255,0.85)'
+        ctx.beginPath()
+        ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.restore()
     }
-    ctx.restore()
+
+    // CW/CCW toggle button on the cwSlot row
+    const cwIdx = this.slots.indexOf(this.cwSlot)
+    if (cwIdx >= 0) {
+      const y    = this.panelBottom + cwIdx * (SLOT_H + SLOT_GAP)
+      const midY = y + SLOT_H / 2
+      const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
+      const btnY = y + 3
+      const state   = this.cwSlot.state
+      const bound   = state === SlotState.Bound
+      const susp    = state === SlotState.SuspendedBound
+
+      this._cwBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+
+      ctx.save()
+      ctx.fillStyle = bound ? ACCENT + '33' : susp ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
+      ctx.beginPath()
+      ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
+      ctx.fill()
+
+      ctx.strokeStyle = bound ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
+      ctx.lineWidth = 1
+      if (susp) ctx.setLineDash([2, 2])
+      ctx.beginPath()
+      ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      ctx.fillStyle = ACCENT
+      drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
+        btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
+      ctx.restore()
+    }
   }
 
   // ----------------------------------------------------------
@@ -222,10 +298,16 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._addBtnHitTest(point)) return this
-    if (this._toggleBounds === null) return null
-    const b = this._toggleBounds
-    if (point.x >= b.x && point.x <= b.x + b.width &&
-        point.y >= b.y && point.y <= b.y + b.height) return this
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return this
+    }
+    if (this._cwBounds !== null) {
+      const b = this._cwBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return this
+    }
     return null
   }
 
@@ -235,13 +317,24 @@ export class AnimPathLayer extends Layer implements PointSource {
       this._addAmountDone = true
       return true
     }
-    if (this._toggleBounds === null) return false
-    const b = this._toggleBounds
-    if (point.x >= b.x && point.x <= b.x + b.width &&
-        point.y >= b.y && point.y <= b.y + b.height) {
-      this._running = !this._running
-      this.markDirty()
-      return true
+    if (this._toggleBounds !== null) {
+      const b = this._toggleBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) {
+        this._running = !this._running
+        this.markDirty()
+        return true
+      }
+    }
+    if (this._cwBounds !== null) {
+      const b = this._cwBounds
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) {
+        if (this.cwSlot.state === SlotState.Bound) this.cwSlot.suspend()
+        this._flipDirection()
+        this.markDirty()
+        return true
+      }
     }
     return false
   }
@@ -325,11 +418,16 @@ export class AnimPathLayer extends Layer implements PointSource {
     ctx.textAlign    = 'left'
     ctx.fillText('AnimPath', x + 12, midY)
 
+    // CW/CCW indicator icon
+    ctx.fillStyle = ACCENT
+    drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
+      x + width - 30, midY, 13)
+
     const px = Math.round(this._currentPoint.x)
     const py = Math.round(this._currentPoint.y)
     ctx.fillStyle = 'rgba(255,255,255,0.45)'
     ctx.textAlign = 'right'
-    ctx.fillText(`(${px}, ${py})`, x + width - 8, midY)
+    ctx.fillText(`(${px}, ${py})`, x + width - 44, midY)
 
     ctx.restore()
   }

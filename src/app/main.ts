@@ -1161,7 +1161,6 @@ canvas.addEventListener('dragover', (e) => {
     }
     if (fileDragGhost === null) {
       fileDragGhost = isVideoDrag(e) ? new VideoLayer() : new ImageLayer()
-      Layer.assignDebugName(fileDragGhost)
       fileDragGhost.bounds = { ...menuLayer.bounds }
       widget.beginExternalDrag(fileDragGhost, pt)
     } else {
@@ -1205,6 +1204,7 @@ canvas.addEventListener('drop', (e) => {
     const ghost = fileDragGhost
     fileDragGhost = null
     if (file) {
+      Layer.assignDebugName(ghost)
       widget.commitExternalDrag()
       ghost.loadFile(file)
       if (ghost instanceof ImageLayer) wireImageLayer(ghost)
@@ -1300,7 +1300,6 @@ canvas.addEventListener('dragover', (e) => {
     if (selected instanceof TextLayer) selected.setExternalDragHover(false)
     if (textDragGhost === null) {
       textDragGhost = new TextLayer()
-      Layer.assignDebugName(textDragGhost)
       textDragGhost.bounds = { ...menuLayer.bounds }
       widget.beginExternalDrag(textDragGhost, pt)
     } else {
@@ -1345,6 +1344,7 @@ canvas.addEventListener('drop', (e) => {
     const ghost = textDragGhost
     textDragGhost = null
     if (text) {
+      Layer.assignDebugName(ghost)
       widget.commitExternalDrag()
       ghost.pasteTextAtCursor(text)
       postInsertLayer(ghost)
