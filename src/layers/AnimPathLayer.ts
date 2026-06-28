@@ -56,6 +56,8 @@ export class AnimPathLayer extends Layer implements PointSource {
   // Set by main.ts after insertion (and after load) — invoked when the
   // bottom "Amount" convenience button is pressed.
   private _onAddAmount: (() => void) | null = null
+  // Once the button has been used once the button is hidden permanently.
+  private _addAmountDone = false
 
   constructor(cx: number, cy: number) {
     super()
@@ -104,15 +106,16 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      phase:         this._phase,
-      currentPoint:  this._currentPoint,
-      running:       this._running,
-      lastEventTime: this._lastEventTime,
+      phase:          this._phase,
+      currentPoint:   this._currentPoint,
+      running:        this._running,
+      lastEventTime:  this._lastEventTime,
+      addAmountDone:  this._addAmountDone,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
-    if (typeof state.phase === 'number')   this._phase   = state.phase
+    if (typeof state.phase === 'number')    this._phase   = state.phase
     if (typeof state.running === 'boolean') this._running = state.running
     if (state.currentPoint && typeof state.currentPoint === 'object') {
       this._currentPoint = state.currentPoint as Point
@@ -120,6 +123,7 @@ export class AnimPathLayer extends Layer implements PointSource {
     if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
       this._lastEventTime = state.lastEventTime as EventValue
     }
+    if (typeof state.addAmountDone === 'boolean') this._addAmountDone = state.addAmountDone
   }
 
   // ----------------------------------------------------------
@@ -228,6 +232,7 @@ export class AnimPathLayer extends Layer implements PointSource {
   handlePointerDown(point: Point): boolean {
     if (this._addBtnHitTest(point)) {
       this._onAddAmount?.()
+      this._addAmountDone = true
       return true
     }
     if (this._toggleBounds === null) return false
@@ -260,12 +265,14 @@ export class AnimPathLayer extends Layer implements PointSource {
   }
 
   private _addBtnHitTest(point: Point): boolean {
+    if (this._addAmountDone) return false
     const { x, y } = this._addBtnRect()
     return point.x >= x && point.x <= x + ADD_BTN_W &&
            point.y >= y && point.y <= y + ADD_BTN_H
   }
 
   private _renderAddButton(ctx: Ctx2D): void {
+    if (this._addAmountDone) return
     const { x, y } = this._addBtnRect()
     const midY = y + ADD_BTN_H / 2
 
