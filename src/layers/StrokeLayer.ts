@@ -17,6 +17,7 @@ import { AngleSnapper }  from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { animateButtonHitTest, renderAnimateButton } from './AnimateButton.js'
 
 // ------------------------------------------------------------
 // StrokeLayer — freehand stroke fitted to cubic Bézier curves
@@ -148,6 +149,10 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // Draw-button bounds (written during renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BBox | null = null
 
+  // Animate convenience button
+  private _addAnimateDone = false
+  private _onAddAnimate: (() => void) | null = null
+
   constructor(colour?: Colour) {
     super()
     if (colour !== undefined) this._colour = colour
@@ -167,6 +172,8 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
     graph.register(this)
   }
+
+  setOnAddAnimate(fn: () => void): void { this._onAddAnimate = fn }
 
   // ----------------------------------------------------------
   // Source interfaces
@@ -242,17 +249,18 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
 
   override serializeState(): Record<string, unknown> {
     return {
-      localSegs:   this._localSegs,
-      cx:          this._cx,
-      cy:          this._cy,
-      scale:       this._scale,
-      rotation:    this._rotation,
-      strokeWidth: this._strokeWidth,
-      colour:      this._colour,
-      hasStroke:   this._hasStroke,
-      drawMode:    this._drawMode,
-      localHalfW:  this._localHalfW,
-      localHalfH:  this._localHalfH,
+      localSegs:      this._localSegs,
+      cx:             this._cx,
+      cy:             this._cy,
+      scale:          this._scale,
+      rotation:       this._rotation,
+      strokeWidth:    this._strokeWidth,
+      colour:         this._colour,
+      hasStroke:      this._hasStroke,
+      drawMode:       this._drawMode,
+      localHalfW:     this._localHalfW,
+      localHalfH:     this._localHalfH,
+      addAnimateDone: this._addAnimateDone,
     }
   }
 
@@ -268,6 +276,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     if (typeof state.drawMode === 'boolean')   this._drawMode    = state.drawMode
     if (typeof state.localHalfW === 'number')  this._localHalfW  = state.localHalfW
     if (typeof state.localHalfH === 'number')  this._localHalfH  = state.localHalfH
+    if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
 
     this._computedCx       = this._cx
     this._computedCy       = this._cy
@@ -526,6 +535,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
       this._renderHandles(ctx)
     }
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    renderAnimateButton(ctx, this._addAnimateDone)
   }
 
   override renderSlots(ctx: Ctx2D): void {
@@ -657,6 +667,7 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   protected override hitTestSelf(point: Point): this | null {
     if (this._drawMode) return this
     if (this._drag !== null) return this
+    if (animateButtonHitTest(point, this._addAnimateDone)) return this
     // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
@@ -672,6 +683,12 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (animateButtonHitTest(point, this._addAnimateDone)) {
+      this._addAnimateDone = true
+      this._onAddAnimate?.()
+      return true
+    }
+
     // Draw mode captures all points for painting; exits via button re-click
     if (this._drawMode) {
       this._rawPoints = [{ ...point }]

@@ -16,6 +16,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapCoord, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { animateButtonHitTest, renderAnimateButton } from './AnimateButton.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -143,6 +144,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _edgeSnapX: number | null = null  // x of vertical guide line
   protected _edgeSnapY: number | null = null  // y of horizontal guide line
 
+  // Animate convenience button — set false in Clip<Shape> subclasses to suppress
+  protected _showAnimateButton = true
+  protected _addAnimateDone = false
+  protected _onAddAnimate: (() => void) | null = null
+
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
     this._cx     = cx
@@ -181,6 +187,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   /** Return canvas coordinate at t ∈ [0, 1) on the shape's perimeter. */
   abstract samplePerimeter(t: number): Point
+
+  setOnAddAnimate(fn: () => void): void { this._onAddAnimate = fn }
 
   getPoint(): Point { return { x: this._cx, y: this._cy } }
 
@@ -263,6 +271,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       cx: this._cx, cy: this._cy, width: this._width, height: this._height,
       angle: this._angle, colour: this._colour, opacity: this._opacity,
       filled: this._filled, strokeWidth: this._strokeWidth, scale: this._scale,
+      addAnimateDone: this._addAnimateDone,
     }
   }
 
@@ -277,6 +286,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.filled === 'boolean')     this._filled = state.filled
     if (typeof state.strokeWidth === 'number') this._strokeWidth = state.strokeWidth
     if (typeof state.scale === 'number')       this._scale = state.scale
+    if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
   }
 
   private _updateOffscreens(): void {
@@ -319,6 +329,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    if (this._showAnimateButton) renderAnimateButton(ctx, this._addAnimateDone)
   }
 
   // fillModeSlot, strokeWidthSlot, and scaleSlot are pulled out of the
@@ -601,6 +612,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._showAnimateButton && animateButtonHitTest(point, this._addAnimateDone)) return this
     // Shape handles take priority over pill controls
     const r2 = HIT_R * HIT_R
     for (const h of this._handlePositions()) {
@@ -624,6 +636,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (this._showAnimateButton && animateButtonHitTest(point, this._addAnimateDone)) {
+      this._addAnimateDone = true
+      this._onAddAnimate?.()
+      return true
+    }
     // Shape handles take priority over pill controls so a handle rendered on top wins
     const handles = this._handlePositions()
     let best = -1, bestD2 = HIT_R * HIT_R

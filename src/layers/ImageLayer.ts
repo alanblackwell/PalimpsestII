@@ -16,6 +16,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon } from '../ui/icons.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -61,6 +62,12 @@ const ROT_SNAP_THRESHOLD = Math.PI / 12
 const ROT_SNAP_DWELL_MS  = 700
 const ROT_SNAP_COL = '#7ecfcf'
 
+// Bottom convenience buttons — "Clip" and "Filter"
+const CONV_BTN_H   = 30
+const CONV_BTN_W   = 60
+const CONV_BTN_GAP = 14   // gap from bottom edge of viewport
+const CONV_BTN_SEP = 8    // gap between the two buttons
+
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
   | { type: 'scale';  startDist: number; startScale: number; center: Point }
@@ -100,6 +107,12 @@ export class ImageLayer extends Layer implements ImageSource {
   private _edgeSnapX: number | null = null
   private _edgeSnapY: number | null = null
 
+  // Bottom convenience buttons — set by main.ts after insertion/load
+  private _onAddClip:    (() => void) | null = null
+  private _onAddFilter:  (() => void) | null = null
+  private _addClipDone   = false
+  private _addFilterDone = false
+
   // Resolved values (updated in recompute)
   private _position: Point  = { x: Node.viewportWidth / 2, y: Node.viewportHeight / 2 }
   private _opacity:  number = 1.0
@@ -115,6 +128,9 @@ export class ImageLayer extends Layer implements ImageSource {
     this.debugName = 'ImageLayer'
     graph.register(this)
   }
+
+  setOnAddClip(fn: () => void):   void { this._onAddClip   = fn }
+  setOnAddFilter(fn: () => void): void { this._onAddFilter = fn }
 
   // ----------------------------------------------------------
   // ImageSource
@@ -264,6 +280,8 @@ export class ImageLayer extends Layer implements ImageSource {
       rotation:       this._rotation,
       manualPosition: this._manualPosition,
       manualScale:    this._manualScale,
+      addClipDone:    this._addClipDone,
+      addFilterDone:  this._addFilterDone,
     }
   }
 
@@ -276,6 +294,8 @@ export class ImageLayer extends Layer implements ImageSource {
     if (state.manualPosition && typeof state.manualPosition === 'object') {
       this._manualPosition = state.manualPosition as Point
     }
+    if (typeof state.addClipDone   === 'boolean') this._addClipDone   = state.addClipDone
+    if (typeof state.addFilterDone === 'boolean') this._addFilterDone = state.addFilterDone
     if (typeof state.manualScale === 'number') this._manualScale = state.manualScale
   }
 
@@ -284,6 +304,17 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    // Convenience buttons take priority over handles
+    if (this._convBtnHitTest(point, 'clip')) {
+      this._onAddClip?.()
+      return true
+    }
+    if (this._convBtnHitTest(point, 'filter')) {
+      this._addFilterDone = true
+      this._onAddFilter?.()
+      return true
+    }
+
     const hp = this._handlePos()
 
     // Rotate handle — suspends rotationSlot binding (if any) and takes manual control
@@ -409,6 +440,9 @@ export class ImageLayer extends Layer implements ImageSource {
   protected override hitTestSelf(point: { x: number; y: number }) {
     // Capture all events while dragging
     if (this._drag !== null) return this
+    // Convenience buttons (drawn over canvas, not clipped)
+    if (this._convBtnHitTest(point, 'clip'))   return this
+    if (this._convBtnHitTest(point, 'filter')) return this
     // Transform handles take priority over the panel pill
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
@@ -434,6 +468,8 @@ export class ImageLayer extends Layer implements ImageSource {
   override renderOverlay(ctx: Ctx2D): void {
     this._renderHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    this._renderConvBtn(ctx, 'clip')
+    this._renderConvBtn(ctx, 'filter')
   }
 
   // ── Stack panel ─────────────────────────────────────────────
@@ -687,5 +723,57 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.fill()
     ctx.fillStyle = colour
     drawIcon(ctx, 'folder-open', b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
+  }
+
+  // ----------------------------------------------------------
+  // Bottom convenience buttons — Clip / Filter
+  // ----------------------------------------------------------
+
+  private _convBtnRect(which: 'clip' | 'filter'): { x: number; y: number } {
+    const left  = contentLeft(Node.canvasWidth)
+    const total = CONV_BTN_W * 2 + CONV_BTN_SEP
+    const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+    const y = Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP
+    return { x: which === 'clip' ? startX : startX + CONV_BTN_W + CONV_BTN_SEP, y }
+  }
+
+  private _convBtnHitTest(point: Point, which: 'clip' | 'filter'): boolean {
+    if (which === 'clip'   && this._addClipDone)   return false
+    if (which === 'filter' && this._addFilterDone) return false
+    const { x, y } = this._convBtnRect(which)
+    return point.x >= x && point.x <= x + CONV_BTN_W &&
+           point.y >= y && point.y <= y + CONV_BTN_H
+  }
+
+  private _renderConvBtn(ctx: Ctx2D, which: 'clip' | 'filter'): void {
+    if (which === 'clip'   && this._addClipDone)   return
+    if (which === 'filter' && this._addFilterDone) return
+    const { x, y } = this._convBtnRect(which)
+    const midY = y + CONV_BTN_H / 2
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, CONV_BTN_W, CONV_BTN_H, 5)
+    ctx.fill()
+
+    ctx.fillStyle = ACCENT + 'cc'
+    ctx.beginPath()
+    ctx.roundRect(x, y, 3, CONV_BTN_H, [5, 0, 0, 5])
+    ctx.fill()
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, y, CONV_BTN_W, CONV_BTN_H)
+    ctx.clip()
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(which === 'clip' ? 'Clip' : 'Filter', x + 10, midY)
+    ctx.restore()
+
+    ctx.restore()
   }
 }

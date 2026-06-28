@@ -46,6 +46,7 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
     this.slots.push(this.imageSlot, this.maskSlot)
 
     this.debugName = 'ClipPath'
+    this._showAnimateButton = false
   }
 
   // Link a hidden Mask helper whose content should track this shape's

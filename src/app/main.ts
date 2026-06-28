@@ -36,6 +36,8 @@ import { PathLayer }         from '../layers/PathLayer.js'
 import { TextLayer }         from '../layers/TextLayer.js'
 import { ClipLayer, isClippableImageLayer } from '../layers/ClipLayer.js'
 import type { ClipShapeLayer } from '../layers/ClipLayer.js'
+import { FilterLayer }       from '../layers/FilterLayer.js'
+import { ShapeLayer }        from '../layers/ShapeLayer.js'
 import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
 import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
@@ -119,6 +121,16 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof ClipLayer) {
     wireClipLayer(newLayer)
+  }
+  if (newLayer instanceof ImageLayer) {
+    wireImageLayer(newLayer)
+  }
+  if ((newLayer instanceof ShapeLayer &&
+       !(newLayer instanceof ClipRectLayer) &&
+       !(newLayer instanceof ClipEllipseLayer) &&
+       !(newLayer instanceof ClipPathLayer)) ||
+      newLayer instanceof StrokeLayer) {
+    wireAnimatableShape(newLayer)
   }
   applyDefaultBindings(newLayer)
 
@@ -221,6 +233,47 @@ function wireAnimPathLayer(animPath: AnimPathLayer): void {
     BindingLayer.create(animPath, amount.ySlot)
     postInsertLayer(amount)
     refreshStack()   // no arg → current selection (animPath) unchanged
+  })
+}
+
+// Wire an ImageLayer's "Clip" and "Filter" convenience buttons. Pressing
+// either inserts the new layer above the image, binds the image as its
+// source, then sends the image to BackgroundLayer.
+function wireImageLayer(layer: ImageLayer): void {
+  layer.setOnAddClip(() => {
+    const clip = new ClipLayer()
+    Layer.assignDebugName(clip)
+    clip.bounds = { x: X, y: 24, width: W, height: 36 }
+    clip.insertAbove(layer)
+    BindingLayer.create(layer, clip.imageSlot)
+    backgroundLayer.add(layer)
+    postInsertLayer(clip)
+    refreshStack(clip)
+  })
+  layer.setOnAddFilter(() => {
+    const filter = new FilterLayer()
+    Layer.assignDebugName(filter)
+    filter.bounds = { x: X, y: 24, width: W, height: 36 }
+    filter.insertAbove(layer)
+    BindingLayer.create(layer, filter.sourceSlot)
+    backgroundLayer.add(layer)
+    postInsertLayer(filter)
+    refreshStack(filter)
+  })
+}
+
+// Wire a shape or stroke layer's "Animate" convenience button. Pressing it
+// inserts an AnimPathLayer above the shape, binds the shape as its perimeter
+// source, and selects the new layer. The shape stays in the stack.
+function wireAnimatableShape(layer: ShapeLayer | StrokeLayer): void {
+  layer.setOnAddAnimate(() => {
+    const animPath = new AnimPathLayer(Node.canvasWidth / 2, Node.canvasHeight / 2)
+    Layer.assignDebugName(animPath)
+    animPath.bounds = { x: X, y: 24, width: W, height: 36 }
+    animPath.insertAbove(layer)
+    BindingLayer.create(layer, animPath.shapeSlot)
+    postInsertLayer(animPath)
+    refreshStack(animPath)
   })
 }
 
@@ -543,16 +596,23 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     l instanceof ClipRectLayer || l instanceof ClipEllipseLayer ||
     l instanceof ClipPathLayer || l instanceof ClipDrawingLayer
 
+  const isAnimatableShape = (l: Layer): l is ShapeLayer | StrokeLayer =>
+    (l instanceof ShapeLayer && !isClipShapeMovable(l)) || l instanceof StrokeLayer
+
   let scanL: Layer | null = root
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
     if (scanL instanceof AnimPathLayer)   wireAnimPathLayer(scanL)
+    if (scanL instanceof ImageLayer)      wireImageLayer(scanL)
+    if (isAnimatableShape(scanL))         wireAnimatableShape(scanL)
     if (isClipShapeMovable(scanL))        wireClipShapeLayer(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
+    if (archived instanceof ImageLayer)      wireImageLayer(archived)
+    if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (isClipShapeMovable(archived))        wireClipShapeLayer(archived)
   }
   widget.setVisible(true)
@@ -1017,6 +1077,10 @@ refreshStack(startupLayer)
 // image files) or VideoLayer (for video files)
 // ------------------------------------------------------------------
 //
+// Multi-file drops: one ImageLayer is created per image file. The first
+// file follows the normal placement rules; subsequent image files are
+// inserted below it in the stack, in drop order.
+//
 // Placement rules:
 //   • Dragged over the LayerStackWidget → a placeholder card opens a gap
 //     at the pointer position and follows it, exactly like reordering an
@@ -1033,6 +1097,28 @@ refreshStack(startupLayer)
 // Placeholder layer for a drag currently hovering the stack widget — not
 // yet linked into the live stack (outsideStack) until the drop commits.
 let fileDragGhost: ImageLayer | VideoLayer | null = null
+
+// Insert image files from `files` starting at `startIndex` below `prevLayer`,
+// each below the previous, in drop order.
+function insertAdditionalImageFiles(
+  files: FileList | null | undefined,
+  prevLayer: Layer,
+  startIndex: number,
+): void {
+  if (!files) return
+  let prev = prevLayer
+  for (let i = startIndex; i < files.length; i++) {
+    const f = files[i]
+    if (!f || !f.type.startsWith('image/')) continue
+    const layer = new ImageLayer()
+    Layer.assignDebugName(layer)
+    layer.bounds = { ...menuLayer.bounds }
+    layer.insertAbove(prev.layerBelow ?? lowestAnchor())
+    layer.loadFile(f)
+    wireImageLayer(layer)
+    prev = layer
+  }
+}
 
 // During dragover, DataTransferItem.type carries the file's MIME type
 // (the File object itself is only available on drop).
@@ -1092,7 +1178,8 @@ canvas.addEventListener('drop', (e) => {
   e.preventDefault()
   Node.fileDragActive = false
 
-  const file = e.dataTransfer?.files[0]
+  const files = e.dataTransfer?.files
+  const file  = files?.[0]
 
   if (fileDragGhost !== null) {
     const ghost = fileDragGhost
@@ -1100,6 +1187,8 @@ canvas.addEventListener('drop', (e) => {
     if (file) {
       widget.commitExternalDrag()
       ghost.loadFile(file)
+      if (ghost instanceof ImageLayer) wireImageLayer(ghost)
+      insertAdditionalImageFiles(files, ghost, 1)
       refreshStack(ghost)
     } else {
       widget.cancelExternalDrag()
@@ -1149,6 +1238,11 @@ canvas.addEventListener('drop', (e) => {
   if (targetSlot !== null) {
     BindingLayer.create(newLayer, targetSlot)
   }
+
+  if (newLayer instanceof ImageLayer) wireImageLayer(newLayer)
+
+  // For multi-file drops, insert additional image files below the first layer.
+  insertAdditionalImageFiles(files, newLayer, 1)
 
   refreshStack(targetSlot !== null ? selected! : newLayer)
 })

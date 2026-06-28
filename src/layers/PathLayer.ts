@@ -15,6 +15,7 @@ import {
 import { BindingLayer } from './BindingLayer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { animateButtonHitTest, renderAnimateButton } from './AnimateButton.js'
 
 // ------------------------------------------------------------
 // PathLayer — a closed Catmull-Rom spline shape layer
@@ -368,6 +369,7 @@ export class PathLayer extends ShapeLayer {
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
     drawSnapGuides(ctx, this._pathEdgeSnapX, this._pathEdgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    renderAnimateButton(ctx, this._addAnimateDone)
   }
 
   // ----------------------------------------------------------
@@ -375,6 +377,7 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    if (animateButtonHitTest(point, this._addAnimateDone)) return this
     // Canvas-space handles take priority over pill controls.
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
@@ -397,6 +400,11 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerDown(point: Point): boolean {
+    if (animateButtonHitTest(point, this._addAnimateDone)) {
+      this._addAnimateDone = true
+      this._onAddAnimate?.()
+      return true
+    }
     // Canvas-space handles take priority over pill controls.
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()

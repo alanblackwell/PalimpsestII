@@ -42,6 +42,7 @@ export class ClipEllipseLayer extends EllipseLayer implements ImageSource {
     this.slots.push(this.imageSlot, this.maskSlot)
 
     this.debugName = 'ClipEllipse'
+    this._showAnimateButton = false
   }
 
   // Link a hidden Mask helper whose content should track this shape's
