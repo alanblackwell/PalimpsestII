@@ -754,6 +754,19 @@ export class StrokeLayer extends Layer implements PointSource, ImageSource, Mask
     return false
   }
 
+  startCenterDrag(point: Point): boolean {
+    if (this._drawMode) return false
+    this._suspendEndpointSlots()
+    this._drag = {
+      type:       'move',
+      startMouse: { ...point },
+      startCx:    this._cx,
+      startCy:    this._cy,
+    }
+    this.markDirty()
+    return true
+  }
+
   handlePointerMove(point: Point): void {
     if (this._strokeSliderDrag) {
       this._setStrokeWidthFromPointer(point.x)

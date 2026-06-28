@@ -530,6 +530,18 @@ export class PathLayer extends ShapeLayer {
     return true
   }
 
+  override startCenterDrag(point: Point): boolean {
+    if (this.positionSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.positionSlot)?.toggle()
+    }
+    this._specialDrag     = 'center'
+    this._dragStartPtr    = { ...point }
+    this._dragStartPts    = this._points.map(p => ({ ...p }))
+    this._dragStartCenter = this._centroid()
+    this.markDirty()
+    return true
+  }
+
   override handlePointerMove(point: Point): void {
     if (this._strokeSliderDrag) {
       this._setStrokeWidthFromPointer(point.x)

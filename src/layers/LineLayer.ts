@@ -115,6 +115,16 @@ export class LineLayer extends Layer implements ImageSource {
   private _edgeSnapX: number | null = null
   private _edgeSnapY: number | null = null
 
+  // Pivot-rotation drag initiated via pixel-pick (startCenterDrag).
+  // Active when one endpoint is slot-bound (the pivot) and the other is free.
+  private _pivotDrag: {
+    pivot: Point       // fixed endpoint in canvas space
+    grabAngle: number  // angle from pivot to the original click point
+    freeAngle: number  // angle from pivot to the free endpoint at drag start
+    freeDist:  number  // distance from pivot to the free endpoint
+    freeIsEnd: boolean // true: _end is free; false: _start is free
+  } | null = null
+
   // Button bounds written in renderPanel, read in hitTestSelf
   private _arrowStartBounds: BBox | null = null
   private _arrowEndBounds:   BBox | null = null
@@ -733,7 +743,7 @@ export class LineLayer extends Layer implements ImageSource {
   }
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._drag !== null || this._sliderDrag) return this
+    if (this._drag !== null || this._sliderDrag || this._pivotDrag !== null) return this
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
     if (this._arrowEndBounds   !== null && this._inBox(point, this._arrowEndBounds))   return this
     if (this._inBox(point, this._widthSliderRowBounds())) return this
@@ -825,9 +835,75 @@ export class LineLayer extends Layer implements ImageSource {
     return false
   }
 
+  startCenterDrag(point: Point): boolean {
+    // Direction slot always disabled — it would fight any positional movement.
+    if (this.directionSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.directionSlot)?.toggle()
+    }
+
+    const startActive = this.startSlot.isActive
+    const endActive   = this.endSlot.isActive
+
+    if (startActive && !endActive) {
+      // Start is slot-bound (fixed); rotate _end around the rendered start pivot.
+      const pivot = { ...this._renderedStart }
+      const freeDist = Math.hypot(this._end.x - pivot.x, this._end.y - pivot.y)
+      if (freeDist < 1) return false
+      this._pivotDrag = {
+        pivot,
+        grabAngle: Math.atan2(point.y - pivot.y, point.x - pivot.x),
+        freeAngle: Math.atan2(this._end.y - pivot.y, this._end.x - pivot.x),
+        freeDist,
+        freeIsEnd: true,
+      }
+      this.markDirty()
+      return true
+    }
+
+    if (endActive && !startActive) {
+      // End is slot-bound (fixed); rotate _start around the rendered end pivot.
+      const pivot = { ...this._renderedEnd }
+      const freeDist = Math.hypot(this._start.x - pivot.x, this._start.y - pivot.y)
+      if (freeDist < 1) return false
+      this._pivotDrag = {
+        pivot,
+        grabAngle: Math.atan2(point.y - pivot.y, point.x - pivot.x),
+        freeAngle: Math.atan2(this._start.y - pivot.y, this._start.x - pivot.x),
+        freeDist,
+        freeIsEnd: false,
+      }
+      this.markDirty()
+      return true
+    }
+
+    // Both bound or neither bound → translate the whole line.
+    // Suspend any individually-active endpoint slots first.
+    if (startActive) BindingLayer.findForSlot(this.startSlot)?.toggle()
+    if (endActive)   BindingLayer.findForSlot(this.endSlot)?.toggle()
+    this._drag           = 'start'
+    this._dragStartMouse = { ...point }
+    this._dragStartPt    = { ...this._start }
+    this._dragStartOtherPt = { ...this._end }
+    this.markDirty()
+    return true
+  }
+
   handlePointerMove(point: Point): void {
     if (this._sliderDrag) {
       this._setWidthFromPointer(point.x)
+      return
+    }
+    if (this._pivotDrag !== null) {
+      const pd = this._pivotDrag
+      const currentAngle = Math.atan2(point.y - pd.pivot.y, point.x - pd.pivot.x)
+      const newAngle = pd.freeAngle + (currentAngle - pd.grabAngle)
+      const newPt = {
+        x: pd.pivot.x + Math.cos(newAngle) * pd.freeDist,
+        y: pd.pivot.y + Math.sin(newAngle) * pd.freeDist,
+      }
+      if (pd.freeIsEnd) this._end   = newPt
+      else              this._start = newPt
+      this.markDirty()
       return
     }
     if (this._drag === null || this._dragStartMouse === null || this._dragStartPt === null) return
@@ -867,6 +943,7 @@ export class LineLayer extends Layer implements ImageSource {
     this._dragStartMouse   = null
     this._dragStartPt      = null
     this._dragStartOtherPt = null
+    this._pivotDrag        = null
     this._sliderDrag       = false
     this._clearSnapDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null

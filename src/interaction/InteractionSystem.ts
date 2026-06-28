@@ -54,6 +54,20 @@ function isDraggable(node: unknown): node is Draggable {
   return typeof (node as Record<string, unknown>)?.handlePointerDown === 'function'
 }
 
+// Layers that support position-only drag initiated via pixel-pick of a
+// non-selected layer implement startCenterDrag(point) — it behaves like
+// handlePointerDown but always selects the centre-move handle.
+interface PositionDraggable extends Draggable {
+  startCenterDrag(point: Point): boolean
+}
+
+function hasPositionDrag(node: unknown): node is PositionDraggable {
+  return typeof (node as Record<string, unknown>)?.startCenterDrag === 'function'
+}
+
+// Pixels of movement before a pixel-pick is promoted to an active position drag.
+const PICK_DRAG_THRESHOLD = 4
+
 // A layer may handle a right-click itself (e.g. PathLayer deleting a
 // control point under the cursor) instead of the default slot-binding
 // inspector. Return true to consume the event.
@@ -133,6 +147,11 @@ export class InteractionSystem {
 
   // True while a pointer gesture is being handled by the LayerStackWidget.
   private _widgetCapture = false
+
+  // Pending position drag from a pixel-pick: set when a pixel-pick selects a
+  // position-draggable layer on mousedown. Promoted to _active on first
+  // movement > PICK_DRAG_THRESHOLD; cleared on mouseup if not promoted.
+  private _pendingPickDrag: { layer: PositionDraggable; point: Point; pointerId: number } | null = null
 
   // ── Touch gesture state ──────────────────────────────────────────
   // Touch pointers not (yet) claimed by _active or _widgetCapture,
@@ -510,7 +529,11 @@ export class InteractionSystem {
       const node    = this._hitTest(testPt)
 
       if (node === null || !isDraggable(node)) {
-        this._handleEmptyAreaClick(point, useVpt ? this._viewportPoint(e) : undefined)
+        const picked = this._handleEmptyAreaClick(point, useVpt ? this._viewportPoint(e) : undefined)
+        if (picked !== null && hasPositionDrag(picked)) {
+          this._pendingPickDrag = { layer: picked, point, pointerId: e.pointerId }
+          this._canvas.setPointerCapture(e.pointerId)
+        }
         return
       }
 
@@ -606,6 +629,22 @@ export class InteractionSystem {
       }
       return
     }
+    if (this._pendingPickDrag !== null) {
+      if (e.pointerId !== this._pendingPickDrag.pointerId) return
+      const dx = point.x - this._pendingPickDrag.point.x
+      const dy = point.y - this._pendingPickDrag.point.y
+      if (dx * dx + dy * dy > PICK_DRAG_THRESHOLD * PICK_DRAG_THRESHOLD) {
+        const pd = this._pendingPickDrag
+        this._pendingPickDrag = null
+        if (pd.layer.startCenterDrag(pd.point)) {
+          this._active = { node: pd.layer, pointerId: e.pointerId, useVpt: false }
+          this._setCursor('grabbing')
+          pd.layer.handlePointerMove?.(point)
+          Node.scheduleFrame?.()
+        }
+      }
+      return
+    }
     if (this._active !== null) {
       // Deliver move to the captured node only.
       if (e.pointerId !== this._active.pointerId) return
@@ -632,6 +671,14 @@ export class InteractionSystem {
     if (e.pointerType === 'touch' && Node.touchDragPoint !== null) {
       Node.touchDragPoint = null
       Node.scheduleFrame?.()
+    }
+
+    if (this._pendingPickDrag !== null) {
+      if (e.pointerId === this._pendingPickDrag.pointerId) {
+        this._pendingPickDrag = null
+        this._updateHoverCursor(e)
+      }
+      return
     }
 
     if (this._widgetCapture) {
@@ -703,7 +750,9 @@ export class InteractionSystem {
   // draggable node: slot-row click takes priority, then pixel-pick.
   // `vpt` is the viewport-space point; provided on desktop for pill-zone clicks
   // where slot bounds are stored in viewport coords.
-  private _handleEmptyAreaClick(point: Point, vpt?: Point): void {
+  // Returns the pixel-picked Layer if one was selected, null otherwise
+  // (including when a slot-click was handled instead).
+  private _handleEmptyAreaClick(point: Point, vpt?: Point): Layer | null {
     const selected = this._widget?.selected ?? null
     const testPt   = vpt ?? point
 
@@ -714,7 +763,7 @@ export class InteractionSystem {
       const slot = selected.hitTestSlot(testPt)
       if (slot !== null) {
         this._onSlotClick?.(selected, slot)
-        return
+        return null
       }
     }
 
@@ -727,8 +776,10 @@ export class InteractionSystem {
       if (picked !== null) {
         this._widget.selected = picked
         Node.scheduleFrame?.()
+        return picked
       }
     }
+    return null
   }
 
   // Update a deferred touch pointer's tracked position, and drive the

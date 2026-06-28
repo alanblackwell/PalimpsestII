@@ -819,6 +819,23 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return true
   }
 
+  // Initiate a position-only drag from an arbitrary canvas point (used when
+  // the user drags a non-selected shape layer via pixel-pick).
+  startCenterDrag(point: Point): boolean {
+    this._dragHandle     = H_CENTER
+    this._dragStartPtr   = { ...point }
+    this._dragStartCx    = this._cx
+    this._dragStartCy    = this._cy
+    this._dragStartW     = this._width
+    this._dragStartH     = this._height
+    this._dragStartAngle = this._angle
+    if (this.positionSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.positionSlot)?.toggle()
+    }
+    this.markDirty()
+    return true
+  }
+
   handlePointerMove(point: Point): void {
     if (this._strokeSliderDrag) {
       this._setStrokeWidthFromPointer(point.x)

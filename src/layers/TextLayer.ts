@@ -905,6 +905,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     return false
   }
 
+  startCenterDrag(point: Point): boolean {
+    if (this._maskSlot.isActive) return false
+    if (this._positionSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this._positionSlot)?.toggle()
+    }
+    this._drag = {
+      type:       'move',
+      startMouse: { ...point },
+      startPos:   { ...this._position },
+    }
+    this.markDirty()
+    return true
+  }
+
   handlePointerMove(point: Point): void {
     if (this._drag === null) return
 
