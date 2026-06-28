@@ -12,6 +12,13 @@ export class ParameterSlot {
 
   readonly label: string
 
+  // When true, this slot reads the source's cached value rather than
+  // pulling a fresh evaluation.  The source is registered as a feedback
+  // dependent (invisible to cycle detection), so cycles involving this
+  // edge are permitted.  Used by EventLayer's image inputs so that the
+  // event output can feed back into the same images being watched.
+  readonly feedback: boolean
+
   private _state: SlotState = SlotState.Unbound
   private _source: Node | null = null
 
@@ -19,10 +26,11 @@ export class ParameterSlot {
   // Public so Graph can read it for cycle detection.
   readonly owner: Node
 
-  constructor(type: ValueType | null, owner: Node, label?: string) {
-    this.type = type
-    this.owner = owner
-    this.label = label ?? ParameterSlot._defaultLabel(type)
+  constructor(type: ValueType | null, owner: Node, label?: string, feedback = false) {
+    this.type     = type
+    this.owner    = owner
+    this.label    = label ?? ParameterSlot._defaultLabel(type)
+    this.feedback = feedback
   }
 
   private static _defaultLabel(type: ValueType | null): string {
@@ -49,8 +57,9 @@ export class ParameterSlot {
   bind(source: Node): void {
     this.unbind()
     this._source = source
-    this._state = SlotState.Bound
-    source.addDependent(this.owner)
+    this._state  = SlotState.Bound
+    if (this.feedback) source.addFeedbackDependent(this.owner)
+    else               source.addDependent(this.owner)
     this.owner.markDirty()
   }
 
@@ -58,7 +67,8 @@ export class ParameterSlot {
   suspend(): void {
     if (this._state !== SlotState.Bound) return
     this._state = SlotState.SuspendedBound
-    this._source!.removeDependent(this.owner)
+    if (this.feedback) this._source!.removeFeedbackDependent(this.owner)
+    else               this._source!.removeDependent(this.owner)
     this.owner.markDirty()
   }
 
@@ -66,14 +76,16 @@ export class ParameterSlot {
   resume(): void {
     if (this._state !== SlotState.SuspendedBound || this._source === null) return
     this._state = SlotState.Bound
-    this._source.addDependent(this.owner)
+    if (this.feedback) this._source.addFeedbackDependent(this.owner)
+    else               this._source.addDependent(this.owner)
     this.owner.markDirty()
   }
 
   // Remove the binding entirely.
   unbind(): void {
     if (this._source !== null) {
-      this._source.removeDependent(this.owner)
+      if (this.feedback) this._source.removeFeedbackDependent(this.owner)
+      else               this._source.removeDependent(this.owner)
       this._source = null
     }
     this._state = SlotState.Unbound

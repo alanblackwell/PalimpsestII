@@ -27,6 +27,16 @@ export abstract class Node {
   // all dependents are marked dirty too (push invalidation).
   private readonly _dependents = new Set<Node>()
 
+  // Feedback dependents — registered by ParameterSlot.feedback slots.
+  // Receive dirty propagation identically to _dependents but are NOT
+  // traversed by Graph.canBind's cycle-detection BFS, so feedback edges
+  // are allowed to form cycles in the dependency graph.  The canonical
+  // use-case is EventLayer's image inputs: the event fires based on the
+  // (cached) images, and those same images may react to the event —
+  // a one-frame-delay loop that's semantically correct but would otherwise
+  // be rejected as a cycle.
+  private readonly _feedbackDependents = new Set<Node>()
+
   // The parameter slots declared by this node.
   protected readonly slots: ParameterSlot[] = []
 
@@ -146,7 +156,17 @@ export abstract class Node {
     this._dependents.delete(node)
   }
 
+  addFeedbackDependent(node: Node): void {
+    this._feedbackDependents.add(node)
+  }
+
+  removeFeedbackDependent(node: Node): void {
+    this._feedbackDependents.delete(node)
+  }
+
   // Expose the dependent set for read-only use by the Graph (cycle detection).
+  // Intentionally excludes _feedbackDependents so feedback edges are invisible
+  // to canBind's BFS.
   get dependents(): ReadonlySet<Node> {
     return this._dependents
   }
@@ -155,9 +175,8 @@ export abstract class Node {
     if (this._dirty) return  // already dirty — stop propagation
     this._dirty = true
     Node.scheduleFrame?.()   // notify the evaluator a frame is needed
-    for (const dep of this._dependents) {
-      dep.markDirty()
-    }
+    for (const dep of this._dependents)         dep.markDirty()
+    for (const dep of this._feedbackDependents) dep.markDirty()
   }
 
   // Force dirty regardless of current state (e.g. for initial state or
@@ -165,7 +184,8 @@ export abstract class Node {
   forceDirty(): void {
     this._dirty = true
     Node.scheduleFrame?.()
-    for (const dep of this._dependents) dep.forceDirty()
+    for (const dep of this._dependents)         dep.forceDirty()
+    for (const dep of this._feedbackDependents) dep.forceDirty()
   }
 
   get isDirty(): boolean { return this._dirty }
@@ -179,9 +199,11 @@ export abstract class Node {
 
   // Evaluate this node (and any dirty dependencies first).
   // Depth-first pull: resolves the dependency order naturally.
+  // Feedback slots are skipped — they always read the source's cached
+  // value from the previous evaluation, breaking circular dependencies.
   evaluate(): void {
     for (const slot of this.slots) {
-      if (slot.isActive) {
+      if (slot.isActive && !slot.feedback) {
         slot.source!.evaluate()
       }
     }
