@@ -271,7 +271,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
     ctx.save()
 
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath()
     ctx.roundRect(x, y, ADD_BTN_W, ADD_BTN_H, 5)
     ctx.fill()
