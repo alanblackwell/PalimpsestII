@@ -49,6 +49,8 @@ export class StrokeLayer extends PathLayer {
   protected override _closedPath = false
   // Allow removing control points down to 2 (line)
   protected override get _minPoints(): number { return 2 }
+  // Mask is the stroked region, not a filled interior
+  protected override _maskFilled(): boolean { return false }
 
   readonly startSlot: ParameterSlot
   readonly endSlot:   ParameterSlot

@@ -305,6 +305,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.addMaskDone    === 'boolean') this._addMaskDone    = state.addMaskDone
   }
 
+  // Subclasses that render as a stroke (not a fill) override this to return
+  // false so the mask canvas is rendered in stroke mode, matching what the
+  // user sees. The default (true) fills the shape for the mask.
+  protected _maskFilled(): boolean { return true }
+
   private _updateOffscreens(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
@@ -314,9 +319,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     }
     const mctx = this._maskCanvas.getContext('2d')!
     mctx.clearRect(0, 0, w, h)
-    // White filled shape on transparent — alpha encodes inclusion.
+    // White shape on transparent — alpha encodes mask inclusion.
+    // Stroke-mode subclasses return false from _maskFilled() so the mask
+    // matches the visible stroke region rather than the filled interior.
     this.drawShape(mctx, this._cx, this._cy, this._width * this._scale, this._height * this._scale, this._angle,
-      { r: 1, g: 1, b: 1, a: 1 }, 1, true, this._strokeWidth)
+      { r: 1, g: 1, b: 1, a: 1 }, 1, this._maskFilled(), this._strokeWidth)
 
     if (this._imageCanvas.width !== w || this._imageCanvas.height !== h) {
       this._imageCanvas = new OffscreenCanvas(w, h)

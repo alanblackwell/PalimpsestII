@@ -8,6 +8,7 @@ import {
   type Direction, type DirectionSource,
   type Point,  type PointSource,
   type ImageValue, type ImageSource,
+  type MaskValue,  type MaskSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
@@ -63,8 +64,8 @@ type HandleDrag = 'start' | 'end'
 
 function ptDist(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y - b.y) }
 
-export class LineLayer extends Layer implements ImageSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
+export class LineLayer extends Layer implements ImageSource, MaskSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask])
 
   readonly startSlot:     ParameterSlot
   readonly endSlot:       ParameterSlot
@@ -88,7 +89,8 @@ export class LineLayer extends Layer implements ImageSource {
 
   // Offscreen canvas — all line elements composited here, then drawn once
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
-  private _canvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
+  private _canvas:     OffscreenCanvas = new OffscreenCanvas(1, 1)
+  private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
   // Active drag
   private _drag:             HandleDrag | null  = null
@@ -160,7 +162,8 @@ export class LineLayer extends Layer implements ImageSource {
   // ImageSource
   // ----------------------------------------------------------
 
-  getImage(): ImageValue { return this._canvas }
+  getImage(): ImageValue { return this._canvas     }
+  getMask():  MaskValue  { return this._maskCanvas }
 
   override getSnapBounds() {
     const minX = Math.min(this._start.x, this._end.x)
@@ -312,9 +315,17 @@ export class LineLayer extends Layer implements ImageSource {
     if (!ctx) return
     ctx.clearRect(0, 0, cw, ch)
     this._drawLineContent(ctx)
+
+    if (this._maskCanvas.width !== cw || this._maskCanvas.height !== ch) {
+      this._maskCanvas = new OffscreenCanvas(cw, ch)
+    }
+    const mctx = this._maskCanvas.getContext('2d') as OffscreenCanvasRenderingContext2D | null
+    if (!mctx) return
+    mctx.clearRect(0, 0, cw, ch)
+    this._drawLineContent(mctx, { r: 1, g: 1, b: 1, a: 1 })
   }
 
-  private _drawLineContent(ctx: OffscreenCanvasRenderingContext2D): void {
+  private _drawLineContent(ctx: OffscreenCanvasRenderingContext2D, colour?: Colour): void {
     const start = this._renderedStart
     const end   = this._renderedEnd
     const dx  = end.x - start.x
@@ -328,7 +339,7 @@ export class LineLayer extends Layer implements ImageSource {
     const r   = w / 2
     const { hw, len: aLen } = this._arrowGeom()
 
-    const c   = this._colour
+    const c   = colour ?? this._colour
     const css = `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},${c.a})`
 
     ctx.fillStyle   = css
