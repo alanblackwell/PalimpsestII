@@ -16,7 +16,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapCoord, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
-import { animateButtonHitTest, renderAnimateButton } from './AnimateButton.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -53,6 +53,15 @@ const SQUARE_SNAP_DWELL_MS  = 700
 
 const MIN_SIZE  = 20          // minimum width / height (px)
 const ROT_OFF   = 24          // rotation handle distance beyond corner (px)
+
+// Bottom convenience buttons — Animate + Mask, shown side-by-side
+const CONV_BTN_H   = 30
+const CONV_BTN_GAP = 14   // gap from bottom edge of viewport
+const CONV_BTN_SEP = 8    // horizontal gap between the two buttons
+const ANIM_BTN_W   = 72   // "Animate"
+const MASK_BTN_W   = 60   // "Mask"
+const ANIM_BTN_COL = '#cf7ecf'   // Point/AnimPath accent
+const MASK_BTN_COL = '#cfcf7e'   // Mask accent
 
 // Stroke/scale control pill, drawn directly below the canvas-space panel pill.
 const SLOT_H    = 30
@@ -144,10 +153,14 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _edgeSnapX: number | null = null  // x of vertical guide line
   protected _edgeSnapY: number | null = null  // y of horizontal guide line
 
-  // Animate convenience button — set false in Clip<Shape> subclasses to suppress
+  // Convenience buttons — set false in Clip<Shape> subclasses to suppress
   protected _showAnimateButton = true
-  protected _addAnimateDone = false
+  protected _addAnimateDone    = false
   protected _onAddAnimate: (() => void) | null = null
+
+  protected _showMaskButton = true
+  protected _addMaskDone    = false
+  protected _onAddMask: (() => void) | null = null
 
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
@@ -189,6 +202,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   abstract samplePerimeter(t: number): Point
 
   setOnAddAnimate(fn: () => void): void { this._onAddAnimate = fn }
+  setOnAddMask(fn: () => void):    void { this._onAddMask    = fn }
 
   getPoint(): Point { return { x: this._cx, y: this._cy } }
 
@@ -272,6 +286,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       angle: this._angle, colour: this._colour, opacity: this._opacity,
       filled: this._filled, strokeWidth: this._strokeWidth, scale: this._scale,
       addAnimateDone: this._addAnimateDone,
+      addMaskDone:    this._addMaskDone,
     }
   }
 
@@ -287,6 +302,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.strokeWidth === 'number') this._strokeWidth = state.strokeWidth
     if (typeof state.scale === 'number')       this._scale = state.scale
     if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
+    if (typeof state.addMaskDone    === 'boolean') this._addMaskDone    = state.addMaskDone
   }
 
   private _updateOffscreens(): void {
@@ -329,7 +345,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
-    if (this._showAnimateButton) renderAnimateButton(ctx, this._addAnimateDone)
+    this._renderConvBtn(ctx, 'animate')
+    this._renderConvBtn(ctx, 'mask')
   }
 
   // fillModeSlot, strokeWidthSlot, and scaleSlot are pulled out of the
@@ -612,7 +629,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._showAnimateButton && animateButtonHitTest(point, this._addAnimateDone)) return this
+    if (this._convBtnHitTest(point, 'animate')) return this
+    if (this._convBtnHitTest(point, 'mask'))    return this
     // Shape handles take priority over pill controls
     const r2 = HIT_R * HIT_R
     for (const h of this._handlePositions()) {
@@ -636,9 +654,14 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    if (this._showAnimateButton && animateButtonHitTest(point, this._addAnimateDone)) {
+    if (this._convBtnHitTest(point, 'animate')) {
       this._addAnimateDone = true
       this._onAddAnimate?.()
+      return true
+    }
+    if (this._convBtnHitTest(point, 'mask')) {
+      this._addMaskDone = true
+      this._onAddMask?.()
       return true
     }
     // Shape handles take priority over pill controls so a handle rendered on top wins
@@ -1123,6 +1146,67 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.22)'
     ctx.font = '9px monospace'
     ctx.fillText(rotActive ? '●' : '○', x + width - 12 - angleW, midY)
+
+    ctx.restore()
+  }
+
+  // ----------------------------------------------------------
+  // Convenience button helpers (Animate + Mask, side-by-side)
+  // ----------------------------------------------------------
+
+  protected _convBtnRect(which: 'animate' | 'mask'): { x: number; y: number; w: number } {
+    const left  = contentLeft(Node.canvasWidth)
+    const y     = Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP
+    const showA = this._showAnimateButton
+    const showM = this._showMaskButton
+    if (showA && showM) {
+      const total  = MASK_BTN_W + CONV_BTN_SEP + ANIM_BTN_W
+      const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+      return which === 'mask'
+        ? { x: startX,                          y, w: MASK_BTN_W }
+        : { x: startX + MASK_BTN_W + CONV_BTN_SEP, y, w: ANIM_BTN_W }
+    }
+    const w = which === 'mask' ? MASK_BTN_W : ANIM_BTN_W
+    return { x: left + Math.max(0, (Node.viewportWidth - left - w) / 2), y, w }
+  }
+
+  protected _convBtnHitTest(point: Point, which: 'animate' | 'mask'): boolean {
+    if (which === 'animate' && (!this._showAnimateButton || this._addAnimateDone)) return false
+    if (which === 'mask'    && (!this._showMaskButton    || this._addMaskDone))    return false
+    const { x, y, w } = this._convBtnRect(which)
+    return point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H
+  }
+
+  protected _renderConvBtn(ctx: Ctx2D, which: 'animate' | 'mask'): void {
+    if (which === 'animate' && (!this._showAnimateButton || this._addAnimateDone)) return
+    if (which === 'mask'    && (!this._showMaskButton    || this._addMaskDone))    return
+    const { x, y, w } = this._convBtnRect(which)
+    const label = which === 'mask' ? 'Mask' : 'Animate'
+    const col   = which === 'mask' ? MASK_BTN_COL : ANIM_BTN_COL
+    const midY  = y + CONV_BTN_H / 2
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, w, CONV_BTN_H, 5)
+    ctx.fill()
+
+    ctx.fillStyle = col + 'cc'
+    ctx.beginPath()
+    ctx.roundRect(x, y, 3, CONV_BTN_H, [5, 0, 0, 5])
+    ctx.fill()
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(x, y, w, CONV_BTN_H)
+    ctx.clip()
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, x + 10, midY)
+    ctx.restore()
 
     ctx.restore()
   }

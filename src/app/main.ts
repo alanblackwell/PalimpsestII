@@ -132,6 +132,12 @@ function postInsertLayer(newLayer: Layer): void {
       newLayer instanceof StrokeLayer) {
     wireAnimatableShape(newLayer)
   }
+  if (newLayer instanceof ShapeLayer &&
+      !(newLayer instanceof ClipRectLayer) &&
+      !(newLayer instanceof ClipEllipseLayer) &&
+      !(newLayer instanceof ClipPathLayer)) {
+    wireMaskButton(newLayer)
+  }
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
@@ -274,6 +280,18 @@ function wireAnimatableShape(layer: ShapeLayer | StrokeLayer): void {
     BindingLayer.create(layer, animPath.shapeSlot)
     postInsertLayer(animPath)
     refreshStack(animPath)
+  })
+}
+
+function wireMaskButton(layer: ShapeLayer): void {
+  layer.setOnAddMask(() => {
+    const mask = new MaskLayer()
+    Layer.assignDebugName(mask)
+    mask.bounds = { ...layer.bounds }
+    mask.insertBelow(layer)
+    BindingLayer.create(layer, mask.firstShapeSlot)
+    postInsertLayer(mask)
+    refreshStack()   // no arg — keep shape layer selected
   })
 }
 
@@ -606,6 +624,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof ImageLayer)      wireImageLayer(scanL)
     if (isAnimatableShape(scanL))         wireAnimatableShape(scanL)
     if (isClipShapeMovable(scanL))        wireClipShapeLayer(scanL)
+    if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL)) wireMaskButton(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
@@ -614,6 +633,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof ImageLayer)      wireImageLayer(archived)
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (isClipShapeMovable(archived))        wireClipShapeLayer(archived)
+    if (archived instanceof ShapeLayer && !isClipShapeMovable(archived)) wireMaskButton(archived)
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)

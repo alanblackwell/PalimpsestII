@@ -43,6 +43,7 @@ export class ClipEllipseLayer extends EllipseLayer implements ImageSource {
 
     this.debugName = 'ClipEllipse'
     this._showAnimateButton = false
+    this._showMaskButton    = false
   }
 
   // Link a hidden Mask helper whose content should track this shape's
