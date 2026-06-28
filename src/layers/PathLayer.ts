@@ -222,6 +222,13 @@ export class PathLayer extends ShapeLayer {
     ctx.save()
     ctx.globalAlpha = opacity
 
+    if (this._scale !== 1) {
+      const c = this._centroid()
+      ctx.translate(c.x, c.y)
+      ctx.scale(this._scale, this._scale)
+      ctx.translate(-c.x, -c.y)
+    }
+
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
       const pt = samplePath(this._points, i / SAMPLES, this._radius)
@@ -243,7 +250,10 @@ export class PathLayer extends ShapeLayer {
 
   /** Sample a point on the spline perimeter. */
   samplePerimeter(t: number): Point {
-    return samplePath(this._points, t, this._radius)
+    const p = samplePath(this._points, t, this._radius)
+    if (this._scale === 1) return p
+    const c = this._centroid()
+    return { x: c.x + (p.x - c.x) * this._scale, y: c.y + (p.y - c.y) * this._scale }
   }
 
   // ----------------------------------------------------------
@@ -316,11 +326,18 @@ export class PathLayer extends ShapeLayer {
   }
 
   private _drawRadiusPill(ctx: Ctx2D): void {
-    this._drawRadiusSlider(ctx)
-    this.renderSlotGroup(ctx, [this.radiusSlot], this._radiusBindRowBounds().y)
+    const rRow = this._radiusRowBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(rRow.x, rRow.y, rRow.width, 2 * SLOT_H + SLOT_GAP, 6)
+    ctx.fill()
+    ctx.restore()
+    this._drawRadiusSlider(ctx, false)
+    this._renderBindingRow(ctx, this.radiusSlot, this._radiusBindRowBounds().y)
   }
 
-  private _drawRadiusSlider(ctx: Ctx2D): void {
+  private _drawRadiusSlider(ctx: Ctx2D, drawBackdrop = true): void {
     const g = this._radiusSliderGeom()
     const { x, y, width, height } = g.b
 
@@ -330,10 +347,12 @@ export class PathLayer extends ShapeLayer {
 
     ctx.save()
 
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, 6)
-    ctx.fill()
+    if (drawBackdrop) {
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(x, y, width, height, 6)
+      ctx.fill()
+    }
 
     ctx.font         = '10px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.62)'
@@ -396,6 +415,7 @@ export class PathLayer extends ShapeLayer {
           point.y >= b.y && point.y <= b.y + b.height) return this
     }
     if (this._strokeSliderHit(point)) return this
+    if (this._scaleSliderHit(point))  return this
     if (this._radiusSliderHit(point)) return this
     return null
   }
@@ -484,6 +504,12 @@ export class PathLayer extends ShapeLayer {
       this.markDirty()
       return true
     }
+    if (this._scaleSliderHit(point)) {
+      this._scaleSliderDrag = true
+      this._setScaleFromPointer(point.x)
+      this.markDirty()
+      return true
+    }
     if (this._radiusSliderHit(point)) {
       this._radiusSliderDrag = true
       this._setRadiusFromPointer(point.x)
@@ -507,6 +533,10 @@ export class PathLayer extends ShapeLayer {
   override handlePointerMove(point: Point): void {
     if (this._strokeSliderDrag) {
       this._setStrokeWidthFromPointer(point.x)
+      return
+    }
+    if (this._scaleSliderDrag) {
+      this._setScaleFromPointer(point.x)
       return
     }
     if (this._radiusSliderDrag) {
@@ -575,6 +605,7 @@ export class PathLayer extends ShapeLayer {
     this._specialDrag      = null
     this._dragIndex        = -1
     this._strokeSliderDrag = false
+    this._scaleSliderDrag  = false
     this._radiusSliderDrag = false
     this._pathEdgeSnapX    = null
     this._pathEdgeSnapY    = null

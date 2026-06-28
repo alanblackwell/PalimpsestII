@@ -123,7 +123,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _filled = true
   protected _strokeWidth = 2
   protected _strokeSliderDrag = false
-  private   _scaleSliderDrag  = false
+  protected _scaleSliderDrag  = false
 
   private _lastEventTime:  EventValue = null
   protected _toggleBounds: { x: number; y: number; width: number; height: number } | null = null
@@ -440,21 +440,31 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   }
 
   protected _drawStrokePill(ctx: Ctx2D): void {
-    // Row 1 — "outline mode" toggle, moved here from the standard slot pill.
+    // Row 1 — "outline mode" toggle.
     this.renderSlotGroup(ctx, [this.fillModeSlot], this._outlineRowBounds().y)
     this._drawOutlineToggle(ctx)
 
-    // Row 2 — stroke-width slider.
-    this._drawStrokeSlider(ctx)
+    // Rows 2+3 — stroke-width slider + binding in one combined pill.
+    const sRow = this._strokeRowBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(sRow.x, sRow.y, sRow.width, 2 * SLOT_H + SLOT_GAP, 6)
+    ctx.fill()
+    ctx.restore()
+    this._drawStrokeSlider(ctx, false)
+    this._renderBindingRow(ctx, this.strokeWidthSlot, this._strokeBindRowBounds().y)
 
-    // Row 3 — strokeWidthSlot binding row (standard label + drop-target box).
-    this.renderSlotGroup(ctx, [this.strokeWidthSlot], this._strokeBindRowBounds().y)
-
-    // Row 4 — scale slider.
-    this._drawScaleSlider(ctx)
-
-    // Row 5 — scaleSlot binding row.
-    this.renderSlotGroup(ctx, [this.scaleSlot], this._scaleBindRowBounds().y)
+    // Rows 4+5 — scale slider + binding in one combined pill.
+    const scRow = this._scaleRowBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(scRow.x, scRow.y, scRow.width, 2 * SLOT_H + SLOT_GAP, 6)
+    ctx.fill()
+    ctx.restore()
+    this._drawScaleSlider(ctx, false)
+    this._renderBindingRow(ctx, this.scaleSlot, this._scaleBindRowBounds().y)
   }
 
   private _drawOutlineToggle(ctx: Ctx2D): void {
@@ -505,7 +515,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
-  private _drawStrokeSlider(ctx: Ctx2D): void {
+  private _drawStrokeSlider(ctx: Ctx2D, drawBackdrop = true): void {
     const g = this._strokeSliderGeom()
     const { x, y, width, height } = g.b
 
@@ -515,10 +525,12 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     ctx.save()
 
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, 6)
-    ctx.fill()
+    if (drawBackdrop) {
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(x, y, width, height, 6)
+      ctx.fill()
+    }
 
     ctx.font         = '10px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.62)'
@@ -541,7 +553,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
-  private _drawScaleSlider(ctx: Ctx2D): void {
+  private _drawScaleSlider(ctx: Ctx2D, drawBackdrop = true): void {
     const g = this._scaleSliderGeom()
     const { x, y, width, height } = g.b
 
@@ -551,10 +563,12 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     ctx.save()
 
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, 6)
-    ctx.fill()
+    if (drawBackdrop) {
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(x, y, width, height, 6)
+      ctx.fill()
+    }
 
     ctx.font         = '10px monospace'
     ctx.fillStyle    = 'rgba(255,255,255,0.62)'
@@ -573,6 +587,70 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
     ctx.textAlign = 'right'
     ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+
+    ctx.restore()
+  }
+
+  // Draw the label + drop-target box for a single Amount slot row at `y`,
+  // without any backdrop, and register the row in _slotBounds for hit testing.
+  // Used to render binding rows inside a combined slider+binding pill.
+  protected _renderBindingRow(ctx: Ctx2D, slot: ParameterSlot, y: number): void {
+    const PANEL_X = this.canvasBounds.x
+    const PANEL_W = this.canvasBounds.width
+    const LABEL_W = SW_LABEL_W   // 78, matches Layer.ts renderSlotGroup
+
+    this._slotBounds.set(slot, { x: PANEL_X, y, width: PANEL_W, height: SLOT_H })
+
+    const drag     = Node.bindDrag
+    const isCompat = (drag.active && drag.source !== null && slot.type !== null && drag.source.types.has(slot.type))
+                  || (Node.fileDragActive && slot.type === ValueType.Image && slot.state === SlotState.Unbound)
+
+    const vx = PANEL_X + LABEL_W
+    const vw = PANEL_W - LABEL_W - 2
+    const by = y + 3
+    const bh = SLOT_H - 6
+
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.textBaseline = 'middle'
+
+    ctx.fillStyle = 'rgba(255,255,255,0.62)'
+    ctx.textAlign = 'left'
+    ctx.fillText(slot.label, PANEL_X + 6, y + SLOT_H / 2)
+
+    if (slot.isActive && !isCompat) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = AM_COL + '22'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = AM_COL + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+      ctx.fillText(srcName, vx + 6, y + SLOT_H / 2)
+    } else if (isCompat) {
+      ctx.fillStyle = 'rgba(50,200,70,0.18)'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+      ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, y + SLOT_H / 2)
+    } else if (slot.state === SlotState.SuspendedBound) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = AM_COL + '11'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+      ctx.fillText('⏸ ' + srcName, vx + 6, y + SLOT_H / 2)
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+      ctx.fillText('unbound', vx + 6, y + SLOT_H / 2)
+    }
 
     ctx.restore()
   }
