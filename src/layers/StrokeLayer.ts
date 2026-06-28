@@ -70,8 +70,7 @@ export class StrokeLayer extends PathLayer {
 
   constructor(colour?: Colour) {
     super([], Node.canvasWidth / 2, Node.canvasHeight / 2, colour)
-    this._filled         = false   // stroke only — never fill
-    this._showMaskButton = false   // no Mask convenience button
+    this._filled = false   // stroke only — never fill
 
     this.startSlot = new ParameterSlot(ValueType.Point, this, 'start')
     this.endSlot   = new ParameterSlot(ValueType.Point, this, 'end')

@@ -199,6 +199,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // so a TextLayer can be dropped onto a Filter/Composite image slot.
   private _imageCanvas: OffscreenCanvas
 
+  // Mask convenience button
+  private _addMaskDone = false
+  private _onAddMask: (() => void) | null = null
+  setOnAddMask(fn: () => void): void { this._onAddMask = fn }
+
   // Direct-manipulation state (persist across recompute when slots unbound)
   private _rotation:       number       = 0
   private _manualPosition: Point | null = null
@@ -661,6 +666,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       manualPosition: this._manualPosition,
       rotation:       this._rotation,
       colour:         this._colour,
+      addMaskDone:    this._addMaskDone,
     }
   }
 
@@ -683,6 +689,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._isDefaultText = typeof state.isDefaultText === 'boolean'
       ? state.isDefaultText
       : (this._text === 'Hello')
+    if (typeof state.addMaskDone === 'boolean') this._addMaskDone = state.addMaskDone
   }
 
   protected recompute(): void {
@@ -830,6 +837,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (!this._addMaskDone && this._onAddMask !== null) {
+      const { x, y, w, h } = this._maskBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addMaskDone = true
+        this._onAddMask()
+        return true
+      }
+    }
+
     // Transform handles take priority over pill controls
     const hp = this._handlePos()
 
@@ -987,6 +1003,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (this._drag !== null) return this
+    if (!this._addMaskDone && this._onAddMask !== null) {
+      const { x, y, w, h } = this._maskBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
@@ -1019,6 +1039,32 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._renderHandles(ctx)
     this._renderEditOverlay(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    this._renderMaskBtn(ctx)
+  }
+
+  private _maskBtnRect() {
+    const BTN_W = 60, BTN_H = 30, GAP = 14
+    const left  = contentLeft(Node.canvasWidth)
+    const x     = left + Math.max(0, (Node.viewportWidth - left - BTN_W) / 2)
+    return { x, y: Node.viewportHeight - BTN_H - GAP, w: BTN_W, h: BTN_H }
+  }
+
+  private _renderMaskBtn(ctx: Ctx2D): void {
+    if (this._addMaskDone || this._onAddMask === null) return
+    const { x, y, w, h } = this._maskBtnRect()
+    const midY = y + h / 2
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
+    ctx.fillStyle = '#cfcf7ecc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText('Mask', x + 10, midY)
+    ctx.restore()
+    ctx.restore()
   }
 
   // ── Main pill ─────────────────────────────────────────────────

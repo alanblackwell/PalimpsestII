@@ -47,6 +47,7 @@ import { TransformLayer }    from '../layers/TransformLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
+import { LineLayer }         from '../layers/LineLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import * as Persistence      from '../persistence/Persistence.js'
 import * as MobileStore      from '../persistence/MobileStore.js'
@@ -153,6 +154,8 @@ function postInsertLayer(newLayer: Layer): void {
       !(newLayer instanceof ClipPathLayer)) {
     wireMaskButton(newLayer)
   }
+  if (newLayer instanceof TextLayer) wireTextMaskButton(newLayer)
+  if (newLayer instanceof LineLayer) wireLineMaskButton(newLayer)
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
@@ -307,6 +310,30 @@ function wireMaskButton(layer: ShapeLayer): void {
     BindingLayer.create(layer, mask.firstShapeSlot)
     postInsertLayer(mask)
     refreshStack()   // no arg — keep shape layer selected
+  })
+}
+
+function wireTextMaskButton(layer: TextLayer): void {
+  layer.setOnAddMask(() => {
+    const mask = new MaskLayer()
+    Layer.assignDebugName(mask)
+    mask.bounds = { ...layer.bounds }
+    mask.insertBelow(layer)
+    BindingLayer.create(layer, mask.firstShapeSlot)
+    postInsertLayer(mask)
+    refreshStack()
+  })
+}
+
+function wireLineMaskButton(layer: LineLayer): void {
+  layer.setOnAddMask(() => {
+    const mask = new MaskLayer()
+    Layer.assignDebugName(mask)
+    mask.bounds = { ...layer.bounds }
+    mask.insertBelow(layer)
+    BindingLayer.create(layer, mask.firstShapeSlot)
+    postInsertLayer(mask)
+    refreshStack()
   })
 }
 
@@ -640,6 +667,8 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (isAnimatableShape(scanL))         wireAnimatableShape(scanL)
     if (isClipShapeMovable(scanL))        wireClipShapeLayer(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL)) wireMaskButton(scanL)
+    if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
+    if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
@@ -649,6 +678,8 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (isClipShapeMovable(archived))        wireClipShapeLayer(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived)) wireMaskButton(archived)
+    if (archived instanceof TextLayer)       wireTextMaskButton(archived)
+    if (archived instanceof LineLayer)       wireLineMaskButton(archived)
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)

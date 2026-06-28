@@ -92,6 +92,11 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   private _canvas:     OffscreenCanvas = new OffscreenCanvas(1, 1)
   private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
+  // Mask convenience button
+  private _addMaskDone = false
+  private _onAddMask: (() => void) | null = null
+  setOnAddMask(fn: () => void): void { this._onAddMask = fn }
+
   // Active drag
   private _drag:             HandleDrag | null  = null
   private _dragStartMouse:   Point | null       = null
@@ -185,6 +190,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
       colour:      this._colour,
       arrowStart:  this._arrowStart,
       arrowEnd:    this._arrowEnd,
+      addMaskDone: this._addMaskDone,
     }
   }
 
@@ -195,6 +201,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     if (state.colour && typeof state.colour === 'object') this._colour = state.colour as Colour
     if (typeof state.arrowStart === 'boolean')            this._arrowStart = state.arrowStart
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
+    if (typeof state.addMaskDone === 'boolean')           this._addMaskDone = state.addMaskDone
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
@@ -446,6 +453,32 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    this._renderMaskBtn(ctx)
+  }
+
+  private _maskBtnRect() {
+    const BTN_W = 60, BTN_H = 30, GAP = 14
+    const left  = contentLeft(Node.canvasWidth)
+    const x     = left + Math.max(0, (Node.viewportWidth - left - BTN_W) / 2)
+    return { x, y: Node.viewportHeight - BTN_H - GAP, w: BTN_W, h: BTN_H }
+  }
+
+  private _renderMaskBtn(ctx: Ctx2D): void {
+    if (this._addMaskDone || this._onAddMask === null) return
+    const { x, y, w, h } = this._maskBtnRect()
+    const midY = y + h / 2
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
+    ctx.fillStyle = '#cfcf7ecc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText('Mask', x + 10, midY)
+    ctx.restore()
+    ctx.restore()
   }
 
   private _drawSimplePill(ctx: Ctx2D, b: BBox): void {
@@ -755,6 +788,10 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._drag !== null || this._sliderDrag || this._pivotDrag !== null) return this
+    if (!this._addMaskDone && this._onAddMask !== null) {
+      const { x, y, w, h } = this._maskBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
     if (this._arrowEndBounds   !== null && this._inBox(point, this._arrowEndBounds))   return this
     if (this._inBox(point, this._widthSliderRowBounds())) return this
@@ -773,6 +810,15 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (!this._addMaskDone && this._onAddMask !== null) {
+      const { x, y, w, h } = this._maskBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addMaskDone = true
+        this._onAddMask()
+        return true
+      }
+    }
+
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) {
       this._arrowStart = !this._arrowStart
       this.markDirty()
