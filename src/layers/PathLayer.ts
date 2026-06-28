@@ -211,6 +211,24 @@ export class PathLayer extends ShapeLayer {
   }
 
   // ----------------------------------------------------------
+  // State snapshot — used by StrokeLayer.convertToPath
+  // ----------------------------------------------------------
+
+  /** Copy externally-supplied scalar state into this layer's fields.
+   *  Called when converting a StrokeLayer to a closed PathLayer. */
+  applyStateSnapshot(snap: {
+    colour: Colour; opacity: number; scale: number
+    radius: number; strokeWidth: number; filled: boolean
+  }): void {
+    this._colour      = { ...snap.colour }
+    this._opacity     = snap.opacity
+    this._scale       = snap.scale
+    this._radius      = snap.radius
+    this._strokeWidth = snap.strokeWidth
+    this._filled      = snap.filled
+  }
+
+  // ----------------------------------------------------------
   // Persistence
   // ----------------------------------------------------------
 

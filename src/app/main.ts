@@ -125,6 +125,22 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof ImageLayer) {
     wireImageLayer(newLayer)
   }
+  if (newLayer instanceof StrokeLayer) {
+    newLayer.setOnClose((stroke) => {
+      const below = stroke.layerBelow   // record position before removal
+      const snap  = stroke.getStateSnapshot()
+
+      const pl = new PathLayer(snap.points)
+      Layer.assignDebugName(pl)
+      pl.bounds = { ...stroke.bounds }
+      pl.applyStateSnapshot(snap)
+      pl.insertAbove(below ?? root)
+
+      deletionLayer.archive(stroke)
+      postInsertLayer(pl)
+      refreshStack(pl)
+    })
+  }
   if (newLayer instanceof ShapeLayer &&
       !(newLayer instanceof ClipRectLayer) &&
       !(newLayer instanceof ClipEllipseLayer) &&

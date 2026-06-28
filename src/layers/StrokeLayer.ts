@@ -27,10 +27,21 @@ import { drawIcon } from '../ui/icons.js'
 // samplePerimeter uses arc-length parameterisation so AnimPath
 // travels at uniform speed along the open stroke.
 
-const ACCENT      = '#e8a04a'
-const AM_COL      = '#4a8fe8'
-const RDP_EPS     = 8
-const ARC_SAMPLES = 200
+const ACCENT          = '#e8a04a'
+const AM_COL          = '#4a8fe8'
+const RDP_EPS         = 8
+const ARC_SAMPLES     = 200
+const CLOSE_THRESHOLD = 20   // px — endpoint proximity that triggers path closure
+
+export type StrokeStateSnapshot = {
+  points:      Point[]
+  colour:      Colour
+  opacity:     number
+  scale:       number
+  radius:      number
+  strokeWidth: number
+  filled:      boolean
+}
 
 export class StrokeLayer extends PathLayer {
 
@@ -48,6 +59,9 @@ export class StrokeLayer extends PathLayer {
   // Arc-length table for uniform-speed samplePerimeter
   private _arcSamples: Point[] = []
   private _totalLen   = 0
+
+  // Closure callback — set by main.ts via setOnClose
+  private _onClose: ((stroke: StrokeLayer) => void) | null = null
 
   // Draw button bounds (written in renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BoundingBox | null = null
@@ -414,6 +428,7 @@ export class StrokeLayer extends PathLayer {
       this.markDirty()
     }
     super.handlePointerUp()
+    this._checkClosure()
   }
 
   // Suspend endpoint slots when any canvas-space handle drag starts.
@@ -426,6 +441,38 @@ export class StrokeLayer extends PathLayer {
       BindingLayer.findForSlot(this.startSlot)?.toggle()
     if (this.endSlot.state === SlotState.Bound)
       BindingLayer.findForSlot(this.endSlot)?.toggle()
+  }
+
+  // ----------------------------------------------------------
+  // Path closure
+  // ----------------------------------------------------------
+
+  setOnClose(cb: (stroke: StrokeLayer) => void): void {
+    this._onClose = cb
+  }
+
+  /** Returns a snapshot of the current visual state for use when
+   *  converting this stroke into a closed PathLayer. */
+  getStateSnapshot(): StrokeStateSnapshot {
+    return {
+      points:      [...this._points],
+      colour:      { ...this._colour },
+      opacity:     this._opacity,
+      scale:       this._scale,
+      radius:      this._radius,
+      strokeWidth: this._strokeWidth,
+      filled:      this._filled,
+    }
+  }
+
+  private _checkClosure(): void {
+    const n = this._points.length
+    if (n < 3 || this._onClose === null) return
+    const A = this._points[0]!, B = this._points[n - 1]!
+    if (Math.hypot(B.x - A.x, B.y - A.y) < CLOSE_THRESHOLD) {
+      this._points[n - 1] = { ...A }   // snap to exact coincidence
+      this._onClose(this)
+    }
   }
 
   // ----------------------------------------------------------
