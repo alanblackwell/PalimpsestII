@@ -4,10 +4,11 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
   type ImageValue, type ImageSource,
-  type Ctx2D,
+  type Point, type Ctx2D,
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
 import type { MaskLayer } from './MaskLayer.js'
+import { moveButtonHitTest, renderMoveButton } from './ClipMoveButton.js'
 import { detectContour } from './contourTrace.js'
 
 const INIT_PTS = 10
@@ -33,6 +34,8 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   private _offscreen:       OffscreenCanvas
   private _maskTracker:     MaskLayer | null = null
   private _pathInitialized: boolean = false
+  private _addMoveDone = false
+  private _onAddMove: (() => void) | null = null
 
   constructor() {
     super(undefined, Node.canvasWidth / 2, Node.canvasHeight / 2)
@@ -53,9 +56,39 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
     helper.trackedShape = this
   }
 
+  setOnAddMove(fn: () => void): void { this._onAddMove = fn }
+
   override markDirty(): void {
     super.markDirty()
     this._maskTracker?.markDirty()
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    super.renderOverlay(ctx)
+    renderMoveButton(ctx, this._addMoveDone)
+  }
+
+  protected override hitTestSelf(point: Point): this | null {
+    if (moveButtonHitTest(point, this._addMoveDone)) return this
+    return super.hitTestSelf(point)
+  }
+
+  handlePointerDown(point: Point): boolean {
+    if (moveButtonHitTest(point, this._addMoveDone)) {
+      this._onAddMove?.()
+      this._addMoveDone = true
+      return true
+    }
+    return super.handlePointerDown(point)
+  }
+
+  override serializeState(): Record<string, unknown> {
+    return { ...super.serializeState(), addMoveDone: this._addMoveDone }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    super.deserializeState(state)
+    if (typeof state.addMoveDone === 'boolean') this._addMoveDone = state.addMoveDone
   }
 
   // ----------------------------------------------------------

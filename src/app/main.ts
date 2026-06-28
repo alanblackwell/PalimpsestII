@@ -41,6 +41,7 @@ import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
 import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
 import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
+import { TransformLayer }    from '../layers/TransformLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
@@ -171,6 +172,8 @@ function postInsertLayer(newLayer: Layer): void {
   }
 
   if (newLayer instanceof ClipRectLayer || newLayer instanceof ClipEllipseLayer || newLayer instanceof ClipPathLayer || newLayer instanceof ClipDrawingLayer) {
+    wireClipShapeLayer(newLayer)
+
     // The hidden helper is a plain MaskLayer directly below the Clip layer,
     // with no handles of its own — its content tracks the Clip layer's own
     // shape mask (setMaskTracker) and is bound to maskSlot so it can be
@@ -218,6 +221,29 @@ function wireAnimPathLayer(animPath: AnimPathLayer): void {
     BindingLayer.create(animPath, amount.ySlot)
     postInsertLayer(amount)
     refreshStack()   // no arg → current selection (animPath) unchanged
+  })
+}
+
+// Wire a Clip<Shape> layer's bottom "Move" convenience button. Pressing it
+// inserts a TransformLayer above the clip layer, binds the clip as the
+// transform's image source, then sends both the clip layer and its hidden
+// mask-tracker helper to BackgroundLayer so they keep recomputing while the
+// stack stays clean.
+type ClipShapeMovable = ClipRectLayer | ClipEllipseLayer | ClipPathLayer | ClipDrawingLayer
+function wireClipShapeLayer(layer: ClipShapeMovable): void {
+  layer.setOnAddMove(() => {
+    const transform = new TransformLayer(Node.canvasWidth, Node.canvasHeight)
+    Layer.assignDebugName(transform)
+    transform.bounds = { x: X, y: 24, width: W, height: 36 }
+    // Insert transform directly above the clip layer, then remove clip from
+    // the stack: transform ends up at the clip's old position.
+    transform.insertAbove(layer)
+    BindingLayer.create(layer, transform.sourceSlot)
+    const helper = layer.hiddenHelper
+    backgroundLayer.add(layer)
+    if (helper !== null) backgroundLayer.add(helper)
+    postInsertLayer(transform)
+    refreshStack(transform)
   })
 }
 
@@ -513,15 +539,21 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   }
   // Restore callbacks on any layers that need post-insert wiring —
   // Persistence.deserialize doesn't call main.ts callbacks.
+  const isClipShapeMovable = (l: Layer): l is ClipShapeMovable =>
+    l instanceof ClipRectLayer || l instanceof ClipEllipseLayer ||
+    l instanceof ClipPathLayer || l instanceof ClipDrawingLayer
+
   let scanL: Layer | null = root
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer) scanL.setEjectCallback(() => refreshStack())
     if (scanL instanceof AnimPathLayer)   wireAnimPathLayer(scanL)
+    if (isClipShapeMovable(scanL))        wireClipShapeLayer(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
+    if (isClipShapeMovable(archived))        wireClipShapeLayer(archived)
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)
