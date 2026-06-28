@@ -539,11 +539,14 @@ update tick (gated by the `delay` slider, log-scaled), it fades the cache by
 - `delaySlot` (Amount) — `0` = update every frame; `1` = frozen; log-scaled
   so `0.5` ≈ every 10 frames. Slider suspends on touch.
 
-### `LineLayer` — now produces `Image`
+### `LineLayer` — produces `Image` and `Mask`
 
-`LineLayer` already rendered into a private `_canvas: OffscreenCanvas`. It now
-declares `ValueType.Image` and implements `ImageSource` (returning that canvas),
-so it can be bound to any Image slot (e.g. `MotionBlurLayer.imageSlot`).
+`LineLayer` renders into a private `_canvas: OffscreenCanvas` and declares
+`ValueType.Image` / `ValueType.Mask`. A second `_maskCanvas` is maintained in
+parallel: rendered in opaque white with the same geometry (stroke width,
+arrowheads), so the mask covers exactly the visible line pixels rather than a
+filled interior. A **Mask** convenience button is wired via `wireLineMaskButton`
+in `postInsertLayer`.
 
 ### `TransformLayer` — reflect (mirror)
 
@@ -566,6 +569,69 @@ Right-click on a slot row still opens the binding inspector in all modes,
 because `InteractionSystem._onContext` calls `selected.hitTestSlot()` directly
 and never goes through `hitTestSelf`. `ClipDrawingLayer` inherits this
 behaviour from `MaskLayer`.
+
+### `StrokeLayer` — open Catmull-Rom spline
+
+`StrokeLayer extends PathLayer` as a **non-closed** (`_closedPath = false`) spline.
+Key differences from `PathLayer`:
+
+- **Freehand drawing**: pointer-down/move collects raw points; pointer-up applies
+  Ramer-Douglas-Peucker simplification (ε=8px) to produce sparse Catmull-Rom
+  control points, then exits draw mode.
+- **Control-point editing**: after the first draw, handles work exactly like
+  `PathLayer` (drag to move, click curve to insert, right-click to remove).
+- **startSlot / endSlot** (Point) — pin the first/last control point to a
+  `PointLayer` source.
+- **Arc-length `samplePerimeter`** — builds a 200-sample lookup table so
+  `AnimPath` travels at uniform speed along the open stroke.
+- **Auto-closure**: when endpoints come within `CLOSE_THRESHOLD = 20px`, the
+  duplicate endpoint is popped and `setOnClose` callback fires. `postInsertLayer`
+  wires this to archive the `StrokeLayer` and insert a plain `PathLayer` carrying
+  the same visual state via `applyStateSnapshot`.
+- **Mask is stroke region** — overrides `_maskFilled()` to return `false`, so the
+  ShapeLayer mask canvas is rendered in stroke mode (round cap/join, stroke width)
+  matching the visible stroke.
+- **Mask / Animate convenience buttons** — inherited from ShapeLayer via PathLayer.
+  `blockPixelPick = true` while in draw mode.
+
+`PathLayer` was extended to support StrokeLayer and future open-spline subclasses:
+- `protected _closedPath = true` — set to `false` by StrokeLayer.
+- `export function samplePathOpen(points, t, r)` — open-spline variant of `samplePath` with phantom-clamping at boundaries.
+- `protected get _minPoints(): number` — PathLayer returns 3; StrokeLayer overrides to 2.
+- `protected _onHandleDragStart(): void {}` — hook called before any canvas-space handle drag; StrokeLayer overrides to suspend `startSlot`/`endSlot`.
+- `applyStateSnapshot(snap)` — copies visual state (colour, opacity, scale, radius, strokeWidth, filled) from a `StrokeStateSnapshot`; used during StrokeLayer → PathLayer conversion.
+
+### `ShapeLayer` — `_maskFilled()` hook
+
+`protected _maskFilled(): boolean { return true }` controls whether
+`_updateOffscreens()` renders the mask canvas in fill mode (default) or stroke
+mode. `StrokeLayer` overrides to `false` so the mask matches the visible stroke
+band rather than the filled interior. Override this in any future ShapeLayer
+subclass that renders as a stroke rather than a filled shape.
+
+### Mask convenience buttons — TextLayer and LineLayer
+
+`TextLayer` and `LineLayer` have **Mask** convenience buttons (same visual style
+as `ShapeLayer`'s, using `Mask` accent `#cfcf7e`). Because they don't extend
+`ShapeLayer`, the button is implemented inline in each layer:
+- Fields: `_addMaskDone`, `_onAddMask`, `setOnAddMask(fn)`
+- Rendering: `_renderMaskBtn(ctx)` called from `renderOverlay` — draws only when
+  `_onAddMask !== null` and `!_addMaskDone`
+- Hit testing / pointer handling added to `hitTestSelf` / `handlePointerDown`
+- `addMaskDone` persisted in `serializeState`/`deserializeState`
+
+Wiring: `wireTextMaskButton` / `wireLineMaskButton` in `main.ts`, called from
+`postInsertLayer` and the `applyLoadedSession` scan loop (same pattern as
+`wireMaskButton` for `ShapeLayer`).
+
+### Slot label convention
+
+All `ParameterSlot` constructors should use a descriptive label string (third
+argument), not the default `'amount'`. Slots updated this session: TextLayer
+`scaleSlot` → `'scale'`; DirectionLayer `_magnitudeSlot` → `'magnitude'`;
+CompositeLayer `_opacitySlot` → `'opacity'`; AnimationPathLayer `_posSlot` →
+`'position'`; RateLayer `_timeSlot` → `'time'`; SequencerLayer `_rateSlot` →
+`'rate'`; MathLayer `_slotA` → `'a'`, `_slotB` → `'b'`.
 
 ### `FilterLayer` — `gradient-map` filter
 
