@@ -67,6 +67,24 @@ function samplePath(points: Point[], t: number, r: number): Point {
   )
 }
 
+// Open (non-wrapping) Catmull-Rom: t ∈ [0,1] maps over n-1 segments.
+// Boundary points are clamped (first/last control point repeated as phantom).
+export function samplePathOpen(points: Point[], t: number, r: number): Point {
+  const n = points.length
+  if (n === 0) return { x: 0, y: 0 }
+  if (n === 1) return { ...points[0]! }
+  const clamped = Math.max(0, Math.min(1, t))
+  if (clamped >= 1) return { ...points[n - 1]! }
+  const fi = clamped * (n - 1)
+  const i  = Math.min(Math.floor(fi), n - 2)
+  const u  = fi - i
+  const P0 = i > 0     ? points[i - 1]! : points[0]!
+  const P1 = points[i]!
+  const P2 = points[i + 1]!
+  const P3 = i + 2 < n ? points[i + 2]! : points[n - 1]!
+  return catmullRom(P0, P1, P2, P3, u, r)
+}
+
 function rotatePoint(p: Point, c: Point, angle: number): Point {
   const cos = Math.cos(angle), sin = Math.sin(angle)
   const dx = p.x - c.x, dy = p.y - c.y
@@ -125,13 +143,23 @@ export class PathLayer extends ShapeLayer {
   private _dragStartCenter: Point = { x: 0, y: 0 }
   private _dragStartAngle:  number = 0
 
-  private _radius          = 0.5
+  protected _radius          = 0.5
   private _radiusSliderDrag = false
   readonly radiusSlot:     ParameterSlot
 
   // Edge snap guide lines (set during move/point drags, cleared on pointer-up)
   private _pathEdgeSnapX: number | null = null
   private _pathEdgeSnapY: number | null = null
+
+  // true = closed Catmull-Rom loop; false = open spline (StrokeLayer).
+  protected _closedPath = true
+
+  // Subclasses override this getter to change the minimum point count.
+  protected get _minPoints(): number { return MIN_POINTS }
+
+  // Hook called at the start of every canvas-space handle drag (center, size,
+  // rotate, or individual control point). Subclasses override to suspend slots.
+  protected _onHandleDragStart(): void {}
 
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
@@ -231,11 +259,14 @@ export class PathLayer extends ShapeLayer {
 
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
-      const pt = samplePath(this._points, i / SAMPLES, this._radius)
+      const t  = i / SAMPLES
+      const pt = this._closedPath
+        ? samplePath(this._points, t % 1, this._radius)
+        : samplePathOpen(this._points, t, this._radius)
       if (i === 0) ctx.moveTo(pt.x, pt.y)
       else         ctx.lineTo(pt.x, pt.y)
     }
-    ctx.closePath()
+    if (this._closedPath) ctx.closePath()
     if (filled) {
       ctx.fillStyle = css
       ctx.fill()
@@ -250,7 +281,9 @@ export class PathLayer extends ShapeLayer {
 
   /** Sample a point on the spline perimeter. */
   samplePerimeter(t: number): Point {
-    const p = samplePath(this._points, t, this._radius)
+    const p = this._closedPath
+      ? samplePath(this._points, t, this._radius)
+      : samplePathOpen(this._points, Math.max(0, Math.min(1, t)), this._radius)
     if (this._scale === 1) return p
     const c = this._centroid()
     return { x: c.x + (p.x - c.x) * this._scale, y: c.y + (p.y - c.y) * this._scale }
@@ -325,7 +358,7 @@ export class PathLayer extends ShapeLayer {
     this.markDirty()
   }
 
-  private _drawRadiusPill(ctx: Ctx2D): void {
+  protected _drawRadiusPill(ctx: Ctx2D): void {
     const rRow = this._radiusRowBounds()
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
@@ -438,14 +471,17 @@ export class PathLayer extends ShapeLayer {
       if (this.positionSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.positionSlot)?.toggle()
       }
+      this._onHandleDragStart()
       this._specialDrag     = 'center'
       this._dragStartPtr    = { ...point }
       this._dragStartPts    = this._points.map(p => ({ ...p }))
+      this._dragStartCenter = c
       this.markDirty()
       return true
     }
     const sh = this._sizeHandlePos()
     if ((point.x - sh.x) ** 2 + (point.y - sh.y) ** 2 <= r2) {
+      this._onHandleDragStart()
       this._specialDrag     = 'size'
       this._dragStartPtr    = { ...point }
       this._dragStartPts    = this._points.map(p => ({ ...p }))
@@ -458,6 +494,7 @@ export class PathLayer extends ShapeLayer {
       if (this.rotationSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this.rotationSlot)?.toggle()
       }
+      this._onHandleDragStart()
       this._specialDrag     = 'rotate'
       this._dragStartPtr    = { ...point }
       this._dragStartPts    = this._points.map(p => ({ ...p }))
@@ -468,6 +505,7 @@ export class PathLayer extends ShapeLayer {
     }
     const idx = this._nearest(point)
     if (idx >= 0) {
+      this._onHandleDragStart()
       this._dragIndex = idx
       this.markDirty()
       return true
@@ -477,6 +515,7 @@ export class PathLayer extends ShapeLayer {
     // new point is dragged.
     const hit = this._curveHit(point)
     if (hit !== null) {
+      this._onHandleDragStart()
       this._points.splice(hit.insertAt, 0, { ...hit.pos })
       this._dragIndex = hit.insertAt
       this.markDirty()
@@ -521,7 +560,7 @@ export class PathLayer extends ShapeLayer {
 
   /** Right-click on a control point removes it. */
   handleContextMenu(point: Point): boolean {
-    if (this._points.length <= MIN_POINTS) return false
+    if (this._points.length <= this._minPoints) return false
     const idx = this._nearest(point)
     if (idx < 0) return false
     this._points.splice(idx, 1)
@@ -534,6 +573,7 @@ export class PathLayer extends ShapeLayer {
     if (this.positionSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this.positionSlot)?.toggle()
     }
+    this._onHandleDragStart()
     this._specialDrag     = 'center'
     this._dragStartPtr    = { ...point }
     this._dragStartPts    = this._points.map(p => ({ ...p }))
@@ -628,7 +668,7 @@ export class PathLayer extends ShapeLayer {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _centroid(): Point {
+  protected _centroid(): Point {
     if (this._points.length === 0) return { x: 0, y: 0 }
     const x = this._points.reduce((s, p) => s + p.x, 0) / this._points.length
     const y = this._points.reduce((s, p) => s + p.y, 0) / this._points.length
@@ -672,13 +712,17 @@ export class PathLayer extends ShapeLayer {
     const r2 = HIT_R * HIT_R
     let bestT = 0, bestD2 = Infinity, bestPos: Point = { x: 0, y: 0 }
     for (let i = 0; i <= SAMPLES; i++) {
-      const t  = (i / SAMPLES) % 1
-      const pt = samplePath(this._points, t, this._radius)
+      const t  = i / SAMPLES
+      const pt = this._closedPath
+        ? samplePath(this._points, t % 1, this._radius)
+        : samplePathOpen(this._points, t, this._radius)
       const d2 = (p.x - pt.x) ** 2 + (p.y - pt.y) ** 2
       if (d2 < bestD2) { bestD2 = d2; bestT = t; bestPos = pt }
     }
     if (bestD2 > r2) return null
-    const segIndex = Math.min(n - 1, Math.floor(bestT * n))
+    const segIndex = this._closedPath
+      ? Math.min(n - 1, Math.floor(bestT * n))
+      : Math.min(n - 2, Math.floor(bestT * (n - 1)))
     return { insertAt: segIndex + 1, pos: bestPos }
   }
 
@@ -739,11 +783,14 @@ export class PathLayer extends ShapeLayer {
     // Spline outline (edit-mode overlay)
     ctx.beginPath()
     for (let i = 0; i <= SAMPLES; i++) {
-      const pt = samplePath(this._points, i / SAMPLES, this._radius)
+      const t  = i / SAMPLES
+      const pt = this._closedPath
+        ? samplePath(this._points, t % 1, this._radius)
+        : samplePathOpen(this._points, t, this._radius)
       if (i === 0) ctx.moveTo(pt.x, pt.y)
       else         ctx.lineTo(pt.x, pt.y)
     }
-    ctx.closePath()
+    if (this._closedPath) ctx.closePath()
     ctx.strokeStyle = 'rgba(232,160,74,0.70)'
     ctx.lineWidth   = 1.5
     ctx.setLineDash([])

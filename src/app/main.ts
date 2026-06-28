@@ -125,11 +125,10 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof ImageLayer) {
     wireImageLayer(newLayer)
   }
-  if ((newLayer instanceof ShapeLayer &&
-       !(newLayer instanceof ClipRectLayer) &&
-       !(newLayer instanceof ClipEllipseLayer) &&
-       !(newLayer instanceof ClipPathLayer)) ||
-      newLayer instanceof StrokeLayer) {
+  if (newLayer instanceof ShapeLayer &&
+      !(newLayer instanceof ClipRectLayer) &&
+      !(newLayer instanceof ClipEllipseLayer) &&
+      !(newLayer instanceof ClipPathLayer)) {
     wireAnimatableShape(newLayer)
   }
   if (newLayer instanceof ShapeLayer &&
@@ -271,7 +270,7 @@ function wireImageLayer(layer: ImageLayer): void {
 // Wire a shape or stroke layer's "Animate" convenience button. Pressing it
 // inserts an AnimPathLayer above the shape, binds the shape as its perimeter
 // source, and selects the new layer. The shape stays in the stack.
-function wireAnimatableShape(layer: ShapeLayer | StrokeLayer): void {
+function wireAnimatableShape(layer: ShapeLayer): void {
   layer.setOnAddAnimate(() => {
     const animPath = new AnimPathLayer(Node.canvasWidth / 2, Node.canvasHeight / 2)
     Layer.assignDebugName(animPath)
@@ -403,7 +402,7 @@ function findSuitableMaskShape(consumer: Layer): Layer | null {
   for (let l: Layer | null = consumer.layerBelow; l !== null; l = l.layerBelow) {
     if (l.isInfrastructure || l.isHiddenHelper) continue
     if (l instanceof RectLayer || l instanceof EllipseLayer || l instanceof PathLayer ||
-        l instanceof TextLayer || l instanceof StrokeLayer) return l
+        l instanceof TextLayer) return l
   }
   return null
 }
@@ -614,8 +613,8 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     l instanceof ClipRectLayer || l instanceof ClipEllipseLayer ||
     l instanceof ClipPathLayer || l instanceof ClipDrawingLayer
 
-  const isAnimatableShape = (l: Layer): l is ShapeLayer | StrokeLayer =>
-    (l instanceof ShapeLayer && !isClipShapeMovable(l)) || l instanceof StrokeLayer
+  const isAnimatableShape = (l: Layer): l is ShapeLayer =>
+    l instanceof ShapeLayer && !isClipShapeMovable(l)
 
   let scanL: Layer | null = root
   while (scanL !== null) {
