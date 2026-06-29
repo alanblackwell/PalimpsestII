@@ -36,7 +36,8 @@ import { StrokeLayer }     from './StrokeLayer.js'
 import { RotateLayer }     from './RotateLayer.js'
 import { LineLayer }       from './LineLayer.js'
 import { WarpLayer }       from './WarpLayer.js'
-import { MotionBlurLayer } from './MotionBlurLayer.js'
+import { MotionBlurLayer }    from './MotionBlurLayer.js'
+import { ArtisticTestLayer } from './ArtisticTestLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -170,8 +171,9 @@ const COLUMNS: ColDef[] = [
       { label: 'Collect',    colour: '#7ecf7e', factory: () => new CollectionLayer() },
     ],
     bottom: [
-      { label: 'Load', colour: '#a0a4b8', kind: 'load' },
-      { label: 'Save', colour: '#a0a4b8', kind: 'save' },
+      { label: 'Load',    colour: '#a0a4b8', kind: 'load' },
+      { label: 'Save',    colour: '#a0a4b8', kind: 'save' },
+      { label: 'ArtTest', colour: '#7ecf7e', factory: () => new ArtisticTestLayer(), selectAfterCreate: true },
     ],
   },
 ]

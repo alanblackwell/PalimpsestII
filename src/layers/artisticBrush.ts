@@ -1,0 +1,552 @@
+// ------------------------------------------------------------
+// artisticBrush.ts — shared drawing infrastructure
+// for non-outline artistic rendering (Cases 0–3).
+// ------------------------------------------------------------
+//
+// All functions are pure / stateless. Callers are responsible
+// for save/restore around calls if needed.
+//
+// Seeded noise: pass a stable integer seed (e.g. from
+// hashString(layer.debugName)) so identical parameters always
+// produce identical output — required by the dirty/cache model.
+
+// ── Seeded PRNG ───────────────────────────────────────────────
+
+// Mulberry32 — fast, high-quality 32-bit PRNG
+export function mulberry32(seed: number): () => number {
+  let s = seed >>> 0
+  return () => {
+    s += 0x6D2B79F5
+    let t = Math.imul(s ^ (s >>> 15), s | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 0xFFFFFFFF
+  }
+}
+
+// djb2 string → integer hash
+export function hashString(s: string): number {
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0
+  return h
+}
+
+// ── 1-D value noise ──────────────────────────────────────────
+// Output range [-1, +1], period = 64 lattice pts, cosine interp.
+
+const LATTICE = 64
+
+export function makeNoise1D(seed: number): (t: number) => number {
+  const rng   = mulberry32(seed)
+  const table = Float32Array.from({ length: LATTICE + 1 }, () => rng() * 2 - 1)
+  table[LATTICE] = table[0]!
+  return (t: number): number => {
+    const ti = (t % LATTICE + LATTICE) % LATTICE
+    const i  = ti | 0
+    const f  = ti - i
+    const c  = 0.5 - 0.5 * Math.cos(f * Math.PI)
+    return table[i]! * (1 - c) + table[i + 1]! * c
+  }
+}
+
+// ── Arc-length parameterised path sampler ─────────────────────
+
+export interface PathSample {
+  x:  number
+  y:  number
+  nx: number  // outward normal x (unit)
+  ny: number  // outward normal y (unit)
+  t:  number  // arc-length parameter ∈ [0, 1]
+}
+
+export function samplePath(
+  pts:     ReadonlyArray<{ x: number; y: number }>,
+  spacing: number,
+  closed:  boolean,
+): PathSample[] {
+  if (pts.length < 2) return []
+  const n    = pts.length
+  const segs = closed ? n : n - 1
+  const segLengths: number[] = []
+  let total = 0
+  for (let i = 0; i < segs; i++) {
+    const a = pts[i]!, b = pts[(i + 1) % n]!
+    const d = Math.hypot(b.x - a.x, b.y - a.y)
+    segLengths.push(d)
+    total += d
+  }
+  if (total === 0) return []
+
+  let segIdx = 0, segPos = 0
+  const numSamples = Math.max(2, Math.ceil(total / spacing))
+  const result: PathSample[] = []
+
+  for (let si = 0; si < numSamples; si++) {
+    const targetArc = (si / (numSamples - 1)) * total
+    while (segIdx < segs - 1 && segPos + segLengths[segIdx]! <= targetArc) {
+      segPos += segLengths[segIdx]!
+      segIdx++
+    }
+    const segLen = segLengths[segIdx] ?? 1
+    const alpha  = segLen > 0 ? (targetArc - segPos) / segLen : 0
+    const a = pts[segIdx]!, b = pts[(segIdx + 1) % n]!
+    const x = a.x + (b.x - a.x) * alpha
+    const y = a.y + (b.y - a.y) * alpha
+    const tx = b.x - a.x, ty = b.y - a.y
+    const tl = Math.hypot(tx, ty) || 1
+    result.push({ x, y, nx: -ty / tl, ny: tx / tl, t: targetArc / total })
+  }
+  return result
+}
+
+// ── Ribbon polygon builder ────────────────────────────────────
+
+export function fillRibbon(
+  ctx:     CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  samples: PathSample[],
+  widthAt: (s: PathSample, i: number) => number,
+): void {
+  if (samples.length < 2) return
+  const left:  { x: number; y: number }[] = []
+  const right: { x: number; y: number }[] = []
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i]!, hw = widthAt(s, i) / 2
+    left.push({ x: s.x + s.nx * hw, y: s.y + s.ny * hw })
+    right.push({ x: s.x - s.nx * hw, y: s.y - s.ny * hw })
+  }
+  ctx.beginPath()
+  ctx.moveTo(left[0]!.x, left[0]!.y)
+  for (let i = 1; i < left.length; i++)  ctx.lineTo(left[i]!.x,  left[i]!.y)
+  for (let i = right.length - 1; i >= 0; i--) ctx.lineTo(right[i]!.x, right[i]!.y)
+  ctx.closePath()
+  ctx.fill()
+}
+
+// ── smoothstep ───────────────────────────────────────────────
+
+export function smoothstep(edge0: number, edge1: number, t: number): number {
+  const x = Math.max(0, Math.min(1, (t - edge0) / (edge1 - edge0)))
+  return x * x * (3 - 2 * x)
+}
+
+// ============================================================
+// Case 0 — Torn paper edges
+// ============================================================
+
+export interface TornPaperParams {
+  /** Tear depth as a multiple of strokeSize. Default 1.2. Range 0.1–4.0. */
+  amplitude:     number
+  /**
+   * Noise frequency as a direct ratio to stroke width — larger = finer tears at any stroke size.
+   * The value is used directly (not divided by strokeSize). Default 0.02. Range 0.005–0.50.
+   */
+  frequency:     number
+  /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 0. Range 0.0–8.0. */
+  feather:       number
+  /**
+   * Noise-driven transparency variation along the torn edge.
+   * 0 = solid edge; 1 = deep irregular gaps, like thin paper fibres.
+   * Default 0.35. Range 0.0–1.0.
+   */
+  edgeVariation: number
+}
+
+export const TORN_PAPER_DEFAULTS: TornPaperParams = {
+  amplitude:     1.2,
+  frequency:     0.02,
+  feather:       0,
+  edgeVariation: 0.35,
+}
+
+export function fillTornPaper(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  p:          TornPaperParams = TORN_PAPER_DEFAULTS,
+  secondPass  = false,
+): void {
+  const noise     = makeNoise1D(seed)
+  const amplitude = strokeSize * p.amplitude
+  const freq      = p.frequency
+  const spacing   = Math.max(2, strokeSize * 0.4)
+
+  const samples = samplePath(pts, spacing, true)
+  if (samples.length < 3) return
+
+  const displaced = samples.map((s, i) => {
+    const d = noise(i * freq * LATTICE) * amplitude
+    return { x: s.x + s.nx * d, y: s.y + s.ny * d }
+  })
+
+  ctx.beginPath()
+  ctx.moveTo(displaced[0]!.x, displaced[0]!.y)
+  for (let i = 1; i < displaced.length; i++) ctx.lineTo(displaced[i]!.x, displaced[i]!.y)
+  ctx.closePath()
+
+  ctx.save()
+  ctx.fillStyle = colour
+  if (p.feather > 0) {
+    ctx.shadowColor = colour
+    ctx.shadowBlur  = p.feather
+  }
+  ctx.fill()
+  ctx.restore()
+
+  // Punch irregular transparency into the torn edge using destination-out strokes.
+  // Each segment of the displaced boundary is erased at a noise-driven alpha so
+  // some edge sections are opaque and others semi-transparent, like torn paper fibres.
+  if (p.edgeVariation > 0) {
+    const noiseEdge = makeNoise1D(seed ^ 0x33445566)
+    ctx.save()
+    ctx.globalCompositeOperation = 'destination-out'
+    ctx.lineWidth   = Math.max(1, amplitude * 0.45)
+    ctx.lineCap     = 'round'
+    ctx.lineJoin    = 'round'
+    ctx.strokeStyle = '#000000'
+    for (let i = 0; i < displaced.length - 1; i++) {
+      const d = displaced[i]!, e = displaced[(i + 1) % displaced.length]!
+      ctx.globalAlpha = (noiseEdge(i / displaced.length * LATTICE) * 0.5 + 0.5) * p.edgeVariation
+      ctx.beginPath()
+      ctx.moveTo(d.x, d.y)
+      ctx.lineTo(e.x, e.y)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  if (secondPass) {
+    ctx.save()
+    ctx.strokeStyle = 'rgba(0,0,0,0.22)'
+    ctx.lineWidth   = 1.2
+    ctx.beginPath()
+    ctx.moveTo(displaced[0]!.x, displaced[0]!.y)
+    for (let i = 1; i < displaced.length; i++) ctx.lineTo(displaced[i]!.x, displaced[i]!.y)
+    ctx.closePath()
+    ctx.stroke()
+    ctx.restore()
+  }
+}
+
+// ============================================================
+// Case 1 — Thin pencil line
+// ============================================================
+
+export interface PencilParams {
+  /** Minimum segment opacity — how faint the line gets. Default 0.15. Range 0.0–0.50. */
+  minAlpha: number
+  /** Maximum segment opacity — how dark the line gets. Default 0.65. Range 0.30–1.0. */
+  maxAlpha: number
+  /** Perpendicular wobble in pixels. Default 1.5. Range 0.0–6.0. */
+  jitter:   number
+}
+
+export const PENCIL_DEFAULTS: PencilParams = {
+  minAlpha: 0.15,
+  maxAlpha: 0.65,
+  jitter:   1.5,
+}
+
+export function drawPencilLine(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  p:          PencilParams = PENCIL_DEFAULTS,
+  secondPass  = false,
+): void {
+  if (pts.length < 2) return
+  const noise    = makeNoise1D(seed)
+  const noise2   = makeNoise1D(seed ^ 0x9E3779B9)
+  const rngSpc   = mulberry32(seed ^ 0x4A3B2C1D)  // spacing variation — fixed seed for stable re-render
+  const fine     = samplePath(pts, 3, false)       // 3 px fine samples; hop size gives variable spacing
+  if (fine.length < 2) return
+
+  ctx.save()
+  ctx.lineCap   = 'round'
+  ctx.lineJoin  = 'round'
+  ctx.lineWidth = Math.max(0.5, strokeSize * 0.6)
+  ctx.strokeStyle = colour
+
+  const alphaRange = p.maxAlpha - p.minAlpha
+
+  // Walk with variable hops: 3–7 fine samples ≈ 9–21 px per drawn segment
+  let fi = 0
+  while (fi < fine.length - 1) {
+    const hop = 3 + Math.floor(rngSpc() * 5)
+    const s   = fine[fi]!
+    const fi2 = Math.min(fi + hop, fine.length - 1)
+    const e   = fine[fi2]!
+    ctx.globalAlpha = p.minAlpha + alphaRange * (noise(s.t * LATTICE) * 0.5 + 0.5)
+    const jitter    = noise2(s.t * LATTICE) * p.jitter
+    ctx.beginPath()
+    ctx.moveTo(s.x + s.nx * jitter, s.y + s.ny * jitter)
+    ctx.lineTo(e.x + e.nx * jitter, e.y + e.ny * jitter)
+    ctx.stroke()
+    fi = fi2
+  }
+
+  if (secondPass) {
+    const rngSpc2 = mulberry32(seed ^ 0xF1E2D3C4)
+    ctx.lineWidth = Math.max(0.3, strokeSize * 0.3)
+    let fi2 = 0
+    while (fi2 < fine.length - 1) {
+      const hop = 3 + Math.floor(rngSpc2() * 5)
+      const s   = fine[fi2]!
+      const fi3 = Math.min(fi2 + hop, fine.length - 1)
+      const e   = fine[fi3]!
+      ctx.globalAlpha = 0.08 + 0.12 * (noise(s.t * LATTICE * 1.7) * 0.5 + 0.5)
+      const jitter    = noise2(s.t * LATTICE * 2.1) * p.jitter * 2
+      ctx.beginPath()
+      ctx.moveTo(s.x + s.nx * jitter, s.y + s.ny * jitter)
+      ctx.lineTo(e.x + e.nx * jitter, e.y + e.ny * jitter)
+      ctx.stroke()
+      fi2 = fi3
+    }
+  }
+
+  ctx.restore()
+}
+
+// ============================================================
+// Case 2 — Medium ink nib pen
+// ============================================================
+
+export interface NibPenParams {
+  /** Angle (degrees) at which the nib is widest. Default 45. Range 0–180. */
+  nibAngle:     number
+  /**
+   * Minimum width as a fraction of strokeSize (when stroke is parallel to nib).
+   * Default 0.40. Range 0.0–0.90.
+   */
+  minWidthRatio: number
+  /** Width variation from noise — higher = more uneven. Default 0.25. Range 0.0–0.60. */
+  widthVariation: number
+  /** Bleed frequency — 0 = none, 1 = heavy. Default 0.50. Range 0.0–1.0. */
+  bleedDensity: number
+  /** Splatter dot radius as a multiple of the base size. Default 1.0. Range 0.1–3.0. */
+  splatterSize: number
+  /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 1.5. Range 0.0–8.0. */
+  feather: number
+}
+
+export const NIB_PEN_DEFAULTS: NibPenParams = {
+  nibAngle:       45,
+  minWidthRatio:  0.40,
+  widthVariation: 0.25,
+  bleedDensity:   0.50,
+  splatterSize:   1.0,
+  feather:        1.5,
+}
+
+export function drawNibPen(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  p:          NibPenParams = NIB_PEN_DEFAULTS,
+  secondPass  = false,
+): void {
+  if (pts.length < 2) return
+  const noise     = makeNoise1D(seed)
+  const nibRad    = p.nibAngle * (Math.PI / 180)
+  const samples   = samplePath(pts, 4, false)
+  if (samples.length < 2) return
+
+  const angles = samples.map((s, i) => {
+    const next = samples[i + 1] ?? samples[i]!
+    return Math.atan2(next.y - s.y, next.x - s.x)
+  })
+
+  ctx.save()
+  ctx.fillStyle  = colour
+  if (p.feather > 0) {
+    ctx.shadowColor = colour
+    ctx.shadowBlur  = p.feather
+  }
+  fillRibbon(ctx, samples, (s, i) => {
+    const sinA = Math.sin(angles[i]! - nibRad)
+    const nib  = p.minWidthRatio + (1 - p.minWidthRatio) * sinA * sinA
+    const noisy = strokeSize * nib * (1 + p.widthVariation * noise(i * 0.9 / samples.length * LATTICE))
+    return Math.max(0.5, noisy)
+  })
+  ctx.restore()
+
+  // ── Far splatters: fans of dots scattered 1.5–5.5× strokeSize away ──
+  // Always rendered when bleedDensity > 0; not gated on secondPass.
+  // Separate seed keeps pattern independent of the edge-bleed RNG.
+  if (p.bleedDensity > 0) {
+    const rngSplat     = mulberry32(seed ^ 0x7A2B3C4D)
+    const numSplatters = Math.max(2, Math.round(samples.length * 0.045 * p.bleedDensity))
+    ctx.save()
+    ctx.fillStyle = colour
+    for (let k = 0; k < numSplatters; k++) {
+      const si     = Math.floor(rngSplat() * samples.length)
+      const anchor = samples[si]!
+      const tang   = angles[si]!
+      // One larger anchor drop per event, then 4–8 satellite dots
+      const anchorR = Math.max(1.5, strokeSize * (0.12 + rngSplat() * 0.18)) * p.splatterSize
+      const anchorDir = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
+      const anchorDist = strokeSize * (1.2 + rngSplat() * 2.5)
+      ctx.globalAlpha = 0.35 + rngSplat() * 0.35
+      ctx.beginPath()
+      ctx.arc(
+        anchor.x + Math.cos(anchorDir) * anchorDist,
+        anchor.y + Math.sin(anchorDir) * anchorDist,
+        anchorR, 0, Math.PI * 2,
+      )
+      ctx.fill()
+      // Satellite dots in a forward-biased fan (±60° around tangent)
+      const numDots = 4 + Math.floor(rngSplat() * 5)
+      for (let d = 0; d < numDots; d++) {
+        const dir  = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
+        const dist = strokeSize * (1.5 + rngSplat() * 4)
+        const dotR = Math.max(0.8, strokeSize * (0.04 + rngSplat() * 0.12)) * p.splatterSize
+        ctx.globalAlpha = 0.15 + rngSplat() * 0.45
+        ctx.beginPath()
+        ctx.arc(
+          anchor.x + Math.cos(dir) * dist,
+          anchor.y + Math.sin(dir) * dist,
+          dotR, 0, Math.PI * 2,
+        )
+        ctx.fill()
+      }
+    }
+    ctx.restore()
+  }
+
+  if (secondPass) {
+    ctx.save()
+
+    // ── Edge bleeds: small ellipses and gradient blots close to the stroke ──
+    const rng    = mulberry32(seed ^ 0xDEADBEEF)
+    const smallP = 0.08 * p.bleedDensity
+    const largeP = smallP + 0.012 * p.bleedDensity
+    for (let i = 1; i < samples.length - 1; i++) {
+      const s = samples[i]!
+      const r = rng()
+      if (r < smallP) {
+        const br = strokeSize * (0.3 + rng() * 0.2)
+        const bx = s.x + s.nx * (strokeSize * 0.5 + rng() * 2 - 1)
+        const by = s.y + s.ny * (strokeSize * 0.5 + rng() * 2 - 1)
+        ctx.globalAlpha = 0.45 + rng() * 0.2
+        ctx.fillStyle   = colour
+        ctx.beginPath()
+        ctx.ellipse(bx, by, br * (0.8 + rng() * 0.4), br, angles[i]!, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (r < largeP) {
+        const br   = strokeSize * (0.7 + rng() * 0.3)
+        const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, br)
+        grad.addColorStop(0, colour)
+        grad.addColorStop(1, 'transparent')
+        ctx.globalAlpha = 0.38
+        ctx.fillStyle   = grad
+        ctx.beginPath()
+        ctx.arc(s.x, s.y, br, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+
+    ctx.restore()
+  }
+}
+
+// ============================================================
+// Case 3 — Thick brush calligraphy
+// ============================================================
+
+export interface BrushParams {
+  /** Angle (degrees) of the flat brush axis — strokes perpendicular to this are widest. Default 0. Range 0–180. */
+  brushAngle: number
+  /**
+   * Minimum width as a fraction of strokeSize (when brush moves parallel to its axis).
+   * Default 0.30. Range 0.0–0.80.
+   */
+  minWidthRatio: number
+  /**
+   * Fraction of stroke length over which each end tapers to a point.
+   * Default 0.12. Range 0.0–0.35.
+   */
+  taperLength: number
+  /** Amplitude of outer-edge noise in pixels. Default 1.5. Range 0.0–6.0. */
+  edgeRoughness: number
+  /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 2.5. Range 0.0–10.0. */
+  feather: number
+}
+
+export const BRUSH_DEFAULTS: BrushParams = {
+  brushAngle:    0,
+  minWidthRatio: 0.30,
+  taperLength:   0.12,
+  edgeRoughness: 1.5,
+  feather:       2.5,
+}
+
+export function drawCalligraphyBrush(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  p:          BrushParams = BRUSH_DEFAULTS,
+  secondPass  = false,
+): void {
+  if (pts.length < 2) return
+  const noiseEdge  = makeNoise1D(seed)
+  const brushRad   = p.brushAngle * (Math.PI / 180)
+  const taperEnd   = 1 - p.taperLength
+
+  const samples = samplePath(pts, 3, false)
+  if (samples.length < 2) return
+
+  const angles = samples.map((s, i) => {
+    const next = samples[i + 1] ?? samples[i]!
+    return Math.atan2(next.y - s.y, next.x - s.x)
+  })
+
+  ctx.save()
+  ctx.globalAlpha = 0.92
+  ctx.fillStyle   = colour
+  if (p.feather > 0) {
+    ctx.shadowColor = colour
+    ctx.shadowBlur  = p.feather
+  }
+
+  fillRibbon(ctx, samples, (s, i) => {
+    const dir   = Math.abs(Math.sin(angles[i]! - brushRad))
+    const dirW  = p.minWidthRatio + (1 - p.minWidthRatio) * dir
+    const taper = smoothstep(0, p.taperLength, s.t) * smoothstep(1, taperEnd, s.t)
+    const edgeN = noiseEdge(i * 1.1 / samples.length * LATTICE) * p.edgeRoughness
+    return Math.max(0, strokeSize * dirW * taper + edgeN)
+  })
+
+  if (secondPass) {
+    ctx.globalAlpha = 0.25
+    ctx.lineWidth   = 0.6
+    ctx.lineCap     = 'round'
+    const rng       = mulberry32(seed ^ 0xCAFEBABE)
+    const endRegion = Math.floor(samples.length * 0.20)
+
+    for (const [start, dir] of [[0, 1], [samples.length - 1, -1]] as [number, number][]) {
+      for (let b = 0; b < 4; b++) {
+        const spread = (rng() * 2 - 1) * strokeSize * 0.6
+        const length = strokeSize * (0.5 + rng() * 0.5)
+        ctx.globalAlpha = 0.15 + rng() * 0.18
+        ctx.strokeStyle = colour
+        const s0 = samples[start]!
+        const s1 = samples[Math.max(0, Math.min(samples.length - 1, start + dir * endRegion))]!
+        ctx.beginPath()
+        ctx.moveTo(s0.x + s0.nx * spread, s0.y + s0.ny * spread)
+        ctx.lineTo(
+          s0.x + (s1.x - s0.x) * 0.6 + s0.nx * (spread + (rng() - 0.5) * length),
+          s0.y + (s1.y - s0.y) * 0.6 + s0.ny * (spread + (rng() - 0.5) * length),
+        )
+        ctx.stroke()
+      }
+    }
+  }
+
+  ctx.restore()
+}
