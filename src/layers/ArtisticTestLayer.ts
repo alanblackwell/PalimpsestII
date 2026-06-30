@@ -47,8 +47,12 @@ const CASE_NAMES = [
   'Case 1 — Pencil (thin)',
   'Case 2 — Nib pen (medium)',
   'Case 3 — Brush calligraphy (thick)',
-  'Case 4 — Lichtenstein stroke [WIP]',
+  'Case 4 — Lichtenstein stroke',
 ]
+
+// Default stroke size per case, chosen for visual appearance.
+// Case 2 renders at (sz - 3), Case 3 at (sz - 6), so their defaults compensate.
+const CASE_DEFAULT_SIZES = [40, 2, 8, 21, 40]
 
 // ── Param slider descriptor ────────────────────────────────────
 
@@ -353,9 +357,12 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
         { label: 'feather px',  value: br.feather,       min: 0.0, max:10.0, step: 0, fmt: f1,   set: v => { br.feather       = v; this.markDirty() }, bounds: null },
       ]
       case 4: return [
-        { label: 'highlight',    value: li.highlightRatio,      min: 0.0, max: 0.5, step: 0, fmt: f2, set: v => { li.highlightRatio      = v; this.markDirty() }, bounds: null },
-        { label: 'hi-bright',    value: li.highlightBrightness, min: 1.0, max: 3.0, step: 0, fmt: f2, set: v => { li.highlightBrightness = v; this.markDirty() }, bounds: null },
-        { label: 'outline px',   value: li.outlineWidth,        min: 0.0, max: 8.0, step: 0, fmt: f2, set: v => { li.outlineWidth        = v; this.markDirty() }, bounds: null },
+        { label: 'stripes',     value: li.stripeCount,    min: 1,   max: 10,  step: 1, fmt: v => `${Math.round(v)}`, set: v => { li.stripeCount    = Math.round(v); this.markDirty() }, bounds: null },
+        { label: 'dark-ratio',  value: li.darkWidthRatio, min: 0.1, max: 2.0, step: 0, fmt: f2,                      set: v => { li.darkWidthRatio = v; this.markDirty() }, bounds: null },
+        { label: 'taper-len',   value: li.taperLength,    min: 0.0, max: 0.70,step: 0, fmt: f2,                      set: v => { li.taperLength    = v; this.markDirty() }, bounds: null },
+        { label: 'outline px',  value: li.outlineWidth,   min: 0.0, max: 8.0, step: 0, fmt: f2,                      set: v => { li.outlineWidth   = v; this.markDirty() }, bounds: null },
+        { label: 'weave',       value: li.weave,          min: 0.0, max: 1.0, step: 0, fmt: f2,                      set: v => { li.weave          = v; this.markDirty() }, bounds: null },
+        { label: 'weave-freq',  value: li.weaveFreq,      min: 0.5, max: 8.0, step: 0, fmt: f1,                      set: v => { li.weaveFreq      = v; this.markDirty() }, bounds: null },
       ]
       default: return []
     }
@@ -421,11 +428,13 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
   handlePointerDown(point: Point): boolean {
     if (this._prevBtnB && boundingBoxContains(this._prevBtnB, point)) {
-      this._caseIndex = (this._caseIndex + 4) % 5
+      this._caseIndex  = (this._caseIndex + 4) % 5
+      this._strokeSize = CASE_DEFAULT_SIZES[this._caseIndex]!
       this.markDirty(); return true
     }
     if (this._nextBtnB && boundingBoxContains(this._nextBtnB, point)) {
-      this._caseIndex = (this._caseIndex + 1) % 5
+      this._caseIndex  = (this._caseIndex + 1) % 5
+      this._strokeSize = CASE_DEFAULT_SIZES[this._caseIndex]!
       this.markDirty(); return true
     }
     if (this._secondPassB && boundingBoxContains(this._secondPassB, point)) {

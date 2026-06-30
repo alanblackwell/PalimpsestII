@@ -254,9 +254,9 @@ export interface PencilParams {
 }
 
 export const PENCIL_DEFAULTS: PencilParams = {
-  minAlpha: 0.15,
-  maxAlpha: 0.65,
-  jitter:   1.5,
+  minAlpha: 0.05,
+  maxAlpha: 0.42,
+  jitter:   0.0,
 }
 
 export function drawPencilLine(
@@ -357,17 +357,17 @@ export interface NibPenParams {
 }
 
 export const NIB_PEN_DEFAULTS: NibPenParams = {
-  nibAngle:       45,
-  minWidthRatio:  0.40,
-  widthVariation: 0.25,
-  bleedDensity:   0.50,
-  splatDensity:   0.50,
-  bleedSpread:    1.0,
-  splatterSize:   1.0,
-  feather:        1.5,
-  bleedLengthVar: 0.6,
-  bleedWidthVar:  0.5,
-  bleedAngle:     30,
+  nibAngle:       107,
+  minWidthRatio:  0.15,
+  widthVariation: 0.26,
+  bleedDensity:   1.91,
+  splatDensity:   0.70,
+  bleedSpread:    1.04,
+  splatterSize:   0.93,
+  feather:        1.4,
+  bleedLengthVar: 0.21,
+  bleedWidthVar:  1.62,
+  bleedAngle:     51,
 }
 
 export function drawNibPen(
@@ -621,48 +621,47 @@ export function drawCalligraphyBrush(
 }
 
 // ============================================================
-// Case 4 — Lichtenstein cartoon brush stroke  [PLACEHOLDER]
+// Case 4 — Lichtenstein cartoon brush stroke
+//
+// Appearance: parallel bristle stripes (alternating paint colour and
+// dark ink bands) with a hard black outline. The stripes all taper
+// together at both ends. No halftone dots on the stroke — those live
+// in the background in Lichtenstein's paintings.
 // ============================================================
-//
-// Target appearance: Roy Lichtenstein's bold, graphic, hard-edged
-// brush strokes — flat opaque fill, clean silhouette, no texture.
-// Possible additions in a later session:
-//   • Uniform-width ribbon with abrupt squared or slightly tapered ends
-//   • A parallel "highlight" swipe (lighter tint, ~20% width) offset
-//     to one side of the main stroke to suggest a painted gloss
-//   • Optional Ben-Day dot texture inside the fill area
-//   • Hard black outline stroke drawn over the ribbon edge
-//   • No feather, no noise — graphic flatness is the point
-//
-// The current stub renders a plain filled ribbon so the case is
-// selectable and produces visible output without crashing.
 
 export interface LichtensteinParams {
+  /** Number of coloured mark bands across the stroke (transparent gaps between them). Default 4. Range 1-10. */
+  stripeCount:    number
   /**
-   * Width of the highlight stripe as a fraction of strokeSize.
-   * 0 = no highlight; 0.25 = quarter-width stripe. Default 0.20.
+   * Width of each coloured mark band relative to the transparent gap beside it.
+   * 0.45 = marks are narrower than gaps; 1.0 = equal; 2.0 = marks are twice as wide. Default 0.45.
    */
-  highlightRatio: number
+  darkWidthRatio: number
+  /** Fraction of stroke length over which individual marks taper to zero at the trailing end. Default 0.30. */
+  taperLength:    number
   /**
-   * Brightness multiplier for the highlight stripe (1 = same colour).
-   * Default 1.6 — lightens the colour to suggest gloss.
+   * Width in pixels of an additional stroke traced along the outermost mark edges.
+   * Uses the same colour as the marks. 0 = none. Default 2.5.
    */
-  highlightBrightness: number
+  outlineWidth:   number
   /**
-   * Width of the hard black outline drawn around the ribbon edge, in pixels.
-   * 0 = no outline. Default 2.0.
+   * Amplitude of the shared lateral wave that moves the whole bundle together.
+   * 0 = rigid parallel lines; 0.5 = bundle shifts ±1 gap-width. Default 0.30.
    */
-  outlineWidth: number
+  weave:          number
+  /** Frequency of the bundle wave in cycles per stroke length. Default 2.5. */
+  weaveFreq:      number
 }
 
 export const LICHTENSTEIN_DEFAULTS: LichtensteinParams = {
-  highlightRatio:      0.20,
-  highlightBrightness: 1.6,
-  outlineWidth:        2.0,
+  stripeCount:    6,
+  darkWidthRatio: 0.89,
+  taperLength:    0.05,
+  outlineWidth:   0.0,
+  weave:          0.39,
+  weaveFreq:      0.5,
 }
 
-// Placeholder: draws a plain flat ribbon. All Lichtenstein-specific
-// details (highlight, outline, Ben-Day dots) to be implemented.
 export function drawLichtensteinStroke(
   ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   pts:        ReadonlyArray<{ x: number; y: number }>,
@@ -670,18 +669,113 @@ export function drawLichtensteinStroke(
   strokeSize: number,
   seed:       number,
   p:          LichtensteinParams = LICHTENSTEIN_DEFAULTS,
-  _secondPass = false,
+  secondPass  = false,
 ): void {
   if (pts.length < 2) return
-  void seed  // unused until full implementation
-  void p
 
-  const samples = samplePath(pts, 3, false)
+  const samples = samplePath(pts, 4, false)
   if (samples.length < 2) return
 
-  // Plain uniform-width ribbon — placeholder body
+  const sc      = Math.max(1, Math.round(p.stripeCount))
+  const lightW  = strokeSize / (sc + (sc + 1) * p.darkWidthRatio)
+  const darkW   = lightW * p.darkWidthRatio
+  const hw      = strokeSize / 2
+
+  // Dark stripe half-width: full until taperStart, narrows to zero by t=1.
+  const taperStart = Math.max(0.01, 1 - p.taperLength)
+  const darkHW = (t: number): number => (darkW / 2) * smoothstep(1, taperStart, t)
+
+  // Weaving: one shared noise moves the whole bundle laterally (primary motion);
+  // small per-stripe noise adds individual drift that can cause occasional crossings.
+  const globalNoise    = makeNoise1D(seed ^ 0xB0055EED)
+  const perStripeNoise = Array.from({ length: sc + 1 }, (_, k) =>
+    makeNoise1D((seed + k * 31337 + 1337) >>> 0)
+  )
+  const globalAmp = lightW * 2 * p.weave  // whole-bundle shift (≈ stripe spacing at weave=0.5)
+  const indivAmp  = lightW * 0.35          // per-stripe drift (enough for occasional crossings)
+
+  // Precompute the centre of each dark stripe at every sample point.
+  // stPos[k][i] = normal-axis offset of dark stripe k at sample i.
+  const stPos: Float64Array[] = Array.from({ length: sc + 1 }, (_, k) => {
+    const nominal = -hw + darkW / 2 + k * (lightW + darkW)
+    const sNoise  = perStripeNoise[k]!
+    const arr     = new Float64Array(samples.length)
+    for (let i = 0; i < samples.length; i++) {
+      const t = samples[i]!.t
+      arr[i]  = nominal
+        + globalNoise(t * p.weaveFreq * LATTICE) * globalAmp
+        + sNoise(t * p.weaveFreq * 1.7 * LATTICE) * indivAmp
+    }
+    return arr
+  })
+
+  // Outer boundary of the stroke: the edges of the outermost dark stripes.
+  // This is what the user sees as the "edge" — no separate rigid outline shape.
+  const outerL = new Float64Array(samples.length)
+  const outerR = new Float64Array(samples.length)
+  for (let i = 0; i < samples.length; i++) {
+    const h   = darkHW(samples[i]!.t)
+    outerL[i] = stPos[0]![i]! - h
+    outerR[i] = stPos[sc]![i]! + h
+  }
+
+  const traceOuter = (): void => {
+    ctx.beginPath()
+    ctx.moveTo(samples[0]!.x + samples[0]!.nx * outerL[0]!, samples[0]!.y + samples[0]!.ny * outerL[0]!)
+    for (let i = 1; i < samples.length; i++) {
+      const s = samples[i]!
+      ctx.lineTo(s.x + s.nx * outerL[i]!, s.y + s.ny * outerL[i]!)
+    }
+    for (let i = samples.length - 1; i >= 0; i--) {
+      const s = samples[i]!
+      ctx.lineTo(s.x + s.nx * outerR[i]!, s.y + s.ny * outerR[i]!)
+    }
+    ctx.closePath()
+  }
+
+  // Fill one mark band in the stroke colour, tapering toward the trailing end.
+  const drawDarkStrip = (k: number): void => {
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i]!, c = stPos[k]![i]!, h = darkHW(s.t)
+      if (i === 0) ctx.moveTo(s.x + s.nx * (c + h), s.y + s.ny * (c + h))
+      else         ctx.lineTo(s.x + s.nx * (c + h), s.y + s.ny * (c + h))
+    }
+    for (let i = samples.length - 1; i >= 0; i--) {
+      const s = samples[i]!, c = stPos[k]![i]!, h = darkHW(s.t)
+      ctx.lineTo(s.x + s.nx * (c - h), s.y + s.ny * (c - h))
+    }
+    ctx.closePath()
+    ctx.fill()
+  }
+
   ctx.save()
-  ctx.fillStyle = colour
-  fillRibbon(ctx, samples, () => strokeSize)
+
+  // secondPass: light wash of the stroke colour filling the whole boundary —
+  // shows the overall stroke form without obscuring the transparent gaps.
+  if (secondPass) {
+    ctx.save()
+    ctx.globalAlpha = 0.25
+    ctx.fillStyle   = colour
+    traceOuter()
+    ctx.fill()
+    ctx.restore()
+  }
+
+  // 1. Coloured mark bands — the stroke colour, weaving and tapering.
+  //    Between them and beyond the outermost marks: transparent (background shows through).
+  for (let k = 0; k <= sc; k++) drawDarkStrip(k)
+
+  // 2. Optional outline stroked along the outermost mark edges, in the same colour.
+  if (p.outlineWidth > 0) {
+    ctx.strokeStyle = colour
+    ctx.lineWidth   = p.outlineWidth
+    ctx.lineCap     = 'round'
+    ctx.lineJoin    = 'round'
+    traceOuter()
+    ctx.stroke()
+  }
+
   ctx.restore()
 }
