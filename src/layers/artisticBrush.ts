@@ -380,6 +380,7 @@ export function drawNibPen(
   secondPass  = false,
 ): void {
   if (pts.length < 2) return
+  const sz        = Math.max(0.5, strokeSize - 3)  // compensate for visual width added by nib variation
   const noise     = makeNoise1D(seed)
   const nibRad    = p.nibAngle * (Math.PI / 180)
   const samples   = samplePath(pts, 4, false)
@@ -399,7 +400,7 @@ export function drawNibPen(
   fillRibbon(ctx, samples, (s, i) => {
     const sinA = Math.sin(angles[i]! - nibRad)
     const nib  = p.minWidthRatio + (1 - p.minWidthRatio) * sinA * sinA
-    const noisy = strokeSize * nib * (1 + p.widthVariation * noise(i * 0.9 / samples.length * LATTICE))
+    const noisy = sz * nib * (1 + p.widthVariation * noise(i * 0.9 / samples.length * LATTICE))
     return Math.max(0.5, noisy)
   })
   ctx.restore()
@@ -412,7 +413,7 @@ export function drawNibPen(
     const rngFibre   = mulberry32(seed ^ 0xC3D4E5F6)
     const halfStep   = Math.max(2, Math.ceil(1 / (p.bleedDensity * 0.12 + 0.02)))
     const angleRange = p.bleedAngle * (Math.PI / 180)
-    const baseLen    = strokeSize * 2.0   // must be > hw (strokeSize*0.5) so centred lines extend past the stroke edge
+    const baseLen    = sz * 2.0   // must be > hw (sz*0.5) so centred lines extend past the stroke edge
     const baseWidth  = 0.7
     ctx.save()
     ctx.lineCap     = 'round'
@@ -422,7 +423,7 @@ export function drawNibPen(
       const s    = samples[i]!
       const tang = angles[i]!
       // Centre: uniform from -hw to +hw across the stroke
-      const hw     = strokeSize * 0.5
+      const hw     = sz * 0.5
       const offset = (rngFibre() * 2 - 1) * hw * p.bleedSpread
       const cx     = s.x + s.nx * offset
       const cy     = s.y + s.ny * offset
@@ -454,9 +455,9 @@ export function drawNibPen(
       const anchor = samples[si]!
       const tang   = angles[si]!
       // One larger anchor drop per event, then 4–8 satellite dots
-      const anchorR = Math.max(1.5, strokeSize * (0.12 + rngSplat() * 0.18)) * p.splatterSize
+      const anchorR = Math.max(1.5, sz * (0.12 + rngSplat() * 0.18)) * p.splatterSize
       const anchorDir = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
-      const anchorDist = strokeSize * (1.2 + rngSplat() * 2.5)
+      const anchorDist = sz * (1.2 + rngSplat() * 2.5)
       ctx.globalAlpha = 0.35 + rngSplat() * 0.35
       ctx.beginPath()
       ctx.arc(
@@ -469,8 +470,8 @@ export function drawNibPen(
       const numDots = 4 + Math.floor(rngSplat() * 5)
       for (let d = 0; d < numDots; d++) {
         const dir  = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
-        const dist = strokeSize * (1.5 + rngSplat() * 4)
-        const dotR = Math.max(0.8, strokeSize * (0.04 + rngSplat() * 0.12)) * p.splatterSize
+        const dist = sz * (1.5 + rngSplat() * 4)
+        const dotR = Math.max(0.8, sz * (0.04 + rngSplat() * 0.12)) * p.splatterSize
         ctx.globalAlpha = 0.15 + rngSplat() * 0.45
         ctx.beginPath()
         ctx.arc(
@@ -495,16 +496,16 @@ export function drawNibPen(
       const s = samples[i]!
       const r = rng()
       if (r < smallP) {
-        const br = strokeSize * (0.3 + rng() * 0.2)
-        const bx = s.x + s.nx * (strokeSize * 0.5 + rng() * 2 - 1)
-        const by = s.y + s.ny * (strokeSize * 0.5 + rng() * 2 - 1)
+        const br = sz * (0.3 + rng() * 0.2)
+        const bx = s.x + s.nx * (sz * 0.5 + rng() * 2 - 1)
+        const by = s.y + s.ny * (sz * 0.5 + rng() * 2 - 1)
         ctx.globalAlpha = 0.45 + rng() * 0.2
         ctx.fillStyle   = colour
         ctx.beginPath()
         ctx.ellipse(bx, by, br * (0.8 + rng() * 0.4), br, angles[i]!, 0, Math.PI * 2)
         ctx.fill()
       } else if (r < largeP) {
-        const br   = strokeSize * (0.7 + rng() * 0.3)
+        const br   = sz * (0.7 + rng() * 0.3)
         const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, br)
         grad.addColorStop(0, colour)
         grad.addColorStop(1, 'transparent')
@@ -561,6 +562,7 @@ export function drawCalligraphyBrush(
   secondPass  = false,
 ): void {
   if (pts.length < 2) return
+  const sz         = Math.max(0.5, strokeSize - 6)  // compensate for visual width added by brush/taper
   const noiseEdge  = makeNoise1D(seed)
   const brushRad   = p.brushAngle * (Math.PI / 180)
   const taperEnd   = 1 - p.taperLength
@@ -586,7 +588,7 @@ export function drawCalligraphyBrush(
     const dirW  = p.minWidthRatio + (1 - p.minWidthRatio) * dir
     const taper = smoothstep(0, p.taperLength, s.t) * smoothstep(1, taperEnd, s.t)
     const edgeN = noiseEdge(i * 1.1 / samples.length * LATTICE) * p.edgeRoughness
-    return Math.max(0, strokeSize * dirW * taper + edgeN)
+    return Math.max(0, sz * dirW * taper + edgeN)
   })
 
   if (secondPass) {
@@ -598,8 +600,8 @@ export function drawCalligraphyBrush(
 
     for (const [start, dir] of [[0, 1], [samples.length - 1, -1]] as [number, number][]) {
       for (let b = 0; b < 4; b++) {
-        const spread = (rng() * 2 - 1) * strokeSize * 0.6
-        const length = strokeSize * (0.5 + rng() * 0.5)
+        const spread = (rng() * 2 - 1) * sz * 0.6
+        const length = sz * (0.5 + rng() * 0.5)
         ctx.globalAlpha = 0.15 + rng() * 0.18
         ctx.strokeStyle = colour
         const s0 = samples[start]!
