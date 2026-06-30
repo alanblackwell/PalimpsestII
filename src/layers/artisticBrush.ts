@@ -619,3 +619,69 @@ export function drawCalligraphyBrush(
 
   ctx.restore()
 }
+
+// ============================================================
+// Case 4 — Lichtenstein cartoon brush stroke  [PLACEHOLDER]
+// ============================================================
+//
+// Target appearance: Roy Lichtenstein's bold, graphic, hard-edged
+// brush strokes — flat opaque fill, clean silhouette, no texture.
+// Possible additions in a later session:
+//   • Uniform-width ribbon with abrupt squared or slightly tapered ends
+//   • A parallel "highlight" swipe (lighter tint, ~20% width) offset
+//     to one side of the main stroke to suggest a painted gloss
+//   • Optional Ben-Day dot texture inside the fill area
+//   • Hard black outline stroke drawn over the ribbon edge
+//   • No feather, no noise — graphic flatness is the point
+//
+// The current stub renders a plain filled ribbon so the case is
+// selectable and produces visible output without crashing.
+
+export interface LichtensteinParams {
+  /**
+   * Width of the highlight stripe as a fraction of strokeSize.
+   * 0 = no highlight; 0.25 = quarter-width stripe. Default 0.20.
+   */
+  highlightRatio: number
+  /**
+   * Brightness multiplier for the highlight stripe (1 = same colour).
+   * Default 1.6 — lightens the colour to suggest gloss.
+   */
+  highlightBrightness: number
+  /**
+   * Width of the hard black outline drawn around the ribbon edge, in pixels.
+   * 0 = no outline. Default 2.0.
+   */
+  outlineWidth: number
+}
+
+export const LICHTENSTEIN_DEFAULTS: LichtensteinParams = {
+  highlightRatio:      0.20,
+  highlightBrightness: 1.6,
+  outlineWidth:        2.0,
+}
+
+// Placeholder: draws a plain flat ribbon. All Lichtenstein-specific
+// details (highlight, outline, Ben-Day dots) to be implemented.
+export function drawLichtensteinStroke(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  p:          LichtensteinParams = LICHTENSTEIN_DEFAULTS,
+  _secondPass = false,
+): void {
+  if (pts.length < 2) return
+  void seed  // unused until full implementation
+  void p
+
+  const samples = samplePath(pts, 3, false)
+  if (samples.length < 2) return
+
+  // Plain uniform-width ribbon — placeholder body
+  ctx.save()
+  ctx.fillStyle = colour
+  fillRibbon(ctx, samples, () => strokeSize)
+  ctx.restore()
+}

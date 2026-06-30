@@ -10,14 +10,15 @@ import {
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import {
   hashString,
-  fillTornPaper,    type TornPaperParams, TORN_PAPER_DEFAULTS,
-  drawPencilLine,   type PencilParams,    PENCIL_DEFAULTS,
-  drawNibPen,       type NibPenParams,    NIB_PEN_DEFAULTS,
-  drawCalligraphyBrush, type BrushParams, BRUSH_DEFAULTS,
+  fillTornPaper,        type TornPaperParams,    TORN_PAPER_DEFAULTS,
+  drawPencilLine,       type PencilParams,        PENCIL_DEFAULTS,
+  drawNibPen,           type NibPenParams,        NIB_PEN_DEFAULTS,
+  drawCalligraphyBrush, type BrushParams,         BRUSH_DEFAULTS,
+  drawLichtensteinStroke, type LichtensteinParams, LICHTENSTEIN_DEFAULTS,
 } from './artisticBrush.js'
 
 // ------------------------------------------------------------
-// ArtisticTestLayer — evaluation harness for Cases 0–3.
+// ArtisticTestLayer — evaluation harness for Cases 0–4.
 // ------------------------------------------------------------
 //
 // Controls — main pill (canvas-space):
@@ -46,6 +47,7 @@ const CASE_NAMES = [
   'Case 1 — Pencil (thin)',
   'Case 2 — Nib pen (medium)',
   'Case 3 — Brush calligraphy (thick)',
+  'Case 4 — Lichtenstein stroke [WIP]',
 ]
 
 // ── Param slider descriptor ────────────────────────────────────
@@ -99,7 +101,14 @@ function makeTestPaths(w: number, h: number) {
     sweepPts.push({ x: cx * 0.10 + t * w * 0.80, y: cy * 1.35 - t * cy * 0.70 + Math.sin(t * Math.PI) * cy * 0.22 })
   }
 
-  return [rectPts, thinPts, sCurvePts, sweepPts] as const
+  // Case 4: bold gestural arc — wide, confident, cartoon-scale
+  const boldArcPts: { x: number; y: number }[] = []
+  for (let i = 0; i <= 40; i++) {
+    const t = i / 40
+    boldArcPts.push({ x: cx * 0.12 + t * w * 0.76, y: cy + Math.sin(t * Math.PI) * cy * 0.45 })
+  }
+
+  return [rectPts, thinPts, sCurvePts, sweepPts, boldArcPts] as const
 }
 
 // ── Layer ─────────────────────────────────────────────────────
@@ -113,10 +122,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   private _secondPass  = false
 
   // Per-case tunable params (copies of defaults, mutated by sliders)
-  private _torn:  TornPaperParams = { ...TORN_PAPER_DEFAULTS }
-  private _pencil: PencilParams   = { ...PENCIL_DEFAULTS }
-  private _nib:    NibPenParams   = { ...NIB_PEN_DEFAULTS }
-  private _brush:  BrushParams    = { ...BRUSH_DEFAULTS }
+  private _torn:        TornPaperParams    = { ...TORN_PAPER_DEFAULTS }
+  private _pencil:      PencilParams       = { ...PENCIL_DEFAULTS }
+  private _nib:         NibPenParams       = { ...NIB_PEN_DEFAULTS }
+  private _brush:       BrushParams        = { ...BRUSH_DEFAULTS }
+  private _lichtenstein: LichtensteinParams = { ...LICHTENSTEIN_DEFAULTS }
 
   // Main-pill button/slider bounds
   private _prevBtnB:    { x: number; y: number; width: number; height: number } | null = null
@@ -151,16 +161,17 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     ctx.fillStyle = '#f5f0e8'
     ctx.fillRect(0, 0, w, h)
 
-    const [rectPts, thinPts, sCurvePts, sweepPts] = makeTestPaths(w, h)
+    const [rectPts, thinPts, sCurvePts, sweepPts, boldArcPts] = makeTestPaths(w, h)
     const seed = hashString(this.debugName)
     const sz   = this._strokeSize
     const sp   = this._secondPass
 
     switch (this._caseIndex) {
-      case 0: fillTornPaper(ctx,         rectPts,    '#3a5ca8', sz, seed, this._torn,   sp); break
-      case 1: drawPencilLine(ctx,        thinPts,    '#222222', sz, seed, this._pencil, sp); break
-      case 2: drawNibPen(ctx,            sCurvePts,  '#111111', sz, seed, this._nib,    sp); break
-      case 3: drawCalligraphyBrush(ctx,  sweepPts,   '#0a0a0a', sz, seed, this._brush,  sp); break
+      case 0: fillTornPaper(ctx,            rectPts,    '#3a5ca8', sz, seed, this._torn,          sp); break
+      case 1: drawPencilLine(ctx,           thinPts,    '#222222', sz, seed, this._pencil,        sp); break
+      case 2: drawNibPen(ctx,               sCurvePts,  '#111111', sz, seed, this._nib,           sp); break
+      case 3: drawCalligraphyBrush(ctx,     sweepPts,   '#0a0a0a', sz, seed, this._brush,         sp); break
+      case 4: drawLichtensteinStroke(ctx,   boldArcPts, '#c8102e', sz, seed, this._lichtenstein,  sp); break
     }
   }
 
@@ -303,7 +314,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   }
 
   private _makeCaseSliders(): ParamSlider[] {
-    const t = this._torn, pe = this._pencil, ni = this._nib, br = this._brush
+    const t = this._torn, pe = this._pencil, ni = this._nib, br = this._brush, li = this._lichtenstein
     const f2 = (v: number) => v.toFixed(2)
     const f1 = (v: number) => v.toFixed(1)
     const fdeg = (v: number) => `${Math.round(v)}°`
@@ -340,6 +351,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
         { label: 'taper-len',   value: br.taperLength,   min: 0.0, max:0.35, step: 0, fmt: f2,   set: v => { br.taperLength   = v; this.markDirty() }, bounds: null },
         { label: 'edge-rough',  value: br.edgeRoughness, min: 0.0, max: 6.0, step: 0, fmt: f1,   set: v => { br.edgeRoughness = v; this.markDirty() }, bounds: null },
         { label: 'feather px',  value: br.feather,       min: 0.0, max:10.0, step: 0, fmt: f1,   set: v => { br.feather       = v; this.markDirty() }, bounds: null },
+      ]
+      case 4: return [
+        { label: 'highlight',    value: li.highlightRatio,      min: 0.0, max: 0.5, step: 0, fmt: f2, set: v => { li.highlightRatio      = v; this.markDirty() }, bounds: null },
+        { label: 'hi-bright',    value: li.highlightBrightness, min: 1.0, max: 3.0, step: 0, fmt: f2, set: v => { li.highlightBrightness = v; this.markDirty() }, bounds: null },
+        { label: 'outline px',   value: li.outlineWidth,        min: 0.0, max: 8.0, step: 0, fmt: f2, set: v => { li.outlineWidth        = v; this.markDirty() }, bounds: null },
       ]
       default: return []
     }
@@ -405,11 +421,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
   handlePointerDown(point: Point): boolean {
     if (this._prevBtnB && boundingBoxContains(this._prevBtnB, point)) {
-      this._caseIndex = (this._caseIndex + 3) % 4
+      this._caseIndex = (this._caseIndex + 4) % 5
       this.markDirty(); return true
     }
     if (this._nextBtnB && boundingBoxContains(this._nextBtnB, point)) {
-      this._caseIndex = (this._caseIndex + 1) % 4
+      this._caseIndex = (this._caseIndex + 1) % 5
       this.markDirty(); return true
     }
     if (this._secondPassB && boundingBoxContains(this._secondPassB, point)) {
@@ -463,6 +479,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
       caseIndex: this._caseIndex, strokeSize: this._strokeSize, secondPass: this._secondPass,
       torn: { ...this._torn }, pencil: { ...this._pencil },
       nib:  { ...this._nib  }, brush:  { ...this._brush  },
+      lichtenstein: { ...this._lichtenstein },
     }
   }
 
@@ -470,9 +487,10 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     if (typeof s.caseIndex  === 'number')  this._caseIndex  = s.caseIndex
     if (typeof s.strokeSize === 'number')  this._strokeSize = s.strokeSize
     if (typeof s.secondPass === 'boolean') this._secondPass = s.secondPass
-    if (s.torn   && typeof s.torn   === 'object') Object.assign(this._torn,   s.torn)
-    if (s.pencil && typeof s.pencil === 'object') Object.assign(this._pencil, s.pencil)
-    if (s.nib    && typeof s.nib    === 'object') Object.assign(this._nib,    s.nib)
-    if (s.brush  && typeof s.brush  === 'object') Object.assign(this._brush,  s.brush)
+    if (s.torn         && typeof s.torn         === 'object') Object.assign(this._torn,         s.torn)
+    if (s.pencil       && typeof s.pencil       === 'object') Object.assign(this._pencil,       s.pencil)
+    if (s.nib          && typeof s.nib          === 'object') Object.assign(this._nib,          s.nib)
+    if (s.brush        && typeof s.brush        === 'object') Object.assign(this._brush,        s.brush)
+    if (s.lichtenstein && typeof s.lichtenstein === 'object') Object.assign(this._lichtenstein, s.lichtenstein)
   }
 }
