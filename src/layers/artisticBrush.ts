@@ -148,13 +148,19 @@ export interface TornPaperParams {
    * Default 0.35. Range 0.0–1.0.
    */
   edgeVariation: number
+  /**
+   * Blends a second noise octave at 4× frequency into the displacement, breaking up periodicity.
+   * 0 = smooth/regular; 1 = rough/stochastic. Default 0.40. Range 0.0–1.0.
+   */
+  stochasticity: number
 }
 
 export const TORN_PAPER_DEFAULTS: TornPaperParams = {
-  amplitude:     1.2,
-  frequency:     0.02,
+  amplitude:     0.68,
+  frequency:     0.100,
   feather:       0,
-  edgeVariation: 0.35,
+  edgeVariation: 0.12,
+  stochasticity: 0.69,
 }
 
 export function fillTornPaper(
@@ -167,6 +173,7 @@ export function fillTornPaper(
   secondPass  = false,
 ): void {
   const noise     = makeNoise1D(seed)
+  const noise2    = makeNoise1D(seed ^ 0xA1B2C3D4)  // higher-freq octave for stochasticity
   const amplitude = strokeSize * p.amplitude
   const freq      = p.frequency
   const spacing   = Math.max(2, strokeSize * 0.4)
@@ -175,7 +182,12 @@ export function fillTornPaper(
   if (samples.length < 3) return
 
   const displaced = samples.map((s, i) => {
-    const d = noise(i * freq * LATTICE) * amplitude
+    const base = noise(i * freq * LATTICE)
+    // Prime ratio (7×) gives long interference period; gate multiplicatively rather than
+    // additively so stochasticity controls which zones tear, not just how deep they go.
+    const gate = noise2(i * freq * LATTICE * 7)
+    const mod  = 1 - p.stochasticity + p.stochasticity * Math.max(0, gate)
+    const d    = base * mod * amplitude
     return { x: s.x + s.nx * d, y: s.y + s.ny * d }
   })
 
@@ -323,12 +335,25 @@ export interface NibPenParams {
   minWidthRatio: number
   /** Width variation from noise — higher = more uneven. Default 0.25. Range 0.0–0.60. */
   widthVariation: number
-  /** Bleed frequency — 0 = none, 1 = heavy. Default 0.50. Range 0.0–1.0. */
+  /** Bleed frequency — 0 = none, 1 = heavy. Default 0.50. Range 0.0–2.0. */
   bleedDensity: number
+  /** Splatter event frequency — 0 = none, 1 = moderate. Default 0.50. Range 0.0–2.0. */
+  splatDensity: number
   /** Splatter dot radius as a multiple of the base size. Default 1.0. Range 0.1–3.0. */
   splatterSize: number
   /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 1.5. Range 0.0–8.0. */
   feather: number
+  /**
+   * How far bleed-line centres diverge from the stroke centreline, as a fraction of half-width.
+   * 0 = all on centreline; 1 = reaches stroke edge; >1 = extends outside stroke. Default 1.0. Range 0.0–2.0.
+   */
+  bleedSpread: number
+  /** Variation in fibre bleed line length (0 = all same, 1 = wide spread). Default 0.6. Range 0.0–1.0. */
+  bleedLengthVar: number
+  /** Variation in fibre bleed line width (0 = all same, 1 = wide spread). Default 0.5. Range 0.0–1.0. */
+  bleedWidthVar: number
+  /** Half-angle range for fibre bleed orientation in degrees (0 = perpendicular only). Default 30. Range 0–90. */
+  bleedAngle: number
 }
 
 export const NIB_PEN_DEFAULTS: NibPenParams = {
@@ -336,8 +361,13 @@ export const NIB_PEN_DEFAULTS: NibPenParams = {
   minWidthRatio:  0.40,
   widthVariation: 0.25,
   bleedDensity:   0.50,
+  splatDensity:   0.50,
+  bleedSpread:    1.0,
   splatterSize:   1.0,
   feather:        1.5,
+  bleedLengthVar: 0.6,
+  bleedWidthVar:  0.5,
+  bleedAngle:     30,
 }
 
 export function drawNibPen(
@@ -374,12 +404,49 @@ export function drawNibPen(
   })
   ctx.restore()
 
-  // ── Far splatters: fans of dots scattered 1.5–5.5× strokeSize away ──
+  // ── Fibre bleeds: short lines centred at a random cross-stroke position ──
+  // Centre point is distributed uniformly from one side of the stroke to the other.
+  // Line extends len/2 in each direction from the centre.
   // Always rendered when bleedDensity > 0; not gated on secondPass.
-  // Separate seed keeps pattern independent of the edge-bleed RNG.
   if (p.bleedDensity > 0) {
+    const rngFibre   = mulberry32(seed ^ 0xC3D4E5F6)
+    const halfStep   = Math.max(2, Math.ceil(1 / (p.bleedDensity * 0.12 + 0.02)))
+    const angleRange = p.bleedAngle * (Math.PI / 180)
+    const baseLen    = strokeSize * 2.0   // must be > hw (strokeSize*0.5) so centred lines extend past the stroke edge
+    const baseWidth  = 0.7
+    ctx.save()
+    ctx.lineCap     = 'round'
+    ctx.strokeStyle = colour
+    for (let i = 0; i < samples.length; i += halfStep) {
+      if (rngFibre() > 0.55) continue
+      const s    = samples[i]!
+      const tang = angles[i]!
+      // Centre: uniform from -hw to +hw across the stroke
+      const hw     = strokeSize * 0.5
+      const offset = (rngFibre() * 2 - 1) * hw * p.bleedSpread
+      const cx     = s.x + s.nx * offset
+      const cy     = s.y + s.ny * offset
+      // Angle: perpendicular ± bleedAngle
+      const perpAngle = tang + Math.PI / 2 + (rngFibre() * 2 - 1) * angleRange
+      // Length and width with parameterised variation
+      const len   = Math.max(1, baseLen   + (rngFibre() * 2 - 1) * p.bleedLengthVar * 30)
+      const lw    = Math.max(0.2, baseWidth * (1 + (rngFibre() * 2 - 1) * p.bleedWidthVar))
+      const half  = len / 2
+      ctx.globalAlpha = 0.15 + rngFibre() * 0.35
+      ctx.lineWidth   = lw
+      ctx.beginPath()
+      ctx.moveTo(cx - Math.cos(perpAngle) * half, cy - Math.sin(perpAngle) * half)
+      ctx.lineTo(cx + Math.cos(perpAngle) * half, cy + Math.sin(perpAngle) * half)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  // ── Far splatters: fans of dots scattered 1.5–5.5× strokeSize away ──
+  // Controlled by splatDensity independently of fibre bleeds.
+  if (p.splatDensity > 0) {
     const rngSplat     = mulberry32(seed ^ 0x7A2B3C4D)
-    const numSplatters = Math.max(2, Math.round(samples.length * 0.045 * p.bleedDensity))
+    const numSplatters = Math.max(2, Math.round(samples.length * 0.045 * p.splatDensity))
     ctx.save()
     ctx.fillStyle = colour
     for (let k = 0; k < numSplatters; k++) {

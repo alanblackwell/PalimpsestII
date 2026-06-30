@@ -310,10 +310,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
     switch (this._caseIndex) {
       case 0: return [
-        { label: 'amplitude',  value: t.amplitude,     min: 0.10, max: 4.0, step: 0, fmt: f2, set: v => { t.amplitude     = v; this.markDirty() }, bounds: null },
-        { label: 'freq ratio', value: t.frequency,     min: 0.005, max: 0.50, step: 0, fmt: v => v.toFixed(3), set: v => { t.frequency     = v; this.markDirty() }, bounds: null },
-        { label: 'feather px', value: t.feather,       min: 0.0,  max: 8.0, step: 0, fmt: f1, set: v => { t.feather       = v; this.markDirty() }, bounds: null },
-        { label: 'edge-var',   value: t.edgeVariation, min: 0.0,  max: 1.0, step: 0, fmt: f2, set: v => { t.edgeVariation = v; this.markDirty() }, bounds: null },
+        { label: 'amplitude',    value: t.amplitude,     min: 0.10, max: 4.0,  step: 0, fmt: f2,                    set: v => { t.amplitude     = v; this.markDirty() }, bounds: null },
+        { label: 'freq ratio',   value: t.frequency,     min: 0.005, max: 0.50, step: 0, fmt: v => v.toFixed(3),     set: v => { t.frequency     = v; this.markDirty() }, bounds: null },
+        { label: 'stochastic',   value: t.stochasticity, min: 0.0,  max: 1.0,  step: 0, fmt: f2,                    set: v => { t.stochasticity = v; this.markDirty() }, bounds: null },
+        { label: 'feather px',   value: t.feather,       min: 0.0,  max: 8.0,  step: 0, fmt: f1,                    set: v => { t.feather       = v; this.markDirty() }, bounds: null },
+        { label: 'edge-var',     value: t.edgeVariation, min: 0.0,  max: 1.0,  step: 0, fmt: f2,                    set: v => { t.edgeVariation = v; this.markDirty() }, bounds: null },
       ]
       case 1: return [
         { label: 'min-alpha',  value: pe.minAlpha,  min: 0.00, max: 0.5, step: 0,    fmt: f2,   set: v => { pe.minAlpha  = v; this.markDirty() }, bounds: null },
@@ -324,9 +325,14 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
         { label: 'nib-angle',  value: ni.nibAngle,       min:   0, max: 180, step: 1, fmt: fdeg, set: v => { ni.nibAngle       = v; this.markDirty() }, bounds: null },
         { label: 'min-width',  value: ni.minWidthRatio,  min: 0.0, max: 0.9, step: 0, fmt: f2,   set: v => { ni.minWidthRatio   = v; this.markDirty() }, bounds: null },
         { label: 'width-var',  value: ni.widthVariation, min: 0.0, max: 0.6, step: 0, fmt: f2,   set: v => { ni.widthVariation  = v; this.markDirty() }, bounds: null },
-        { label: 'bleed-dens',   value: ni.bleedDensity, min: 0.0, max: 1.0, step: 0, fmt: f2, set: v => { ni.bleedDensity  = v; this.markDirty() }, bounds: null },
-        { label: 'splat-size',   value: ni.splatterSize, min: 0.1, max: 3.0, step: 0, fmt: f2, set: v => { ni.splatterSize  = v; this.markDirty() }, bounds: null },
-        { label: 'feather px',   value: ni.feather,      min: 0.0, max: 8.0, step: 0, fmt: f1, set: v => { ni.feather       = v; this.markDirty() }, bounds: null },
+        { label: 'bleed-dens',   value: ni.bleedDensity,  min: 0.0, max: 2.0,  step: 0, fmt: f2,   set: v => { ni.bleedDensity  = v; this.markDirty() }, bounds: null },
+        { label: 'bleed-spread', value: ni.bleedSpread,   min: 0.0, max: 2.0,  step: 0, fmt: f2,   set: v => { ni.bleedSpread   = v; this.markDirty() }, bounds: null },
+        { label: 'bleed-len-v', value: ni.bleedLengthVar, min: 0.0, max: 1.0, step: 0, fmt: f2,   set: v => { ni.bleedLengthVar = v; this.markDirty() }, bounds: null },
+        { label: 'bleed-wid-v', value: ni.bleedWidthVar,  min: 0.0, max: 2.0, step: 0, fmt: f2,   set: v => { ni.bleedWidthVar  = v; this.markDirty() }, bounds: null },
+        { label: 'bleed-angle', value: ni.bleedAngle,     min: 0,   max: 90,  step: 1, fmt: v => `${Math.round(v)}°`, set: v => { ni.bleedAngle = v; this.markDirty() }, bounds: null },
+        { label: 'splat-dens',   value: ni.splatDensity,  min: 0.0, max: 2.0, step: 0, fmt: f2,   set: v => { ni.splatDensity  = v; this.markDirty() }, bounds: null },
+        { label: 'splat-size',   value: ni.splatterSize,  min: 0.1, max: 3.0, step: 0, fmt: f2,   set: v => { ni.splatterSize  = v; this.markDirty() }, bounds: null },
+        { label: 'feather px',   value: ni.feather,       min: 0.0, max: 8.0, step: 0, fmt: f1,   set: v => { ni.feather       = v; this.markDirty() }, bounds: null },
       ]
       case 3: return [
         { label: 'brush-angle', value: br.brushAngle,    min:   0, max: 180, step: 1, fmt: fdeg, set: v => { br.brushAngle    = v; this.markDirty() }, bounds: null },
