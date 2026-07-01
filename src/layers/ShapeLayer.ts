@@ -69,7 +69,7 @@ const SLOT_GAP  = 4
 const BTN_SZ    = SLOT_H - 6   // square toggle-button size
 const SW_LABEL_W = 78
 const SW_VALUE_W = 38
-const MAX_STROKE_WIDTH = 30    // Amount [0,1] -> stroke width [0.5, 30] px
+const MAX_STROKE_WIDTH = 30    // default; subclasses override _maxStrokeWidth/_minStrokeWidth
 const MAX_SCALE = 2            // Amount [0,1] -> scale [0, 2], 0.5 -> 1.0×
 
 // Handle index constants
@@ -122,6 +122,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   protected _filled = true
   protected _strokeWidth = 2
+  protected get _maxStrokeWidth(): number { return MAX_STROKE_WIDTH }
+  protected get _minStrokeWidth(): number { return 0.5 }
   protected _strokeSliderDrag = false
   protected _scaleSliderDrag  = false
 
@@ -225,7 +227,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (slot === this.opacitySlot)  return this._opacity
     if (slot === this.scaleSlot)    return this._scale / MAX_SCALE
     if (slot === this.rotationSlot) return { angle: this._angle, magnitude: 1 }
-    if (slot === this.strokeWidthSlot) return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
+    if (slot === this.strokeWidthSlot) return Math.max(0, Math.min(1, this._strokeWidth / this._maxStrokeWidth))
     return null
   }
 
@@ -271,7 +273,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       this._angle = (this.rotationSlot.source as DirectionSource).getDirection().angle
     }
     if (this.strokeWidthSlot.isActive) {
-      this._strokeWidth = Math.max(0.5, (this.strokeWidthSlot.source as AmountSource).getAmount() * MAX_STROKE_WIDTH)
+      this._strokeWidth = Math.max(this._minStrokeWidth, (this.strokeWidthSlot.source as AmountSource).getAmount() * this._maxStrokeWidth)
     }
     this._updateOffscreens()
   }
@@ -528,7 +530,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
     const active = this.strokeWidthSlot.isActive
     const colour = active ? AM_COL : ACCENT
-    const v01 = Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
+    const v01 = Math.max(0, Math.min(1, this._strokeWidth / this._maxStrokeWidth))
 
     ctx.save()
 
@@ -699,7 +701,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const hi = g.sldR - thumbR
     const range = Math.max(1e-6, hi - lo)
     const v = Math.max(0, Math.min(1, (px - lo) / range))
-    this._strokeWidth = Math.max(0.5, v * MAX_STROKE_WIDTH)
+    this._strokeWidth = Math.max(this._minStrokeWidth, v * this._maxStrokeWidth)
     this.markDirty()
   }
 

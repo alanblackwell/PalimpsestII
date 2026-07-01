@@ -790,6 +790,8 @@ export class PathLayer extends ShapeLayer {
     ctx.restore()
   }
 
+  protected _showSplineGuide(): boolean { return true }
+
   private _drawControlHandles(ctx: Ctx2D): void {
     if (this._points.length < 2) return
     const c  = this._centroid()
@@ -798,21 +800,23 @@ export class PathLayer extends ShapeLayer {
 
     ctx.save()
 
-    // Spline outline (edit-mode overlay)
-    ctx.beginPath()
-    for (let i = 0; i <= SAMPLES; i++) {
-      const t  = i / SAMPLES
-      const pt = this._closedPath
-        ? samplePath(this._points, t % 1, this._radius)
-        : samplePathOpen(this._points, t, this._radius)
-      if (i === 0) ctx.moveTo(pt.x, pt.y)
-      else         ctx.lineTo(pt.x, pt.y)
+    // Spline outline (edit-mode overlay) — suppressed in artistic brush mode
+    if (this._showSplineGuide()) {
+      ctx.beginPath()
+      for (let i = 0; i <= SAMPLES; i++) {
+        const t  = i / SAMPLES
+        const pt = this._closedPath
+          ? samplePath(this._points, t % 1, this._radius)
+          : samplePathOpen(this._points, t, this._radius)
+        if (i === 0) ctx.moveTo(pt.x, pt.y)
+        else         ctx.lineTo(pt.x, pt.y)
+      }
+      if (this._closedPath) ctx.closePath()
+      ctx.strokeStyle = 'rgba(232,160,74,0.70)'
+      ctx.lineWidth   = 1.5
+      ctx.setLineDash([])
+      ctx.stroke()
     }
-    if (this._closedPath) ctx.closePath()
-    ctx.strokeStyle = 'rgba(232,160,74,0.70)'
-    ctx.lineWidth   = 1.5
-    ctx.setLineDash([])
-    ctx.stroke()
 
     // Dashed line from centre to size handle
     ctx.strokeStyle = 'rgba(255,255,255,0.30)'

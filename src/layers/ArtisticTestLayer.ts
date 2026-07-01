@@ -14,6 +14,7 @@ import {
   drawPencilLine,       type PencilParams,        PENCIL_DEFAULTS,
   drawNibPen,           type NibPenParams,        NIB_PEN_DEFAULTS,
   drawCalligraphyBrush, type BrushParams,         BRUSH_DEFAULTS,
+  drawNibBrushBlend,
   drawLichtensteinStroke, type LichtensteinParams, LICHTENSTEIN_DEFAULTS,
 } from './artisticBrush.js'
 
@@ -163,8 +164,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   // Wide transition slider
   private _wideTrackB:    { x: number; y: number; width: number; height: number } | null = null
   private _dividerBounds: Array<{ x: number; y: number; width: number; height: number }> = []
+  private _blendZoneBounds: { x: number; y: number; width: number; height: number } | null = null
   // Stroke-size values at the three dividers (Cases 1|2, 2|3, 3|4)
   private _transitionPts: [number, number, number] = [5, 13, 25]
+  // Half-width of the blend zone around the Case 2→3 divider (in stroke-size px)
+  private _blendHalfWidth = 2
 
   // Per-case pixel offset subtracted from strokeSize before rendering.
   // Defaults preserve the visual widths that were previously hardcoded inside the drawing functions.
@@ -176,7 +180,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
   // Per-case param sliders (rebuilt each renderPanel)
   private _paramSliders: ParamSlider[] = []
-  // _paramDragging: -1=stroke handle, -2/-3/-4=dividers, -5=hue bar, -6=SV square, ≥0=param slider
+  // _paramDragging: -1=stroke handle, -2/-3/-4=dividers, -5=hue bar, -6=SV square, -7=blend zone, ≥0=param slider
   private _paramDragging: number | null = null
 
   constructor() {
@@ -209,12 +213,23 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     const col  = this._strokeColour
     const eff  = (n: number) => Math.max(1, sz - (this._sizeOffset[n] ?? 0))
 
-    switch (this._caseIndex) {
-      case 0: fillTornPaper(ctx,          rectPts,   col, eff(0), seed, this._torn,          sp); break
-      case 1: drawPencilLine(ctx,         sCurvePts, col, eff(1), seed, this._pencil,        sp); break
-      case 2: drawNibPen(ctx,             sCurvePts, col, eff(2), seed, this._nib,           sp); break
-      case 3: drawCalligraphyBrush(ctx,   sCurvePts, col, eff(3), seed, this._brush,         sp); break
-      case 4: drawLichtensteinStroke(ctx, sCurvePts, col, eff(4), seed, this._lichtenstein,  sp); break
+    if (this._caseIndex === 0) {
+      fillTornPaper(ctx, rectPts, col, eff(0), seed, this._torn, sp)
+    } else {
+      const [pt0, pt1, pt2] = this._transitionPts
+      const hw = this._blendHalfWidth
+      if (hw > 0 && sz > pt1 - hw && sz < pt1 + hw) {
+        const t = (sz - (pt1 - hw)) / (2 * hw)   // 0 = all nib, 1 = all brush
+        drawNibBrushBlend(ctx, sCurvePts, col, sz, seed, this._nib, this._brush, t, sp)
+      } else {
+        const caseIdx = sz < pt0 ? 1 : sz < pt1 ? 2 : sz < pt2 ? 3 : 4
+        switch (caseIdx) {
+          case 1: drawPencilLine(ctx,         sCurvePts, col, eff(1), seed, this._pencil,        sp); break
+          case 2: drawNibPen(ctx,             sCurvePts, col, eff(2), seed, this._nib,           sp); break
+          case 3: drawCalligraphyBrush(ctx,   sCurvePts, col, eff(3), seed, this._brush,         sp); break
+          case 4: drawLichtensteinStroke(ctx, sCurvePts, col, eff(4), seed, this._lichtenstein,  sp); break
+        }
+      }
     }
   }
 
@@ -366,11 +381,40 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
     // Divider lines (between Cases 1|2, 2|3, 3|4)
     this._dividerBounds = []
+    this._blendZoneBounds = null
     const divSizes: [number, number, number] = [pt0, pt1, pt2]
+    const hw = this._blendHalfWidth
     for (let d = 0; d < 3; d++) {
       const dx = sizeToX(divSizes[d]!)
-      // Hit zone
-      this._dividerBounds[d] = { x: dx - 9, y: py, width: 18, height: ph }
+
+      if (d === 1) {
+        // Blend zone band behind the divider
+        const bLo = sizeToX(pt1 - hw), bHi = sizeToX(pt1 + hw)
+        const grad = ctx.createLinearGradient(bLo, 0, bHi, 0)
+        grad.addColorStop(0, 'rgba(74,143,232,0.40)')    // nib blue
+        grad.addColorStop(1, 'rgba(126,207,126,0.40)')   // brush green
+        ctx.save()
+        ctx.fillStyle = grad
+        ctx.fillRect(bLo, py + 4, Math.max(0, bHi - bLo), ph - 8)
+        ctx.restore()
+        // Wing chevrons at blend zone edges
+        ctx.save()
+        ctx.strokeStyle = 'rgba(255,255,255,0.65)'
+        ctx.lineWidth   = 1.5
+        ctx.beginPath()
+        ctx.moveTo(bLo + 5, midY - 4); ctx.lineTo(bLo, midY); ctx.lineTo(bLo + 5, midY + 4)
+        ctx.stroke()
+        ctx.beginPath()
+        ctx.moveTo(bHi - 5, midY - 4); ctx.lineTo(bHi, midY); ctx.lineTo(bHi - 5, midY + 4)
+        ctx.stroke()
+        ctx.restore()
+        // Hit zone covers blend band edges; centre ±6 px is reserved for divider drag
+        this._blendZoneBounds = { x: bLo - 8, y: py, width: Math.max(16, bHi - bLo + 16), height: ph }
+        // Narrow divider hit zone so it doesn't swallow the blend wings
+        this._dividerBounds[d] = { x: dx - 6, y: py, width: 12, height: ph }
+      } else {
+        this._dividerBounds[d] = { x: dx - 9, y: py, width: 18, height: ph }
+      }
 
       ctx.save()
       ctx.strokeStyle = 'rgba(255,255,255,0.75)'
@@ -390,7 +434,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
       ctx.font         = 'bold 10px monospace'
       ctx.textAlign    = 'center'
       ctx.textBaseline = 'top'
-      ctx.fillText(`${divSizes[d]}px`, dx, midY + trackH / 2 + 3)
+      ctx.fillText(d === 1 ? `${divSizes[d]}px ±${hw}` : `${divSizes[d]}px`, dx, midY + trackH / 2 + 3)
       ctx.restore()
     }
 
@@ -668,6 +712,15 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
       this._secondPass = !this._secondPass
       this.markDirty(); return true
     }
+    // Blend zone wings (before dividers — centre of divider-1 still wins via the divider check below)
+    if (this._blendZoneBounds && boundingBoxContains(this._blendZoneBounds, point)) {
+      const db1 = this._dividerBounds[1]
+      if (!db1 || !boundingBoxContains(db1, point)) {
+        this._paramDragging = -7
+        this._applyBlendZoneDrag(point.x)
+        return true
+      }
+    }
     // Dividers take priority over the track handle
     for (let d = 0; d < 3; d++) {
       const db = this._dividerBounds[d]
@@ -707,6 +760,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     if      (this._paramDragging === -1)  this._applyMainSlider(point.x)
     else if (this._paramDragging === -5)  this._applyHueDrag(point.x)
     else if (this._paramDragging === -6)  this._applySVDrag(point.x, point.y)
+    else if (this._paramDragging === -7)  this._applyBlendZoneDrag(point.x)
     else if (this._paramDragging >= -4 && this._paramDragging <= -2)
                                           this._applyDividerDrag(-this._paramDragging - 2, point.x)
     else if (this._paramDragging >= 0)    this._applyParamSlider(this._paramDragging, point.x)
@@ -742,6 +796,15 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     this.markDirty()
   }
 
+  private _applyBlendZoneDrag(px: number): void {
+    if (!this._wideTrackB) return
+    const [, pt1] = this._transitionPts
+    const centreX = this._wideTrackB.x + (pt1 - STROKE_MIN) / (STROKE_MAX - STROKE_MIN) * this._wideTrackB.width
+    const distPx  = Math.abs(px - centreX) / this._wideTrackB.width * (STROKE_MAX - STROKE_MIN)
+    this._blendHalfWidth = Math.max(1, Math.min(20, Math.round(distPx)))
+    this.markDirty()
+  }
+
   private _applyHueDrag(px: number): void {
     if (!this._hueBarB) return
     const t = Math.max(0, Math.min(1, (px - this._hueBarB.x) / this._hueBarB.width))
@@ -771,7 +834,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   override serializeState(): Record<string, unknown> {
     return {
       caseIndex: this._caseIndex, strokeSize: this._strokeSize, secondPass: this._secondPass,
-      transitionPts: [...this._transitionPts],
+      transitionPts: [...this._transitionPts], blendHalfWidth: this._blendHalfWidth,
       hue: this._hue, sat: this._sat, val: this._val,
       sizeOffset: [...this._sizeOffset],
       torn: { ...this._torn }, pencil: { ...this._pencil },
@@ -781,9 +844,10 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   }
 
   override deserializeState(s: Record<string, unknown>): void {
-    if (typeof s.caseIndex  === 'number')  this._caseIndex  = s.caseIndex
-    if (typeof s.strokeSize === 'number')  this._strokeSize = s.strokeSize
-    if (typeof s.secondPass === 'boolean') this._secondPass = s.secondPass
+    if (typeof s.caseIndex      === 'number')  this._caseIndex      = s.caseIndex
+    if (typeof s.strokeSize     === 'number')  this._strokeSize     = s.strokeSize
+    if (typeof s.secondPass     === 'boolean') this._secondPass     = s.secondPass
+    if (typeof s.blendHalfWidth === 'number')  this._blendHalfWidth = s.blendHalfWidth
     if (Array.isArray(s.transitionPts) && s.transitionPts.length === 3) {
       this._transitionPts = s.transitionPts as [number, number, number]
     }

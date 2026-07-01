@@ -636,6 +636,175 @@ export function drawCalligraphyBrush(
 }
 
 // ============================================================
+// Case 2↔3 — Geometric blend between nib pen and calligraphy brush
+//
+// Interpolates the ribbon boundary directly: a single fillRibbon call
+// whose widthAt blends sin²(…) (nib) with |sin(…)| (brush) at weight t.
+// Scalar params (taper, feather, edge roughness, width noise) are also
+// linearly interpolated so the transition is fully continuous.
+// ============================================================
+
+export function drawNibBrushBlend(
+  ctx:        CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  pts:        ReadonlyArray<{ x: number; y: number }>,
+  colour:     string,
+  strokeSize: number,
+  seed:       number,
+  pNib:       NibPenParams,
+  pBrush:     BrushParams,
+  t:          number,   // 0 = all nib, 1 = all brush
+  secondPass  = false,
+): void {
+  if (pts.length < 2) return
+  t = Math.max(0, Math.min(1, t))
+  if (t === 0) { drawNibPen(ctx, pts, colour, strokeSize, seed, pNib, secondPass); return }
+  if (t === 1) { drawCalligraphyBrush(ctx, pts, colour, strokeSize, seed, pBrush, secondPass); return }
+
+  const sz = Math.max(0.5, strokeSize)
+
+  // Interpolated scalar params
+  const nibRad        = pNib.nibAngle   * (Math.PI / 180)
+  const brushRad      = pBrush.brushAngle * (Math.PI / 180)
+  const minWidthRatio = (1 - t) * pNib.minWidthRatio  + t * pBrush.minWidthRatio
+  const taperLength   = (1 - t) * pNib.taperLength    + t * pBrush.taperLength
+  const feather       = (1 - t) * (pNib.feather ?? 0) + t * (pBrush.feather ?? 0)
+  const edgeRoughness = t * pBrush.edgeRoughness       // brush roughness fades in
+  const widthVar      = (1 - t) * pNib.widthVariation  // nib noise fades out
+
+  const noise     = makeNoise1D(seed)
+  const noiseEdge = makeNoise1D(seed ^ 0x1A2B3C4D)
+
+  const samples = samplePath(pts, 3, false)
+  if (samples.length < 2) return
+  const taperEnd = 1 - taperLength
+
+  const angles = samples.map((s, i) => {
+    const next = samples[i + 1] ?? samples[i]!
+    return Math.atan2(next.y - s.y, next.x - s.x)
+  })
+
+  ctx.save()
+  ctx.globalAlpha = 1 - t * 0.08   // 1.0 (nib) → 0.92 (brush)
+  ctx.fillStyle   = colour
+  if (feather > 0) { ctx.shadowColor = colour; ctx.shadowBlur = feather }
+
+  fillRibbon(ctx, samples, (s, i) => {
+    const ang = angles[i]!
+    // Nib: sin²(angle − nibAngle), squeezed between minWidthRatio and 1
+    const sinNib = Math.sin(ang - nibRad)
+    const wNib   = pNib.minWidthRatio + (1 - pNib.minWidthRatio) * sinNib * sinNib
+    const noiseW = 1 + widthVar * noise(i * 0.9 / samples.length * LATTICE)
+    // Brush: |sin(angle − brushAngle)|
+    const wBrush = pBrush.minWidthRatio + (1 - pBrush.minWidthRatio) * Math.abs(Math.sin(ang - brushRad))
+    // Edge roughness fades in from brush side
+    const edgeN  = noiseEdge(i * 1.1 / samples.length * LATTICE) * edgeRoughness
+    const taper  = taperLength > 0
+      ? smoothstep(0, taperLength, s.t) * smoothstep(1, taperEnd, s.t)
+      : 1
+    return Math.max(0.5, sz * ((1 - t) * wNib * noiseW + t * wBrush) * taper + edgeN)
+  })
+
+  ctx.restore()
+
+  // Nib decorations (fibre bleeds + far splatters), faded by (1 − t)
+  const fade = 1 - t
+
+  if (pNib.bleedDensity > 0) {
+    const rngFibre   = mulberry32(seed ^ 0xC3D4E5F6)
+    const halfStep   = Math.max(2, Math.ceil(1 / (pNib.bleedDensity * 0.12 + 0.02)))
+    const angleRange = pNib.bleedAngle * (Math.PI / 180)
+    const baseLen    = sz * 2.0
+    const baseWidth  = 0.7
+    ctx.save()
+    ctx.lineCap     = 'round'
+    ctx.strokeStyle = colour
+    for (let i = 0; i < samples.length; i += halfStep) {
+      if (rngFibre() > 0.55) continue
+      const s          = samples[i]!
+      const tang       = angles[i]!
+      const hw         = sz * 0.5
+      const offset     = (rngFibre() * 2 - 1) * hw * pNib.bleedSpread
+      const cx         = s.x + s.nx * offset
+      const cy         = s.y + s.ny * offset
+      const perpAngle  = tang + Math.PI / 2 + (rngFibre() * 2 - 1) * angleRange
+      const len        = Math.max(1, baseLen + (rngFibre() * 2 - 1) * pNib.bleedLengthVar * 30)
+      const lw         = Math.max(0.2, baseWidth * (1 + (rngFibre() * 2 - 1) * pNib.bleedWidthVar))
+      const half       = len / 2
+      ctx.globalAlpha  = (0.15 + rngFibre() * 0.35) * fade
+      ctx.lineWidth    = lw
+      ctx.beginPath()
+      ctx.moveTo(cx - Math.cos(perpAngle) * half, cy - Math.sin(perpAngle) * half)
+      ctx.lineTo(cx + Math.cos(perpAngle) * half, cy + Math.sin(perpAngle) * half)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
+
+  if (pNib.splatDensity > 0) {
+    const rngSplat      = mulberry32(seed ^ 0x7A2B3C4D)
+    const numSplatters  = Math.max(2, Math.round(samples.length * 0.045 * pNib.splatDensity))
+    ctx.save()
+    ctx.fillStyle = colour
+    for (let k = 0; k < numSplatters; k++) {
+      const si        = Math.floor(rngSplat() * samples.length)
+      const anchor    = samples[si]!
+      const tang      = angles[si]!
+      const anchorR   = Math.max(1.5, sz * (0.12 + rngSplat() * 0.18)) * pNib.splatterSize
+      const anchorDir = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
+      const anchorDist = sz * (1.2 + rngSplat() * 2.5)
+      ctx.globalAlpha = (0.35 + rngSplat() * 0.35) * fade
+      ctx.beginPath()
+      ctx.arc(anchor.x + Math.cos(anchorDir) * anchorDist, anchor.y + Math.sin(anchorDir) * anchorDist, anchorR, 0, Math.PI * 2)
+      ctx.fill()
+      const numDots = 4 + Math.floor(rngSplat() * 5)
+      for (let d = 0; d < numDots; d++) {
+        const dir  = tang + (rngSplat() - 0.5) * (Math.PI * 2 / 3)
+        const dist = sz * (1.5 + rngSplat() * 4)
+        const dotR = Math.max(0.8, sz * (0.04 + rngSplat() * 0.12)) * pNib.splatterSize
+        ctx.globalAlpha = (0.15 + rngSplat() * 0.45) * fade
+        ctx.beginPath()
+        ctx.arc(anchor.x + Math.cos(dir) * dist, anchor.y + Math.sin(dir) * dist, dotR, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+    ctx.restore()
+  }
+
+  if (secondPass) {
+    const rng    = mulberry32(seed ^ 0xDEADBEEF)
+    const smallP = 0.08 * pNib.bleedDensity
+    const largeP = smallP + 0.012 * pNib.bleedDensity
+    ctx.save()
+    ctx.fillStyle = colour
+    for (let i = 1; i < samples.length - 1; i++) {
+      const s = samples[i]!
+      const r = rng()
+      if (r < smallP) {
+        const br = sz * (0.3 + rng() * 0.2)
+        const bx = s.x + s.nx * (sz * 0.5 + rng() * 2 - 1)
+        const by = s.y + s.ny * (sz * 0.5 + rng() * 2 - 1)
+        ctx.globalAlpha = (0.45 + rng() * 0.2) * fade
+        ctx.beginPath()
+        ctx.ellipse(bx, by, br * (0.8 + rng() * 0.4), br, angles[i]!, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (r < largeP) {
+        const br   = sz * (0.7 + rng() * 0.3)
+        const grad = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, br)
+        grad.addColorStop(0, colour)
+        grad.addColorStop(1, 'transparent')
+        ctx.globalAlpha = 0.38 * fade
+        ctx.fillStyle   = grad
+        ctx.beginPath()
+        ctx.arc(s.x, s.y, br, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillStyle = colour
+      }
+    }
+    ctx.restore()
+  }
+}
+
+// ============================================================
 // Case 4 — Lichtenstein cartoon brush stroke
 //
 // Appearance: parallel bristle stripes (alternating paint colour and

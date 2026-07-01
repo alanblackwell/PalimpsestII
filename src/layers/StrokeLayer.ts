@@ -9,6 +9,13 @@ import { BindingLayer }  from './BindingLayer.js'
 import { PathLayer, samplePathOpen } from './PathLayer.js'
 import { panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import {
+  hashString,
+  drawPencilLine, drawNibPen,         NIB_PEN_DEFAULTS,
+  drawCalligraphyBrush,               BRUSH_DEFAULTS,
+  drawNibBrushBlend,
+  drawLichtensteinStroke,
+} from './artisticBrush.js'
 
 // ------------------------------------------------------------
 // StrokeLayer — open Catmull-Rom spline, drawn by freehand input
@@ -43,6 +50,13 @@ export type StrokeStateSnapshot = {
   filled:      boolean
 }
 
+// Brush case auto-selection thresholds (stroke width px)
+const BRUSH_TRANSITIONS  = [5, 13, 25] as const
+// Half-width of the blend zone around the case 2→3 boundary
+const BRUSH_BLEND_HW     = 2
+// Per-case size offset subtracted before passing strokeSize to brush functions
+const BRUSH_OFFSETS      = [0, 0, 3, 5, 11]
+
 export class StrokeLayer extends PathLayer {
 
   // Override PathLayer default: open spline
@@ -51,6 +65,11 @@ export class StrokeLayer extends PathLayer {
   protected override get _minPoints(): number { return 2 }
   // Mask is the stroked region, not a filled interior
   protected override _maskFilled(): boolean { return false }
+  // Stroke width range 1–80 px
+  protected override get _maxStrokeWidth(): number { return 80 }
+  protected override get _minStrokeWidth(): number { return 1 }
+  // Hide orange spline guide — brush rendering makes it redundant
+  protected override _showSplineGuide(): boolean { return false }
 
   readonly startSlot: ParameterSlot
   readonly endSlot:   ParameterSlot
@@ -62,6 +81,9 @@ export class StrokeLayer extends PathLayer {
   private _arcSamples: Point[] = []
   private _totalLen   = 0
 
+  // Cached brush rendering (redrawn in recompute, blitted in renderSelf)
+  private _brushCanvas: OffscreenCanvas
+
   // Closure callback — set by main.ts via setOnClose
   private _onClose: ((stroke: StrokeLayer) => void) | null = null
 
@@ -71,6 +93,8 @@ export class StrokeLayer extends PathLayer {
   constructor(colour?: Colour) {
     super([], Node.canvasWidth / 2, Node.canvasHeight / 2, colour)
     this._filled = false   // stroke only — never fill
+    this._strokeWidth = 3
+    this._brushCanvas = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.startSlot = new ParameterSlot(ValueType.Point, this, 'start')
     this.endSlot   = new ParameterSlot(ValueType.Point, this, 'end')
@@ -192,6 +216,42 @@ export class StrokeLayer extends PathLayer {
 
     super.recompute()  // handles radius, rotation, position, colour, opacity, scale, strokeWidth
     this._rebuildArcSamples()
+    this._rebuildBrushCanvas()
+  }
+
+  private _rebuildBrushCanvas(): void {
+    const w = Node.canvasWidth, h = Node.canvasHeight
+    if (this._brushCanvas.width !== w || this._brushCanvas.height !== h)
+      this._brushCanvas = new OffscreenCanvas(w, h)
+    const bctx = this._brushCanvas.getContext('2d')!
+    bctx.clearRect(0, 0, w, h)
+    // Draw mode: use raw points with pencil for a live preview
+    const pts = this._drawMode ? this._rawPoints : this._arcSamples
+    if (pts.length < 2) return
+    const sz   = this._strokeWidth
+    const c    = this._colour
+    const col  = `#${Math.round(c.r*255).toString(16).padStart(2,'0')}${Math.round(c.g*255).toString(16).padStart(2,'0')}${Math.round(c.b*255).toString(16).padStart(2,'0')}`
+    const seed = hashString(this.debugName)
+    if (this._drawMode) {
+      drawPencilLine(bctx, pts, col, sz, seed)
+    } else {
+      const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
+      const hw = BRUSH_BLEND_HW
+      if (sz > pt1 - hw && sz < pt1 + hw) {
+        const t   = (sz - (pt1 - hw)) / (2 * hw)
+        const eff = Math.max(1, sz - ((1 - t) * (BRUSH_OFFSETS[2] ?? 0) + t * (BRUSH_OFFSETS[3] ?? 0)))
+        drawNibBrushBlend(bctx, pts, col, eff, seed, NIB_PEN_DEFAULTS, BRUSH_DEFAULTS, t)
+      } else {
+        const caseIdx = sz < pt0 ? 1 : sz < pt1 ? 2 : sz < pt2 ? 3 : 4
+        const eff = Math.max(1, sz - (BRUSH_OFFSETS[caseIdx] ?? 0))
+        switch (caseIdx) {
+          case 1: drawPencilLine(bctx,         pts, col, eff, seed); break
+          case 2: drawNibPen(bctx,             pts, col, eff, seed); break
+          case 3: drawCalligraphyBrush(bctx,   pts, col, eff, seed); break
+          case 4: drawLichtensteinStroke(bctx, pts, col, eff, seed); break
+        }
+      }
+    }
   }
 
   private _rebuildArcSamples(): void {
@@ -234,21 +294,10 @@ export class StrokeLayer extends PathLayer {
   // ----------------------------------------------------------
 
   override renderSelf(ctx: Ctx2D): void {
-    if (this._drawMode && this._rawPoints.length >= 2) {
-      const c = this._colour
-      ctx.save()
-      ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
-      ctx.lineCap     = 'round'
-      ctx.lineJoin    = 'round'
-      ctx.lineWidth   = this._strokeWidth
-      ctx.strokeStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},0.55)`
-      ctx.beginPath()
-      this._rawPoints.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y))
-      ctx.stroke()
-      ctx.restore()
-    } else if (!this._drawMode) {
-      super.renderSelf(ctx)
-    }
+    ctx.save()
+    ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity * this._colour.a))
+    ctx.drawImage(this._brushCanvas, 0, 0)
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
