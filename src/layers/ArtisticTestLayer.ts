@@ -164,11 +164,11 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   private _wideTrackB:    { x: number; y: number; width: number; height: number } | null = null
   private _dividerBounds: Array<{ x: number; y: number; width: number; height: number }> = []
   // Stroke-size values at the three dividers (Cases 1|2, 2|3, 3|4)
-  private _transitionPts: [number, number, number] = [5, 15, 30]
+  private _transitionPts: [number, number, number] = [5, 13, 25]
 
   // Per-case pixel offset subtracted from strokeSize before rendering.
   // Defaults preserve the visual widths that were previously hardcoded inside the drawing functions.
-  private _sizeOffset = [0, 0, 3, 6, 12]  // cases 0–4
+  private _sizeOffset = [0, 0, 3, 5, 11]  // cases 0–4
 
   // Colour picker bounds (set during renderPanel)
   private _hueBarB:   { x: number; y: number; width: number; height: number } | null = null

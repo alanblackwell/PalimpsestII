@@ -163,7 +163,7 @@ export const TORN_PAPER_DEFAULTS: TornPaperParams = {
   frequency:     0.084,
   stochasticity: 0.69,
   feather:       0,
-  edgeVariation: 0.15,
+  edgeVariation: 0,
 }
 
 export function fillTornPaper(
@@ -369,7 +369,7 @@ export const NIB_PEN_DEFAULTS: NibPenParams = {
   taperLength:    0.01,
   nibAngle:       107,
   minWidthRatio:  0.15,
-  widthVariation: 0.26,
+  widthVariation: 0.25,
   bleedDensity:   1.91,
   bleedSpread:    1.04,
   bleedLengthVar: 0.21,
@@ -377,7 +377,7 @@ export const NIB_PEN_DEFAULTS: NibPenParams = {
   bleedAngle:     51,
   splatDensity:   0.70,
   splatterSize:   0.93,
-  feather:        1.4,
+  feather:        0,
 }
 
 export function drawNibPen(
@@ -564,7 +564,7 @@ export const BRUSH_DEFAULTS: BrushParams = {
   minWidthRatio: 0.30,
   taperLength:   0.12,
   edgeRoughness: 1.5,
-  feather:       2.5,
+  feather:       0,
 }
 
 export function drawCalligraphyBrush(
