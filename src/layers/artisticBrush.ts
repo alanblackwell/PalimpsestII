@@ -133,6 +133,8 @@ export function smoothstep(edge0: number, edge1: number, t: number): number {
 // ============================================================
 
 export interface TornPaperParams {
+  /** Stroke size is clamped to this value — appearance stops changing above it. Default 40. Range 1–80. */
+  maxWidth:      number
   /** Tear depth as a multiple of strokeSize. Default 1.2. Range 0.1–4.0. */
   amplitude:     number
   /**
@@ -140,6 +142,11 @@ export interface TornPaperParams {
    * The value is used directly (not divided by strokeSize). Default 0.02. Range 0.005–0.50.
    */
   frequency:     number
+  /**
+   * Blends a second noise octave at 4× frequency into the displacement, breaking up periodicity.
+   * 0 = smooth/regular; 1 = rough/stochastic. Default 0.40. Range 0.0–1.0.
+   */
+  stochasticity: number
   /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 0. Range 0.0–8.0. */
   feather:       number
   /**
@@ -148,19 +155,15 @@ export interface TornPaperParams {
    * Default 0.35. Range 0.0–1.0.
    */
   edgeVariation: number
-  /**
-   * Blends a second noise octave at 4× frequency into the displacement, breaking up periodicity.
-   * 0 = smooth/regular; 1 = rough/stochastic. Default 0.40. Range 0.0–1.0.
-   */
-  stochasticity: number
 }
 
 export const TORN_PAPER_DEFAULTS: TornPaperParams = {
-  amplitude:     0.68,
-  frequency:     0.100,
-  feather:       0,
-  edgeVariation: 0.12,
+  maxWidth:      10,
+  amplitude:     0.47,
+  frequency:     0.084,
   stochasticity: 0.69,
+  feather:       0,
+  edgeVariation: 0.15,
 }
 
 export function fillTornPaper(
@@ -174,9 +177,10 @@ export function fillTornPaper(
 ): void {
   const noise     = makeNoise1D(seed)
   const noise2    = makeNoise1D(seed ^ 0xA1B2C3D4)  // higher-freq octave for stochasticity
-  const amplitude = strokeSize * p.amplitude
+  const sz        = Math.min(strokeSize, p.maxWidth)
+  const amplitude = sz * p.amplitude
   const freq      = p.frequency
-  const spacing   = Math.max(2, strokeSize * 0.4)
+  const spacing   = Math.max(2, sz * 0.4)
 
   const samples = samplePath(pts, spacing, true)
   if (samples.length < 3) return
@@ -326,48 +330,54 @@ export function drawPencilLine(
 // ============================================================
 
 export interface NibPenParams {
+  /**
+   * Fraction of stroke length over which each end tapers to a point.
+   * 0 = no taper (square ends); 0.15 = gentle taper. Default 0.
+   */
+  taperLength:    number
   /** Angle (degrees) at which the nib is widest. Default 45. Range 0–180. */
-  nibAngle:     number
+  nibAngle:       number
   /**
    * Minimum width as a fraction of strokeSize (when stroke is parallel to nib).
    * Default 0.40. Range 0.0–0.90.
    */
-  minWidthRatio: number
+  minWidthRatio:  number
   /** Width variation from noise — higher = more uneven. Default 0.25. Range 0.0–0.60. */
   widthVariation: number
   /** Bleed frequency — 0 = none, 1 = heavy. Default 0.50. Range 0.0–2.0. */
-  bleedDensity: number
-  /** Splatter event frequency — 0 = none, 1 = moderate. Default 0.50. Range 0.0–2.0. */
-  splatDensity: number
-  /** Splatter dot radius as a multiple of the base size. Default 1.0. Range 0.1–3.0. */
-  splatterSize: number
-  /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 1.5. Range 0.0–8.0. */
-  feather: number
+  bleedDensity:   number
   /**
    * How far bleed-line centres diverge from the stroke centreline, as a fraction of half-width.
    * 0 = all on centreline; 1 = reaches stroke edge; >1 = extends outside stroke. Default 1.0. Range 0.0–2.0.
    */
-  bleedSpread: number
+  bleedSpread:    number
   /** Variation in fibre bleed line length (0 = all same, 1 = wide spread). Default 0.6. Range 0.0–1.0. */
   bleedLengthVar: number
   /** Variation in fibre bleed line width (0 = all same, 1 = wide spread). Default 0.5. Range 0.0–1.0. */
-  bleedWidthVar: number
+  bleedWidthVar:  number
   /** Half-angle range for fibre bleed orientation in degrees (0 = perpendicular only). Default 30. Range 0–90. */
-  bleedAngle: number
+  bleedAngle:     number
+  /** Splatter event frequency — 0 = none, 1 = moderate. Default 0.50. Range 0.0–2.0. */
+  splatDensity:   number
+  /** Splatter dot radius as a multiple of the base size. Default 1.0. Range 0.1–3.0. */
+  splatterSize:   number
+  /** Edge softness in pixels (shadowBlur). 0 = hard edge. Default 1.5. Range 0.0–8.0. */
+  feather:        number
 }
 
 export const NIB_PEN_DEFAULTS: NibPenParams = {
+  taperLength:    0.01,
   nibAngle:       107,
   minWidthRatio:  0.15,
   widthVariation: 0.26,
   bleedDensity:   1.91,
-  splatDensity:   0.70,
   bleedSpread:    1.04,
-  splatterSize:   0.93,
-  feather:        1.4,
   bleedLengthVar: 0.21,
   bleedWidthVar:  1.62,
   bleedAngle:     51,
+  splatDensity:   0.70,
+  splatterSize:   0.93,
+  feather:        1.4,
 }
 
 export function drawNibPen(
@@ -380,16 +390,18 @@ export function drawNibPen(
   secondPass  = false,
 ): void {
   if (pts.length < 2) return
-  const sz        = Math.max(0.5, strokeSize - 3)  // compensate for visual width added by nib variation
-  const noise     = makeNoise1D(seed)
-  const nibRad    = p.nibAngle * (Math.PI / 180)
-  const samples   = samplePath(pts, 4, false)
+  const sz      = Math.max(0.5, strokeSize)
+  const noise   = makeNoise1D(seed)
+  const nibRad  = p.nibAngle * (Math.PI / 180)
+  const samples = samplePath(pts, 4, false)
   if (samples.length < 2) return
 
   const angles = samples.map((s, i) => {
     const next = samples[i + 1] ?? samples[i]!
     return Math.atan2(next.y - s.y, next.x - s.x)
   })
+
+  const taperEnd = 1 - p.taperLength
 
   ctx.save()
   ctx.fillStyle  = colour
@@ -398,10 +410,13 @@ export function drawNibPen(
     ctx.shadowBlur  = p.feather
   }
   fillRibbon(ctx, samples, (s, i) => {
-    const sinA = Math.sin(angles[i]! - nibRad)
-    const nib  = p.minWidthRatio + (1 - p.minWidthRatio) * sinA * sinA
+    const sinA  = Math.sin(angles[i]! - nibRad)
+    const nib   = p.minWidthRatio + (1 - p.minWidthRatio) * sinA * sinA
     const noisy = sz * nib * (1 + p.widthVariation * noise(i * 0.9 / samples.length * LATTICE))
-    return Math.max(0.5, noisy)
+    const taper = p.taperLength > 0
+      ? smoothstep(0, p.taperLength, s.t) * smoothstep(1, taperEnd, s.t)
+      : 1
+    return Math.max(0.5, noisy * taper)
   })
   ctx.restore()
 
@@ -562,7 +577,7 @@ export function drawCalligraphyBrush(
   secondPass  = false,
 ): void {
   if (pts.length < 2) return
-  const sz         = Math.max(0.5, strokeSize - 6)  // compensate for visual width added by brush/taper
+  const sz         = Math.max(0.5, strokeSize)
   const noiseEdge  = makeNoise1D(seed)
   const brushRad   = p.brushAngle * (Math.PI / 180)
   const taperEnd   = 1 - p.taperLength
@@ -654,12 +669,12 @@ export interface LichtensteinParams {
 }
 
 export const LICHTENSTEIN_DEFAULTS: LichtensteinParams = {
-  stripeCount:    6,
-  darkWidthRatio: 0.89,
+  stripeCount:    5,
+  darkWidthRatio: 3.17,
   taperLength:    0.05,
   outlineWidth:   0.0,
-  weave:          0.39,
-  weaveFreq:      0.5,
+  weave:          0.26,
+  weaveFreq:      1.0,
 }
 
 export function drawLichtensteinStroke(
