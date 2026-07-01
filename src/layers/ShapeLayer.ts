@@ -69,7 +69,7 @@ const SLOT_GAP  = 4
 const BTN_SZ    = SLOT_H - 6   // square toggle-button size
 const SW_LABEL_W = 78
 const SW_VALUE_W = 38
-const MAX_STROKE_WIDTH = 30    // default; subclasses override _maxStrokeWidth/_minStrokeWidth
+const MAX_STROKE_WIDTH = 80    // default; subclasses override _maxStrokeWidth/_minStrokeWidth
 const MAX_SCALE = 2            // Amount [0,1] -> scale [0, 2], 0.5 -> 1.0×
 
 // Handle index constants

@@ -65,8 +65,7 @@ export class StrokeLayer extends PathLayer {
   protected override get _minPoints(): number { return 2 }
   // Mask is the stroked region, not a filled interior
   protected override _maskFilled(): boolean { return false }
-  // Stroke width range 1–80 px
-  protected override get _maxStrokeWidth(): number { return 80 }
+  // Minimum 1 px (base default is 0.5)
   protected override get _minStrokeWidth(): number { return 1 }
   // Hide orange spline guide — brush rendering makes it redundant
   protected override _showSplineGuide(): boolean { return false }

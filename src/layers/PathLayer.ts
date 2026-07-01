@@ -15,6 +15,13 @@ import {
 import { BindingLayer } from './BindingLayer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import {
+  hashString,
+  drawPencilLine, drawNibPen,       NIB_PEN_DEFAULTS,
+  drawCalligraphyBrush,             BRUSH_DEFAULTS,
+  drawNibBrushBlend,
+  drawLichtensteinStroke,
+} from './artisticBrush.js'
 
 // ------------------------------------------------------------
 // PathLayer — a closed Catmull-Rom spline shape layer
@@ -121,6 +128,12 @@ const ROT_OFF    = 24
 const SAMPLES    = 200
 const MIN_POINTS = 3   // smallest closed spline we allow (a triangle)
 
+// Brush case thresholds — identical to StrokeLayer
+const BRUSH_TRANSITIONS = [5, 13, 25] as const
+const BRUSH_BLEND_HW    = 2
+const BRUSH_OFFSETS     = [0, 0, 3, 5, 11]
+const BRUSH_SAMPLES     = 200
+
 // Radius slider geometry — mirrors ShapeLayer's stroke-width pill layout
 const SLOT_H      = 30
 const SLOT_GAP    = 4
@@ -153,6 +166,9 @@ export class PathLayer extends ShapeLayer {
 
   // true = closed Catmull-Rom loop; false = open spline (StrokeLayer).
   protected _closedPath = true
+
+  // Cached brush rendering — rebuilt in recompute, blitted in renderSelf
+  private _brushCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
   // Subclasses override this getter to change the minimum point count.
   protected get _minPoints(): number { return MIN_POINTS }
@@ -208,6 +224,44 @@ export class PathLayer extends ShapeLayer {
       }
     }
     super.recompute()
+    this._rebuildBrushCanvas()
+  }
+
+  private _rebuildBrushCanvas(): void {
+    const w = Node.canvasWidth, h = Node.canvasHeight
+    if (this._brushCanvas.width !== w || this._brushCanvas.height !== h)
+      this._brushCanvas = new OffscreenCanvas(w, h)
+    const bctx = this._brushCanvas.getContext('2d')!
+    bctx.clearRect(0, 0, w, h)
+    if (this._filled || this._points.length < 2) return
+    const c   = this._scale !== 1 ? this._centroid() : null
+    const pts: Point[] = []
+    for (let i = 0; i <= BRUSH_SAMPLES; i++) {
+      const t = i / BRUSH_SAMPLES
+      let p = samplePath(this._points, t % 1, this._radius)
+      if (c !== null) p = { x: c.x + (p.x - c.x) * this._scale, y: c.y + (p.y - c.y) * this._scale }
+      pts.push(p)
+    }
+    const sz   = this._strokeWidth
+    const col0 = this._colour
+    const col  = `#${Math.round(col0.r*255).toString(16).padStart(2,'0')}${Math.round(col0.g*255).toString(16).padStart(2,'0')}${Math.round(col0.b*255).toString(16).padStart(2,'0')}`
+    const seed = hashString(this.debugName)
+    const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
+    const hw = BRUSH_BLEND_HW
+    if (sz > pt1 - hw && sz < pt1 + hw) {
+      const t   = (sz - (pt1 - hw)) / (2 * hw)
+      const eff = Math.max(1, sz - ((1 - t) * (BRUSH_OFFSETS[2] ?? 0) + t * (BRUSH_OFFSETS[3] ?? 0)))
+      drawNibBrushBlend(bctx, pts, col, eff, seed, NIB_PEN_DEFAULTS, BRUSH_DEFAULTS, t)
+    } else {
+      const caseIdx = sz < pt0 ? 1 : sz < pt1 ? 2 : sz < pt2 ? 3 : 4
+      const eff = Math.max(1, sz - (BRUSH_OFFSETS[caseIdx] ?? 0))
+      switch (caseIdx) {
+        case 1: drawPencilLine(bctx,         pts, col, eff, seed); break
+        case 2: drawNibPen(bctx,             pts, col, eff, seed); break
+        case 3: drawCalligraphyBrush(bctx,   pts, col, eff, seed); break
+        case 4: drawLichtensteinStroke(bctx, pts, col, eff, seed); break
+      }
+    }
   }
 
   // ----------------------------------------------------------
@@ -790,7 +844,19 @@ export class PathLayer extends ShapeLayer {
     ctx.restore()
   }
 
-  protected _showSplineGuide(): boolean { return true }
+  // Suppress orange spline outline in stroke mode — brush rendering is the visual.
+  protected _showSplineGuide(): boolean { return this._filled }
+
+  override renderSelf(ctx: Ctx2D): void {
+    if (this._filled) {
+      super.renderSelf(ctx)
+    } else {
+      ctx.save()
+      ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity * this._colour.a))
+      ctx.drawImage(this._brushCanvas, 0, 0)
+      ctx.restore()
+    }
+  }
 
   private _drawControlHandles(ctx: Ctx2D): void {
     if (this._points.length < 2) return
