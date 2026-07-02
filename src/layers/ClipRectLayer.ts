@@ -44,6 +44,7 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
     this.debugName = 'ClipRect'
     this._showAnimateButton = false
     this._showMaskButton    = false
+    this._showPointButton   = false
   }
 
   // Link a hidden Mask helper whose content should track this shape's

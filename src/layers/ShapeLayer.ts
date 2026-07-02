@@ -60,8 +60,10 @@ const CONV_BTN_GAP = 14   // gap from bottom edge of viewport
 const CONV_BTN_SEP = 8    // horizontal gap between the two buttons
 const ANIM_BTN_W   = 72   // "Animate"
 const MASK_BTN_W   = 60   // "Mask"
-const ANIM_BTN_COL = '#cf7ecf'   // Point/AnimPath accent
-const MASK_BTN_COL = '#cfcf7e'   // Mask accent
+const ANIM_BTN_COL  = '#cf7ecf'   // Point/AnimPath accent
+const MASK_BTN_COL  = '#cfcf7e'   // Mask accent
+const POINT_BTN_W   = 55          // "Point"
+const POINT_BTN_COL = '#cf7ecf'   // Point type accent
 
 // Stroke/scale control pill, drawn directly below the canvas-space panel pill.
 const SLOT_H    = 30
@@ -165,6 +167,10 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   protected _addMaskDone    = false
   protected _onAddMask: (() => void) | null = null
 
+  protected _showPointButton = true
+  protected _addPointDone    = false
+  protected _onAddPoint: (() => void) | null = null
+
   constructor(cx: number, cy: number, width: number, height: number, colour?: Colour) {
     super()
     this._cx     = cx
@@ -206,8 +212,22 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   setOnAddAnimate(fn: () => void): void { this._onAddAnimate = fn }
   setOnAddMask(fn: () => void):    void { this._onAddMask    = fn }
+  setOnAddPoint(fn: () => void):   void { this._onAddPoint   = fn }
 
   getPoint(): Point { return { x: this._cx, y: this._cy } }
+
+  /** Four bounding-box side midpoints (top, right, bottom, left) in canvas space. */
+  getRefPoints(): Point[] {
+    const hw = this._width  * this._scale / 2
+    const hh = this._height * this._scale / 2
+    const cosA = Math.cos(this._angle), sinA = Math.sin(this._angle)
+    return [
+      { x: this._cx + sinA * hh, y: this._cy - cosA * hh },
+      { x: this._cx + cosA * hw, y: this._cy + sinA * hw },
+      { x: this._cx - sinA * hh, y: this._cy + cosA * hh },
+      { x: this._cx - cosA * hw, y: this._cy - sinA * hw },
+    ]
+  }
 
   override getSnapBounds(): { minX: number; maxX: number; minY: number; maxY: number } | null {
     const halfW = this._width  * this._scale / 2
@@ -290,6 +310,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       filled: this._filled, strokeWidth: this._strokeWidth, scale: this._scale,
       addAnimateDone: this._addAnimateDone,
       addMaskDone:    this._addMaskDone,
+      addPointDone:   this._addPointDone,
     }
   }
 
@@ -306,6 +327,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.scale === 'number')       this._scale = state.scale
     if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
     if (typeof state.addMaskDone    === 'boolean') this._addMaskDone    = state.addMaskDone
+    if (typeof state.addPointDone   === 'boolean') this._addPointDone   = state.addPointDone
   }
 
   // Subclasses that render as a stroke (not a fill) override this to return
@@ -355,6 +377,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    this._renderConvBtn(ctx, 'point')
     this._renderConvBtn(ctx, 'animate')
     this._renderConvBtn(ctx, 'mask')
   }
@@ -717,6 +740,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._convBtnHitTest(point, 'point'))   return this
     if (this._convBtnHitTest(point, 'animate')) return this
     if (this._convBtnHitTest(point, 'mask'))    return this
     // Shape handles take priority over pill controls
@@ -742,6 +766,11 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (this._convBtnHitTest(point, 'point')) {
+      this._addPointDone = true
+      this._onAddPoint?.()
+      return true
+    }
     if (this._convBtnHitTest(point, 'animate')) {
       this._addAnimateDone = true
       this._onAddAnimate?.()
@@ -1259,35 +1288,43 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // Convenience button helpers (Animate + Mask, side-by-side)
   // ----------------------------------------------------------
 
-  protected _convBtnRect(which: 'animate' | 'mask'): { x: number; y: number; w: number } {
+  protected _convBtnRect(which: 'animate' | 'mask' | 'point'): { x: number; y: number; w: number } {
     const left  = contentLeft(Node.canvasWidth)
     const y     = Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP
-    const showA = this._showAnimateButton
-    const showM = this._showMaskButton
-    if (showA && showM) {
-      const total  = MASK_BTN_W + CONV_BTN_SEP + ANIM_BTN_W
-      const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
-      return which === 'mask'
-        ? { x: startX,                          y, w: MASK_BTN_W }
-        : { x: startX + MASK_BTN_W + CONV_BTN_SEP, y, w: ANIM_BTN_W }
+    type K = 'point' | 'mask' | 'animate'
+    const order:  K[]           = ['point', 'mask', 'animate']
+    const widths: Record<K, number>  = { point: POINT_BTN_W, mask: MASK_BTN_W, animate: ANIM_BTN_W }
+    const show:   Record<K, boolean> = {
+      point:   this._showPointButton,
+      mask:    this._showMaskButton,
+      animate: this._showAnimateButton,
     }
-    const w = which === 'mask' ? MASK_BTN_W : ANIM_BTN_W
-    return { x: left + Math.max(0, (Node.viewportWidth - left - w) / 2), y, w }
+    const visible = order.filter(k => show[k])
+    const total   = visible.reduce((s, k, i) => s + widths[k] + (i > 0 ? CONV_BTN_SEP : 0), 0)
+    const startX  = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+    let xOff = 0
+    for (const k of visible) {
+      if (k === which) return { x: startX + xOff, y, w: widths[k] }
+      xOff += widths[k] + CONV_BTN_SEP
+    }
+    return { x: left + Math.max(0, (Node.viewportWidth - left - widths[which]) / 2), y, w: widths[which] }
   }
 
-  protected _convBtnHitTest(point: Point, which: 'animate' | 'mask'): boolean {
+  protected _convBtnHitTest(point: Point, which: 'animate' | 'mask' | 'point'): boolean {
     if (which === 'animate' && (!this._showAnimateButton || this._addAnimateDone)) return false
     if (which === 'mask'    && (!this._showMaskButton    || this._addMaskDone))    return false
+    if (which === 'point'   && (!this._showPointButton   || this._addPointDone))   return false
     const { x, y, w } = this._convBtnRect(which)
     return point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H
   }
 
-  protected _renderConvBtn(ctx: Ctx2D, which: 'animate' | 'mask'): void {
+  protected _renderConvBtn(ctx: Ctx2D, which: 'animate' | 'mask' | 'point'): void {
     if (which === 'animate' && (!this._showAnimateButton || this._addAnimateDone)) return
     if (which === 'mask'    && (!this._showMaskButton    || this._addMaskDone))    return
+    if (which === 'point'   && (!this._showPointButton   || this._addPointDone))   return
     const { x, y, w } = this._convBtnRect(which)
-    const label = which === 'mask' ? 'Mask' : 'Animate'
-    const col   = which === 'mask' ? MASK_BTN_COL : ANIM_BTN_COL
+    const label = which === 'mask' ? 'Mask' : which === 'animate' ? 'Animate' : 'Point'
+    const col   = which === 'mask' ? MASK_BTN_COL : which === 'animate' ? ANIM_BTN_COL : POINT_BTN_COL
     const midY  = y + CONV_BTN_H / 2
 
     ctx.save()

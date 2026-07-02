@@ -23,14 +23,75 @@ export interface SnapEdges {
   ys: number[]  // candidate y values (positions for horizontal guide lines)
 }
 
-/** Collect edge candidates from up to maxCount non-hidden layers below `from`. */
+/**
+ * Collect all Layer nodes reachable through slot source chains from `root`
+ * (up to `depth` hops, following both active and suspended-bound slots).
+ * Used to exclude already-bound layers from snap candidates so guides don't
+ * fire spuriously when a layer's position is driven by those sources.
+ */
+function collectBoundSources(root: Layer, depth: number): Set<Layer> {
+  const out = new Set<Layer>()
+  const visit = (node: Layer, d: number): void => {
+    if (d <= 0) return
+    for (const slot of node.slotList) {
+      const src = slot.source
+      if (src !== null && src instanceof Layer && !out.has(src)) {
+        out.add(src)
+        visit(src, d - 1)
+      }
+    }
+  }
+  visit(root, depth)
+  return out
+}
+
+/** Collect all layers in the stack (above and below `from`) that expose a
+ *  `getRefPoints()` method, returning each with its current ref point array.
+ *  Used by StrokeLayer and LineLayer to offer shape-snap during endpoint drags. */
+export function collectRefPointSources(
+  from: Layer,
+): Array<{ layer: Layer; pts: { x: number; y: number }[] }> {
+  const result: Array<{ layer: Layer; pts: { x: number; y: number }[] }> = []
+  const visit = (l: Layer | null) => {
+    while (l !== null) {
+      if (l !== from && !l.isHiddenHelper && !l.outsideStack) {
+        const s = l as unknown as Record<string, unknown>
+        if (typeof s['getRefPoints'] === 'function') {
+          const pts = (s['getRefPoints'] as () => { x: number; y: number }[])()
+          if (pts.length > 0) result.push({ layer: l, pts })
+        }
+      }
+      l = l.layerBelow
+    }
+  }
+  visit(from.layerBelow)
+  // Also search above (a shape might be inserted above the stroke/line)
+  let up: Layer | null = from.layerAbove
+  while (up !== null) {
+    if (up !== from && !up.isHiddenHelper && !up.outsideStack) {
+      const s = up as unknown as Record<string, unknown>
+      if (typeof s['getRefPoints'] === 'function') {
+        const pts = (s['getRefPoints'] as () => { x: number; y: number }[])()
+        if (pts.length > 0) result.push({ layer: up, pts })
+      }
+    }
+    up = up.layerAbove
+  }
+  return result
+}
+
+/** Collect edge candidates from up to maxCount non-hidden layers below `from`,
+ *  automatically excluding layers that are already bound (directly or transitively)
+ *  as slot sources — their positions are driven by the binding, so aligning with
+ *  them is always true and the guide would fire on every frame. */
 export function collectSnapEdges(from: Layer, maxCount = 3): SnapEdges {
+  const exclude = collectBoundSources(from, 3)
   const xs: number[] = []
   const ys: number[] = []
   let layer = from.layerBelow
   let found = 0
   while (layer !== null && found < maxCount) {
-    if (!layer.isHiddenHelper && !layer.outsideStack) {
+    if (!layer.isHiddenHelper && !layer.outsideStack && !exclude.has(layer)) {
       const b = layer.getSnapBounds()
       if (b !== null) {
         xs.push(b.minX, (b.minX + b.maxX) / 2, b.maxX)

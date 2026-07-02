@@ -1,3 +1,4 @@
+import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
@@ -7,6 +8,7 @@ import {
 } from '../core/types.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { PathLayer, samplePathOpen } from './PathLayer.js'
+import { collectRefPointSources } from '../interaction/EdgeSnapper.js'
 import { panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
 import {
@@ -39,6 +41,11 @@ const AM_COL          = '#4a8fe8'
 const RDP_EPS         = 8
 const ARC_SAMPLES     = 200
 const CLOSE_THRESHOLD = 20   // px — endpoint proximity that triggers path closure
+
+const EP_SNAP_R        = 30   // px — shape ref-point snap activation radius
+const EP_SNAP_DWELL_MS = 600  // ms — dwell before snap is "locked"
+const EP_REF_R         = 8    // px — ref-point indicator circle radius
+const EP_SNAP_COL      = '#7ecfcf'
 
 export type StrokeStateSnapshot = {
   points:      Point[]
@@ -82,6 +89,14 @@ export class StrokeLayer extends PathLayer {
 
   // Cached brush rendering (redrawn in recompute, blitted in renderSelf)
   private _brushCanvas: OffscreenCanvas
+
+  // Shape-snap state for endpoint drags — fires _onSnapPoint when released on a ref point
+  private _epDragging:    'start' | 'end' | null = null
+  private _epRefSources:  { layer: Layer; pts: { x: number; y: number }[] }[] = []
+  private _epSnapTarget:  { layer: Layer; refIdx: number; pt: { x: number; y: number } } | null = null
+  private _epSnapProgress = 0
+  private _epSnapTimer:   ReturnType<typeof setInterval> | null = null
+  private _onSnapPoint:   ((which: 'start' | 'end', shape: Layer, refIdx: number) => void) | null = null
 
   // Closure callback — set by main.ts via setOnClose
   private _onClose: ((stroke: StrokeLayer) => void) | null = null
@@ -174,48 +189,28 @@ export class StrokeLayer extends PathLayer {
   // ----------------------------------------------------------
 
   protected override recompute(): void {
-    // Apply startSlot / endSlot before super (which handles rotation/position)
-    const hasPoints = this._points.length >= 2
-    if (hasPoints) {
-      if (this.startSlot.isActive && this.endSlot.isActive) {
-        const A = this._points[0]!
-        const B = this._points[this._points.length - 1]!
-        const S = (this.startSlot.source as PointSource).getPoint()
-        const E = (this.endSlot.source as PointSource).getPoint()
-        const fromLen = Math.hypot(B.x - A.x, B.y - A.y)
-        const toLen   = Math.hypot(E.x - S.x, E.y - S.y)
-        if (fromLen > 0.001) {
-          const scale = toLen / fromLen
-          const rot   = Math.atan2(E.y - S.y, E.x - S.x) - Math.atan2(B.y - A.y, B.x - A.x)
-          const cos = Math.cos(rot), sin = Math.sin(rot)
-          this._points = this._points.map(p => {
-            const dx = p.x - A.x, dy = p.y - A.y
-            return { x: S.x + (dx * cos - dy * sin) * scale,
-                     y: S.y + (dx * sin + dy * cos) * scale }
-          })
-        } else {
-          const dx = S.x - A.x, dy = S.y - A.y
-          if (dx !== 0 || dy !== 0)
-            this._points = this._points.map(p => ({ x: p.x + dx, y: p.y + dy }))
-        }
-      } else if (this.startSlot.isActive) {
-        const A  = this._points[0]!
-        const S  = (this.startSlot.source as PointSource).getPoint()
-        const dx = S.x - A.x, dy = S.y - A.y
-        if (dx !== 0 || dy !== 0)
-          this._points = this._points.map(p => ({ x: p.x + dx, y: p.y + dy }))
-      } else if (this.endSlot.isActive) {
-        const B  = this._points[this._points.length - 1]!
-        const E  = (this.endSlot.source as PointSource).getPoint()
-        const dx = E.x - B.x, dy = E.y - B.y
-        if (dx !== 0 || dy !== 0)
-          this._points = this._points.map(p => ({ x: p.x + dx, y: p.y + dy }))
-      }
+    // Pin individual endpoints before super (which applies position/rotation slots).
+    // Each active slot moves only its own endpoint; middle points are not affected,
+    // allowing the curve to reshape as the pinned endpoint is driven externally.
+    if (this._points.length >= 2) {
+      if (this.startSlot.isActive)
+        this._points[0] = { ...(this.startSlot.source as PointSource).getPoint() }
+      if (this.endSlot.isActive)
+        this._points[this._points.length - 1] = { ...(this.endSlot.source as PointSource).getPoint() }
     }
 
-    super.recompute()  // handles radius, rotation, position, colour, opacity, scale, strokeWidth
+    super.recompute()  // handles radius, rotation, position (respects _positionPinned), colour, opacity, scale, strokeWidth
     this._rebuildArcSamples()
     this._rebuildBrushCanvas()
+  }
+
+  // Pinned indices: positionSlot skips these so bound endpoints stay fixed
+  // while the center handle or position slot moves all other control points.
+  protected override _positionPinned(): Set<number> {
+    const pinned = new Set<number>()
+    if (this.startSlot.isActive) pinned.add(0)
+    if (this.endSlot.isActive)   pinned.add(this._points.length - 1)
+    return pinned
   }
 
   private _rebuildBrushCanvas(): void {
@@ -404,32 +399,66 @@ export class StrokeLayer extends PathLayer {
   override renderOverlay(ctx: Ctx2D): void {
     if (!this._drawMode) {
       super.renderOverlay(ctx)   // PathLayer: handles + snap guides + animate btn
+      this._renderEpSnapIndicators(ctx)
     } else {
       this._renderConvBtn(ctx, 'animate')
     }
+  }
+
+  private _renderEpSnapIndicators(ctx: Ctx2D): void {
+    if (this._epDragging === null || this._epRefSources.length === 0) return
+    ctx.save()
+    for (const { layer, pts } of this._epRefSources) {
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]!
+        const snapped = this._epSnapTarget !== null &&
+          this._epSnapTarget.layer === layer && this._epSnapTarget.refIdx === i
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, EP_REF_R, 0, Math.PI * 2)
+        ctx.strokeStyle = snapped ? EP_SNAP_COL : EP_SNAP_COL + '66'
+        ctx.lineWidth   = snapped ? 2 : 1.5
+        ctx.stroke()
+        ctx.fillStyle    = snapped ? EP_SNAP_COL : EP_SNAP_COL + '99'
+        ctx.font         = '10px monospace'
+        ctx.textAlign    = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(String(i + 1), p.x, p.y)
+      }
+    }
+    if (this._epSnapTarget !== null && this._epSnapProgress > 0) {
+      const p = this._epSnapTarget.pt
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, EP_REF_R + 4, -Math.PI / 2,
+        -Math.PI / 2 + this._epSnapProgress * Math.PI * 2)
+      ctx.strokeStyle = EP_SNAP_COL
+      ctx.lineWidth   = 2
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
   // renderSlots: exclude positionSlot from standard pill
   // ----------------------------------------------------------
 
-  protected override _strokePillBounds() {
-    const cb           = this.canvasBounds
-    const standardSlots = this.slots.filter(
+  // Slots shown in the standard pill: excludes per-pill slots but includes
+  // positionSlot (first) so the whole-stroke position binding appears at the top.
+  private get _standardSlots() {
+    return this.slots.filter(
       s => s !== this.fillModeSlot && s !== this.strokeWidthSlot &&
-           s !== this.scaleSlot && s !== this.radiusSlot && s !== this.positionSlot
+           s !== this.scaleSlot && s !== this.radiusSlot
     )
-    const standardH = standardSlots.length * (30 + 4) - 4
+  }
+
+  protected override _strokePillBounds() {
+    const cb        = this.canvasBounds
+    const standardH = this._standardSlots.length * (30 + 4) - 4
     return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * 30 + 4 * 4 }
   }
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot &&
-           s !== this.scaleSlot && s !== this.radiusSlot && s !== this.positionSlot
-    )
-    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    this.renderSlotGroup(ctx, this._standardSlots, this.panelBottom)
     this._drawStrokePill(ctx)
     this._drawRadiusPill(ctx)
   }
@@ -482,9 +511,15 @@ export class StrokeLayer extends PathLayer {
       return
     }
     super.handlePointerMove(point)
+    this._updateEpSnap(point)
   }
 
   override handlePointerUp(): void {
+    // Capture snap state before clearing it.
+    const snap  = this._epSnapTarget
+    const which = this._epDragging
+    this._clearEpSnapState()
+
     if (this._drawMode) {
       if (this._rawPoints.length >= 2) {
         this._fitToPoints()
@@ -495,23 +530,88 @@ export class StrokeLayer extends PathLayer {
     }
     super.handlePointerUp()
     this._checkClosure()
+
+    if (snap !== null && which !== null && !this._addPointDone && this._onSnapPoint !== null) {
+      this._addPointDone = true
+      this._onSnapPoint(which, snap.layer, snap.refIdx)
+    }
   }
 
-  // Suspend endpoint slots when any canvas-space handle drag starts.
-  protected override _onHandleDragStart(): void {
-    this._suspendEndpointSlots()
+  private _updateEpSnap(point: Point): void {
+    if (this._epDragging === null || this._epRefSources.length === 0) return
+    let best: { layer: Layer; refIdx: number; pt: { x: number; y: number }; dist: number } | null = null
+    for (const { layer, pts } of this._epRefSources) {
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]!
+        const d = Math.hypot(point.x - p.x, point.y - p.y)
+        if (d < EP_SNAP_R && (best === null || d < best.dist))
+          best = { layer, refIdx: i, pt: { x: p.x, y: p.y }, dist: d }
+      }
+    }
+    if (best !== null) {
+      const changed = this._epSnapTarget === null ||
+        this._epSnapTarget.layer !== best.layer ||
+        this._epSnapTarget.refIdx !== best.refIdx
+      if (changed) {
+        this._clearEpSnapTimer()
+        this._epSnapTarget = { layer: best.layer, refIdx: best.refIdx, pt: best.pt }
+        this._epSnapProgress = 0
+        this._epSnapTimer = setInterval(() => {
+          this._epSnapProgress = Math.min(1, this._epSnapProgress + 16 / EP_SNAP_DWELL_MS)
+          this.markDirty()
+        }, 16)
+      }
+      const ptIdx = this._epDragging === 'start' ? 0 : this._points.length - 1
+      this._points[ptIdx] = { ...best.pt }
+    } else {
+      this._clearEpSnapTimer()
+      this._epSnapTarget   = null
+      this._epSnapProgress = 0
+    }
+    this.markDirty()
   }
 
-  private _suspendEndpointSlots(): void {
-    if (this.startSlot.state === SlotState.Bound)
+  private _clearEpSnapState(): void {
+    this._clearEpSnapTimer()
+    this._epSnapTarget   = null
+    this._epSnapProgress = 0
+    this._epDragging     = null
+    this._epRefSources   = []
+  }
+
+  private _clearEpSnapTimer(): void {
+    if (this._epSnapTimer !== null) { clearInterval(this._epSnapTimer); this._epSnapTimer = null }
+  }
+
+  // Suspend only the matching endpoint slot when the user directly grabs that
+  // control point (index 0 → startSlot, index n-1 → endSlot). Other handle
+  // drags (center, size, rotate, middle points) leave endpoint slots active.
+  // Also starts shape-snap tracking for endpoint drags.
+  protected override _onControlPointDragStart(idx: number): void {
+    const n = this._points.length
+    if (idx === 0 && this.startSlot.state === SlotState.Bound)
       BindingLayer.findForSlot(this.startSlot)?.toggle()
-    if (this.endSlot.state === SlotState.Bound)
+    if (idx === n - 1 && this.endSlot.state === SlotState.Bound)
       BindingLayer.findForSlot(this.endSlot)?.toggle()
+    this._clearEpSnapState()
+    if (!this._addPointDone && this._onSnapPoint !== null) {
+      if (idx === 0)     { this._epDragging = 'start'; this._epRefSources = collectRefPointSources(this) }
+      if (idx === n - 1) { this._epDragging = 'end';   this._epRefSources = collectRefPointSources(this) }
+    }
+  }
+
+  // Clear ep snap when center/size/rotate drags start (non-endpoint drags).
+  protected override _onHandleDragStart(): void {
+    this._clearEpSnapState()
   }
 
   // ----------------------------------------------------------
   // Path closure
   // ----------------------------------------------------------
+
+  setOnSnapPoint(fn: (which: 'start' | 'end', shape: Layer, refIdx: number) => void): void {
+    this._onSnapPoint = fn
+  }
 
   setOnClose(cb: (stroke: StrokeLayer) => void): void {
     this._onClose = cb

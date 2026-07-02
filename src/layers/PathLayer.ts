@@ -178,6 +178,15 @@ export class PathLayer extends ShapeLayer {
   // rotate, or individual control point). Subclasses override to suspend slots.
   protected _onHandleDragStart(): void {}
 
+  // Hook called after _dragIndex is set when the user directly grabs a control
+  // point (not curve-insert). idx is the index of the grabbed point. Override
+  // to suspend per-endpoint slots selectively.
+  protected _onControlPointDragStart(_idx: number): void {}
+
+  // Returns the set of _points indices that positionSlot should NOT move.
+  // Override in subclasses to protect pinned endpoints.
+  protected _positionPinned(): Set<number> { return new Set() }
+
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
     super(cx, cy, 1, 1, colour)
@@ -195,6 +204,9 @@ export class PathLayer extends ShapeLayer {
     }
     return { minX, maxX, minY, maxY }
   }
+
+  /** All control points in canvas space. */
+  getRefPoints(): Point[] { return this._points.map(p => ({ ...p })) }
 
   // ----------------------------------------------------------
   // Node — slot-driven rotation and position are applied to the
@@ -221,7 +233,14 @@ export class PathLayer extends ShapeLayer {
       const dx = p.x - c.x
       const dy = p.y - c.y
       if (dx !== 0 || dy !== 0) {
-        this._points = this._points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }))
+        const pinned = this._positionPinned()
+        if (pinned.size === 0) {
+          this._points = this._points.map(pt => ({ x: pt.x + dx, y: pt.y + dy }))
+        } else {
+          this._points = this._points.map((pt, i) =>
+            pinned.has(i) ? pt : { x: pt.x + dx, y: pt.y + dy }
+          )
+        }
       }
     }
     super.recompute()
@@ -498,6 +517,7 @@ export class PathLayer extends ShapeLayer {
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
     drawSnapGuides(ctx, this._pathEdgeSnapX, this._pathEdgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    this._renderConvBtn(ctx, 'point')
     this._renderConvBtn(ctx, 'animate')
     this._renderConvBtn(ctx, 'mask')
   }
@@ -507,6 +527,7 @@ export class PathLayer extends ShapeLayer {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
+    if (this._convBtnHitTest(point, 'point'))   return this
     if (this._convBtnHitTest(point, 'animate')) return this
     if (this._convBtnHitTest(point, 'mask'))    return this
     // Canvas-space handles take priority over pill controls.
@@ -532,6 +553,11 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerDown(point: Point): boolean {
+    if (this._convBtnHitTest(point, 'point')) {
+      this._addPointDone = true
+      this._onAddPoint?.()
+      return true
+    }
     if (this._convBtnHitTest(point, 'animate')) {
       this._addAnimateDone = true
       this._onAddAnimate?.()
@@ -585,6 +611,7 @@ export class PathLayer extends ShapeLayer {
     if (idx >= 0) {
       this._onHandleDragStart()
       this._dragIndex = idx
+      this._onControlPointDragStart(idx)
       this.markDirty()
       return true
     }

@@ -15,7 +15,7 @@ import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
-import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD, collectRefPointSources } from '../interaction/EdgeSnapper.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
 import {
   hashString,
@@ -73,6 +73,11 @@ const BRUSH_TRANSITIONS = [5, 13, 25] as const
 const BRUSH_BLEND_HW    = 2
 const BRUSH_OFFSETS     = [0, 0, 3, 5, 11]
 
+const EP_SNAP_R        = 30   // px — shape ref-point snap activation radius
+const EP_SNAP_DWELL_MS = 600  // ms — dwell before snap is "locked"
+const EP_REF_R         = 8    // px — ref-point indicator circle radius
+const EP_SNAP_COL      = '#7ecfcf'
+
 function ptDist(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y - b.y) }
 
 function bezier2(
@@ -119,6 +124,22 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   private _addMaskDone = false
   private _onAddMask: (() => void) | null = null
   setOnAddMask(fn: () => void): void { this._onAddMask = fn }
+
+  // Point convenience button
+  private _addPointDone = false
+  private _onAddPoint: (() => void) | null = null
+  setOnAddPoint(fn: () => void): void { this._onAddPoint = fn }
+
+  // Shape-snap state for endpoint drags
+  private _epDragging:    'start' | 'end' | null = null
+  private _epRefSources:  { layer: Layer; pts: { x: number; y: number }[] }[] = []
+  private _epSnapTarget:  { layer: Layer; refIdx: number; pt: { x: number; y: number } } | null = null
+  private _epSnapProgress = 0
+  private _epSnapTimer:   ReturnType<typeof setInterval> | null = null
+  private _onSnapPoint:   ((which: 'start' | 'end', shape: Layer, refIdx: number) => void) | null = null
+  setOnSnapPoint(fn: (which: 'start' | 'end', shape: Layer, refIdx: number) => void): void {
+    this._onSnapPoint = fn
+  }
 
   // Active drag
   private _drag:             HandleDrag | null  = null
@@ -193,6 +214,9 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   getImage(): ImageValue { return this._canvas     }
   getMask():  MaskValue  { return this._maskCanvas }
 
+  /** Start and end endpoints in canvas space. */
+  getRefPoints(): Point[] { return [{ ...this._renderedStart }, { ...this._renderedEnd }] }
+
   override getSnapBounds() {
     const minX = Math.min(this._start.x, this._end.x)
     const maxX = Math.max(this._start.x, this._end.x)
@@ -213,7 +237,8 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
       colour:      this._colour,
       arrowStart:  this._arrowStart,
       arrowEnd:    this._arrowEnd,
-      addMaskDone: this._addMaskDone,
+      addMaskDone:  this._addMaskDone,
+      addPointDone: this._addPointDone,
     }
   }
 
@@ -224,7 +249,8 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     if (state.colour && typeof state.colour === 'object') this._colour = state.colour as Colour
     if (typeof state.arrowStart === 'boolean')            this._arrowStart = state.arrowStart
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
-    if (typeof state.addMaskDone === 'boolean')           this._addMaskDone = state.addMaskDone
+    if (typeof state.addMaskDone  === 'boolean') this._addMaskDone  = state.addMaskDone
+    if (typeof state.addPointDone === 'boolean') this._addPointDone = state.addPointDone
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
@@ -474,30 +500,82 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   override renderOverlay(ctx: Ctx2D): void {
     this._drawHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
-    this._renderMaskBtn(ctx)
+    this._renderEpSnapIndicators(ctx)
+    this._renderLineConvBtn(ctx, 'point')
+    this._renderLineConvBtn(ctx, 'mask')
   }
 
-  private _maskBtnRect() {
-    const BTN_W = 60, BTN_H = 30, GAP = 14
-    const left  = contentLeft(Node.canvasWidth)
-    const x     = left + Math.max(0, (Node.viewportWidth - left - BTN_W) / 2)
-    return { x, y: Node.viewportHeight - BTN_H - GAP, w: BTN_W, h: BTN_H }
+  private _renderEpSnapIndicators(ctx: Ctx2D): void {
+    if (this._epDragging === null || this._epRefSources.length === 0) return
+    ctx.save()
+    for (const { layer, pts } of this._epRefSources) {
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]!
+        const snapped = this._epSnapTarget !== null &&
+          this._epSnapTarget.layer === layer && this._epSnapTarget.refIdx === i
+        ctx.beginPath()
+        ctx.arc(p.x, p.y, EP_REF_R, 0, Math.PI * 2)
+        ctx.strokeStyle = snapped ? EP_SNAP_COL : EP_SNAP_COL + '66'
+        ctx.lineWidth   = snapped ? 2 : 1.5
+        ctx.stroke()
+        ctx.fillStyle    = snapped ? EP_SNAP_COL : EP_SNAP_COL + '99'
+        ctx.font         = '10px monospace'
+        ctx.textAlign    = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(String(i + 1), p.x, p.y)
+      }
+    }
+    if (this._epSnapTarget !== null && this._epSnapProgress > 0) {
+      const p = this._epSnapTarget.pt
+      ctx.beginPath()
+      ctx.arc(p.x, p.y, EP_REF_R + 4, -Math.PI / 2,
+        -Math.PI / 2 + this._epSnapProgress * Math.PI * 2)
+      ctx.strokeStyle = EP_SNAP_COL
+      ctx.lineWidth   = 2
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
-  private _renderMaskBtn(ctx: Ctx2D): void {
-    if (this._addMaskDone || this._onAddMask === null) return
-    const { x, y, w, h } = this._maskBtnRect()
-    const midY = y + h / 2
+  // Layout for LineLayer's own convenience buttons (point left, mask right).
+  private _lineBtnRect(which: 'mask' | 'point'): { x: number; y: number; w: number; h: number } {
+    const POINT_W = 55, MASK_W = 60, BTN_H = 30, GAP = 14, SEP = 8
+    const left     = contentLeft(Node.canvasWidth)
+    const y        = Node.viewportHeight - BTN_H - GAP
+    const showP    = !this._addPointDone && this._onAddPoint !== null
+    const showM    = !this._addMaskDone  && this._onAddMask  !== null
+    if (showP && showM) {
+      const total  = POINT_W + SEP + MASK_W
+      const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+      return which === 'point'
+        ? { x: startX,                 y, w: POINT_W, h: BTN_H }
+        : { x: startX + POINT_W + SEP, y, w: MASK_W,  h: BTN_H }
+    }
+    const w = which === 'point' ? POINT_W : MASK_W
+    return { x: left + Math.max(0, (Node.viewportWidth - left - w) / 2), y, w, h: BTN_H }
+  }
+
+  // Refactored from _renderMaskBtn to handle both mask and point buttons.
+  private _maskBtnRect() { return this._lineBtnRect('mask') }
+
+  private _renderLineConvBtn(ctx: Ctx2D, which: 'mask' | 'point'): void {
+    const done     = which === 'mask' ? this._addMaskDone  : this._addPointDone
+    const callback = which === 'mask' ? this._onAddMask    : this._onAddPoint
+    if (done || callback === null) return
+    const { x, y, w, h } = this._lineBtnRect(which)
+    const midY  = y + h / 2
+    const col   = which === 'mask' ? '#cfcf7ecc' : '#cf7ecfcc'
+    const label = which === 'mask' ? 'Mask'       : 'Point'
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
-    ctx.fillStyle = '#cfcf7ecc'
+    ctx.fillStyle = col
     ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
     ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
     ctx.fillStyle = 'rgba(255,255,255,0.85)'
     ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.fillText('Mask', x + 10, midY)
+    ctx.fillText(label, x + 10, midY)
     ctx.restore()
     ctx.restore()
   }
@@ -809,8 +887,12 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._drag !== null || this._sliderDrag || this._pivotDrag !== null) return this
+    if (!this._addPointDone && this._onAddPoint !== null) {
+      const { x, y, w, h } = this._lineBtnRect('point')
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     if (!this._addMaskDone && this._onAddMask !== null) {
-      const { x, y, w, h } = this._maskBtnRect()
+      const { x, y, w, h } = this._lineBtnRect('mask')
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
     }
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
@@ -831,8 +913,16 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
+    if (!this._addPointDone && this._onAddPoint !== null) {
+      const { x, y, w, h } = this._lineBtnRect('point')
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addPointDone = true
+        this._onAddPoint()
+        return true
+      }
+    }
     if (!this._addMaskDone && this._onAddMask !== null) {
-      const { x, y, w, h } = this._maskBtnRect()
+      const { x, y, w, h } = this._lineBtnRect('mask')
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
         this._addMaskDone = true
         this._onAddMask()
@@ -876,6 +966,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
       this._drag = 'start'; this._dragStartMouse = { ...point }
       this._dragStartPt = { ...this._start }; this._dragStartOtherPt = null
       this._lineSnapper.reset()
+      this._startEpSnap('start')
       return true
     }
 
@@ -889,6 +980,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
           this._drag = 'end'; this._dragStartMouse = { ...point }
           this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
           this._lineSnapper.reset()
+          this._startEpSnap('end')
           return true
         }
         this._lastDraggedHandle = 'end'
@@ -901,6 +993,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
       this._drag = 'end'; this._dragStartMouse = { ...point }
       this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
       this._lineSnapper.reset()
+      this._startEpSnap('end')
       return true
     }
 
@@ -1013,10 +1106,14 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
         this._edgeSnapX = null; this._edgeSnapY = null
       }
     }
+    this._updateLineEpSnap(point)
     this.markDirty()
   }
 
   handlePointerUp(): void {
+    const snap  = this._epSnapTarget
+    const which = this._epDragging
+    this._clearLineEpSnapState()
     this._drag             = null
     this._dragStartMouse   = null
     this._dragStartPt      = null
@@ -1027,5 +1124,61 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     this._edgeSnapX = null; this._edgeSnapY = null
     // _lastDraggedHandle intentionally kept: it persists across drag sessions so
     // that switching to the other handle on a subsequent drag disables direction.
+
+    if (snap !== null && which !== null && !this._addPointDone && this._onSnapPoint !== null) {
+      this._addPointDone = true
+      this._onSnapPoint(which, snap.layer, snap.refIdx)
+    }
+  }
+
+  private _startEpSnap(which: 'start' | 'end'): void {
+    if (this._addPointDone || this._onSnapPoint === null) return
+    this._epDragging    = which
+    this._epRefSources  = collectRefPointSources(this)
+  }
+
+  private _updateLineEpSnap(point: Point): void {
+    if (this._epDragging === null || this._epRefSources.length === 0) return
+    let best: { layer: Layer; refIdx: number; pt: { x: number; y: number }; dist: number } | null = null
+    for (const { layer, pts } of this._epRefSources) {
+      for (let i = 0; i < pts.length; i++) {
+        const p = pts[i]!
+        const d = Math.hypot(point.x - p.x, point.y - p.y)
+        if (d < EP_SNAP_R && (best === null || d < best.dist))
+          best = { layer, refIdx: i, pt: { x: p.x, y: p.y }, dist: d }
+      }
+    }
+    if (best !== null) {
+      const changed = this._epSnapTarget === null ||
+        this._epSnapTarget.layer !== best.layer ||
+        this._epSnapTarget.refIdx !== best.refIdx
+      if (changed) {
+        this._clearLineEpSnapTimer()
+        this._epSnapTarget   = { layer: best.layer, refIdx: best.refIdx, pt: best.pt }
+        this._epSnapProgress = 0
+        this._epSnapTimer = setInterval(() => {
+          this._epSnapProgress = Math.min(1, this._epSnapProgress + 16 / EP_SNAP_DWELL_MS)
+          this.markDirty()
+        }, 16)
+      }
+      if (this._epDragging === 'start') this._start = { ...best.pt }
+      else                              this._end   = { ...best.pt }
+    } else {
+      this._clearLineEpSnapTimer()
+      this._epSnapTarget   = null
+      this._epSnapProgress = 0
+    }
+  }
+
+  private _clearLineEpSnapState(): void {
+    this._clearLineEpSnapTimer()
+    this._epSnapTarget   = null
+    this._epSnapProgress = 0
+    this._epDragging     = null
+    this._epRefSources   = []
+  }
+
+  private _clearLineEpSnapTimer(): void {
+    if (this._epSnapTimer !== null) { clearInterval(this._epSnapTimer); this._epSnapTimer = null }
   }
 }

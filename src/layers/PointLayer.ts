@@ -117,6 +117,8 @@ const EV_ACCENT   = '#e0e060'   // Event type accent (wander toggle)
 const AM_ACCENT   = '#4a8fe8'   // Amount type accent (amount slot)
 const RATE_ACCENT = '#e87e7e'   // Rate type accent (speed slot)
 const MASK_ACCENT = '#cfcf7e'   // Mask type accent (mask slot)
+const SHAPE_ACCENT = '#cfcf7e'  // Mask type accent (shape slot — Mask-typed)
+const REF_COL     = '#7ecfcf'   // Teal — reference point indicator colour
 
 // Per-type value-box colour for the slot rows drawn by this layer's
 // renderSlots, matching the type accent colours used throughout the app.
@@ -127,6 +129,11 @@ const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
   [ValueType.Rate]:   RATE_ACCENT,
   [ValueType.Mask]:   MASK_ACCENT,
 }
+
+const SHAPE_HANDLE_HIT   = 18   // px hit radius for main handle drag when shape slot is active
+const SHAPE_SNAP_RADIUS  = 30   // px — snap-to-ref zone while dragging
+const SHAPE_SNAP_DWELL_MS = 700  // ms — full progress arc duration
+const REF_HANDLE_R        = 8   // visual radius of reference point indicators
 
 type WanderId = 'drift' | 'brownian' | 'orbit' | 'wave' | 'track'
 const WANDER_TYPES: WanderId[] = ['drift', 'brownian', 'orbit', 'wave', 'track']
@@ -178,6 +185,21 @@ export class PointLayer extends Layer implements PointSource {
   private readonly _region: DraggablePointRegion
   private _point: Point
 
+  // Shape reference mode
+  private readonly _shapeSlot:   ParameterSlot
+  private _shapeRefIndex:  number  = 0
+  private _shapeEnabled:   boolean = false
+  private _cachedRefPoints: Point[] = []
+  // Drag state when main handle is dragged while shape slot is active
+  private _shapeHandleDragging = false
+  private _shapeSnapIdx:     number | null = null
+  private _shapeSnapStartMs: number | null = null
+  private _shapeSnapProgress = 0
+  private _shapeSnapDwellTimer: ReturnType<typeof setInterval> | null = null
+  // Rendered bounds for shape spinner buttons (prev/next) — set during renderSlots
+  private _shapeSpinnerPrev: BBox | null = null
+  private _shapeSpinnerNext: BBox | null = null
+
   // Wander mode
   private readonly _wanderToggleSlot: ParameterSlot
   private readonly _amountSlot:       ParameterSlot
@@ -211,13 +233,14 @@ export class PointLayer extends Layer implements PointSource {
     this._orbitSpin = Math.random() < 0.5 ? 1 : -1
     this._wavePhase = Math.random() * Math.PI * 2
 
+    this._shapeSlot        = new ParameterSlot(ValueType.Mask,   this, 'shape')
     this._wanderToggleSlot = new ParameterSlot(ValueType.Event,  this, 'wander')
     this._amountSlot       = new ParameterSlot(ValueType.Amount, this, 'amount')
     this._speedSlot        = new ParameterSlot(ValueType.Rate,   this, 'speed')
     this._maskSlot         = new ParameterSlot(ValueType.Mask,   this, 'mask')
 
     this.slots.push(
-      this._slot,
+      this._slot, this._shapeSlot,
       this._wanderToggleSlot, this._amountSlot, this._speedSlot, this._maskSlot,
     )
     this.debugName = 'PointLayer'
@@ -250,7 +273,10 @@ export class PointLayer extends Layer implements PointSource {
     this.markDirty()
   }
 
-  get slot(): ParameterSlot { return this._slot }
+  get slot():      ParameterSlot { return this._slot      }
+  get shapeSlot(): ParameterSlot { return this._shapeSlot }
+  setShapeEnabled(v: boolean):   void { this._shapeEnabled   = v;   this.markDirty() }
+  setShapeRefIndex(idx: number): void { this._shapeRefIndex = idx; this.markDirty() }
 
   // ----------------------------------------------------------
   // Wander mode — slot accessors / manual controls
@@ -305,6 +331,32 @@ export class PointLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
+    // Shape reference mode — update cached ref points; lock handle if enabled.
+    if (this._shapeSlot.isActive) {
+      const src = this._shapeSlot.source as unknown
+      if (typeof (src as Record<string, unknown>)['getRefPoints'] === 'function') {
+        this._cachedRefPoints = ((src as Record<string, unknown>)['getRefPoints'] as () => Point[])()
+        // Clamp index in case ref count changed
+        if (this._shapeRefIndex >= this._cachedRefPoints.length) {
+          this._shapeRefIndex = Math.max(0, this._cachedRefPoints.length - 1)
+        }
+      } else {
+        this._cachedRefPoints = []
+      }
+
+      if (this._shapeEnabled && this._cachedRefPoints.length > 0 && !this._shapeHandleDragging) {
+        const ref = this._cachedRefPoints[this._shapeRefIndex]!
+        this._point = { ...ref }
+        this._region.setPoint(this._point)
+        this._region.interactive = false
+        this._lastTickTime = null
+        return
+      }
+    } else {
+      this._cachedRefPoints = []
+      if (this._shapeEnabled) this._shapeEnabled = false
+    }
+
     if (this._slot.isActive) {
       const src = this._slot.source as PointSource
       this._point = src.getPoint()
@@ -351,15 +403,17 @@ export class PointLayer extends Layer implements PointSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      point:         this._point,
-      wanderEnabled: this._wanderEnabled,
-      algoIndex:     this._algoIndex,
-      amount:        this._amount,
-      speed:         this._speed,
-      heading:       this._heading,
-      orbitSpin:     this._orbitSpin,
-      wavePhase:     this._wavePhase,
-      trackDrift:    this._trackDrift,
+      point:          this._point,
+      shapeRefIndex:  this._shapeRefIndex,
+      shapeEnabled:   this._shapeEnabled,
+      wanderEnabled:  this._wanderEnabled,
+      algoIndex:      this._algoIndex,
+      amount:         this._amount,
+      speed:          this._speed,
+      heading:        this._heading,
+      orbitSpin:      this._orbitSpin,
+      wavePhase:      this._wavePhase,
+      trackDrift:     this._trackDrift,
     }
   }
 
@@ -368,6 +422,8 @@ export class PointLayer extends Layer implements PointSource {
       this._point = state.point as Point
       this._region.setPoint(this._point)
     }
+    if (typeof state.shapeRefIndex === 'number') this._shapeRefIndex = state.shapeRefIndex
+    if (typeof state.shapeEnabled  === 'boolean') this._shapeEnabled  = state.shapeEnabled
     if (typeof state.wanderEnabled === 'boolean') this._wanderEnabled = state.wanderEnabled
     if (typeof state.algoIndex === 'number')      this._algoIndex     = state.algoIndex
     if (typeof state.amount === 'number')         this._amount        = state.amount
@@ -676,12 +732,17 @@ export class PointLayer extends Layer implements PointSource {
   // Interaction
   // ----------------------------------------------------------
 
-  // Wander-pill controls and the toggle button (in its slot row) take
-  // priority; otherwise delegate to the handle's hit-test zone, not the
-  // label bar.
+  // Wander-pill controls, shape spinner, and the toggle button (in its slot row)
+  // take priority; otherwise delegate to the handle's hit-test zone.
   protected override hitTestSelf(point: Point) {
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     if (this._hitWanderControls(point)) return this
+    if (this._hitShapeSpinner(point)) return this
+    // Intercept main handle drag when shape slot is active to provide snap-to-ref.
+    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
+      const dx = point.x - this._point.x, dy = point.y - this._point.y
+      if (dx * dx + dy * dy <= SHAPE_HANDLE_HIT * SHAPE_HANDLE_HIT) return this
+    }
     return this._region.hitTest(point)
   }
 
@@ -700,6 +761,12 @@ export class PointLayer extends Layer implements PointSource {
     return false
   }
 
+  private _hitShapeSpinner(point: Point): boolean {
+    if (this._shapeSpinnerPrev !== null && boundingBoxContains(this._shapeSpinnerPrev, point)) return true
+    if (this._shapeSpinnerNext !== null && boundingBoxContains(this._shapeSpinnerNext, point)) return true
+    return false
+  }
+
   handlePointerDown(point: Point): boolean {
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
       this._handleWanderToggle()
@@ -710,6 +777,31 @@ export class PointLayer extends Layer implements PointSource {
     if (boundingBoxContains(prev,  point)) { this.cyclePrev(); return true }
     if (boundingBoxContains(label, point)) { this.cycleNext(); return true }
     if (boundingBoxContains(next,  point)) { this.cycleNext(); return true }
+
+    // Shape spinner [◀] / [▶]
+    if (this._shapeSpinnerPrev !== null && boundingBoxContains(this._shapeSpinnerPrev, point)) {
+      this._cycleShapeRef(-1); return true
+    }
+    if (this._shapeSpinnerNext !== null && boundingBoxContains(this._shapeSpinnerNext, point)) {
+      this._cycleShapeRef(+1); return true
+    }
+
+    // Main handle drag while shape slot is active — intercept for snap-to-ref.
+    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
+      const dx = point.x - this._point.x, dy = point.y - this._point.y
+      if (dx * dx + dy * dy <= SHAPE_HANDLE_HIT * SHAPE_HANDLE_HIT) {
+        this._shapeHandleDragging = true
+        this._shapeSnapIdx = null
+        this._shapeSnapStartMs = null
+        this._shapeSnapProgress = 0
+        this._clearShapeSnapDwellTimer()
+        // Release shape binding so the handle is freely draggable.
+        this._shapeEnabled = false
+        this._region.interactive = true
+        this.setPoint(point)
+        return true
+      }
+    }
 
     for (const i of [2, 4]) {
       const row = this._wanderRow(i)
@@ -725,12 +817,98 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   handlePointerMove(point: Point): void {
+    if (this._shapeHandleDragging) {
+      this._updateShapeSnap(point)
+      return
+    }
     if (this._sliderDrag === null) return
     this._setSliderFromPointer(this._sliderDrag, point.x)
   }
 
   handlePointerUp(): void {
+    if (this._shapeHandleDragging) {
+      this._shapeHandleDragging = false
+      this._clearShapeSnapDwellTimer()
+      if (this._shapeSnapIdx !== null) {
+        // Dropped on a reference point — enable shape binding at that index.
+        this._shapeRefIndex = this._shapeSnapIdx
+        this._shapeEnabled  = true
+        const ref = this._cachedRefPoints[this._shapeRefIndex]
+        if (ref) {
+          this._point = { ...ref }
+          this._region.setPoint(this._point)
+        }
+      }
+      // If dropped away from any ref, shape stays disabled (_shapeEnabled = false).
+      this._shapeSnapIdx      = null
+      this._shapeSnapStartMs  = null
+      this._shapeSnapProgress = 0
+      this.markDirty()
+      return
+    }
     this._sliderDrag = null
+  }
+
+  private _updateShapeSnap(point: Point): void {
+    let bestIdx: number | null = null
+    let bestDist = SHAPE_SNAP_RADIUS
+
+    for (let i = 0; i < this._cachedRefPoints.length; i++) {
+      const ref = this._cachedRefPoints[i]!
+      const d   = Math.hypot(point.x - ref.x, point.y - ref.y)
+      if (d < bestDist) { bestDist = d; bestIdx = i }
+    }
+
+    if (bestIdx !== null) {
+      if (this._shapeSnapIdx !== bestIdx) {
+        this._shapeSnapIdx     = bestIdx
+        this._shapeSnapStartMs = performance.now()
+        this._shapeSnapProgress = 0
+        this._startShapeSnapDwellTimer()
+      }
+      this._shapeSnapProgress = Math.min(1, (performance.now() - (this._shapeSnapStartMs ?? 0)) / SHAPE_SNAP_DWELL_MS)
+      // Snap handle to the reference point position.
+      const ref = this._cachedRefPoints[bestIdx]!
+      this.setPoint(ref)
+    } else {
+      if (this._shapeSnapIdx !== null) {
+        this._shapeSnapIdx      = null
+        this._shapeSnapStartMs  = null
+        this._shapeSnapProgress = 0
+        this._clearShapeSnapDwellTimer()
+      }
+      this.setPoint(point)
+    }
+    this.markDirty()
+  }
+
+  private _startShapeSnapDwellTimer(): void {
+    if (this._shapeSnapDwellTimer !== null) return
+    this._shapeSnapDwellTimer = setInterval(() => {
+      this._shapeSnapProgress = Math.min(1, (performance.now() - (this._shapeSnapStartMs ?? 0)) / SHAPE_SNAP_DWELL_MS)
+      this.markDirty()
+    }, 16)
+  }
+
+  private _clearShapeSnapDwellTimer(): void {
+    if (this._shapeSnapDwellTimer !== null) {
+      clearInterval(this._shapeSnapDwellTimer)
+      this._shapeSnapDwellTimer = null
+    }
+  }
+
+  private _cycleShapeRef(delta: number): void {
+    const n = this._cachedRefPoints.length
+    if (n === 0) return
+    this._shapeRefIndex = (this._shapeRefIndex + delta + n) % n
+    this._shapeEnabled  = true
+    const ref = this._cachedRefPoints[this._shapeRefIndex]
+    if (ref) {
+      this._point = { ...ref }
+      this._region.setPoint(this._point)
+      this._region.interactive = false
+    }
+    this.markDirty()
   }
 
   private _setSliderFromPointer(which: 'amount' | 'speed', px: number): void {
@@ -786,6 +964,54 @@ export class PointLayer extends Layer implements PointSource {
 
   override renderOverlay(ctx: Ctx2D): void {
     this._region.renderSelf(ctx)
+
+    // Draw reference-point indicators when shape slot is active.
+    if (this._shapeSlot.isActive && this._cachedRefPoints.length > 0) {
+      ctx.save()
+      ctx.font = '9px monospace'
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'center'
+
+      for (let i = 0; i < this._cachedRefPoints.length; i++) {
+        const ref = this._cachedRefPoints[i]!
+        const isSelected = this._shapeEnabled && i === this._shapeRefIndex && !this._shapeHandleDragging
+        const isSnapping = this._shapeSnapIdx === i
+
+        ctx.beginPath()
+        ctx.arc(ref.x, ref.y, REF_HANDLE_R, 0, Math.PI * 2)
+        if (isSelected) {
+          ctx.fillStyle = REF_COL + 'cc'
+          ctx.fill()
+          ctx.strokeStyle = 'rgba(255,255,255,0.9)'
+        } else {
+          ctx.fillStyle = REF_COL + '30'
+          ctx.fill()
+          ctx.strokeStyle = isSnapping ? REF_COL : REF_COL + '99'
+        }
+        ctx.lineWidth = isSnapping ? 2 : 1.5
+        ctx.setLineDash(isSelected ? [] : [3, 2])
+        ctx.stroke()
+        ctx.setLineDash([])
+
+        // Dwell progress arc when snapping to this point.
+        if (isSnapping && this._shapeSnapProgress > 0) {
+          ctx.strokeStyle = REF_COL
+          ctx.lineWidth   = 2.5
+          ctx.beginPath()
+          ctx.arc(ref.x, ref.y, REF_HANDLE_R + 4,
+            -Math.PI / 2,
+            -Math.PI / 2 + this._shapeSnapProgress * Math.PI * 2,
+          )
+          ctx.stroke()
+        }
+
+        // Number label
+        ctx.fillStyle = isSelected ? 'rgba(255,255,255,0.95)' : REF_COL
+        ctx.fillText(String(i + 1), ref.x, ref.y)
+      }
+
+      ctx.restore()
+    }
   }
 
   // Everything below the coordinate-readout pill — the Point-binding row
@@ -797,9 +1023,7 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   // Draws, in order: the main Point-binding row (its own small pill), then
-  // the consolidated wander pill (rows 1-7: wander toggle binding, mode
-  // cycler, amount slider, amount binding, speed slider, speed binding,
-  // mask binding).
+  // the shape-reference pill (new), then the consolidated wander pill.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
 
@@ -812,6 +1036,9 @@ export class PointLayer extends Layer implements PointSource {
     ctx.beginPath(); ctx.roundRect(pb.x, pb.y, 4, pb.height, [4, 0, 0, 4]); ctx.fill()
     ctx.restore()
     this._renderSlotRow(ctx, this._slot, pb)
+
+    // ── Shape-reference pill ─────────────────────────────────
+    this._renderShapePill(ctx)
 
     // ── Wander pill ─────────────────────────────────────────
     const wb = this._wanderPillBounds()
@@ -975,6 +1202,66 @@ export class PointLayer extends Layer implements PointSource {
     this._drawNavBtn(ctx, next, '▶', midY)
   }
 
+  // Shape-reference pill: shape slot row + optional index spinner row.
+  private _renderShapePill(ctx: Ctx2D): void {
+    const sb = this._shapePillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath(); ctx.roundRect(sb.x, sb.y, sb.width, sb.height, 6); ctx.fill()
+    ctx.fillStyle = SHAPE_ACCENT
+    ctx.beginPath(); ctx.roundRect(sb.x, sb.y, 4, sb.height, [4, 0, 0, 4]); ctx.fill()
+    ctx.restore()
+
+    // Row 0 — shape slot binding row
+    this._renderSlotRow(ctx, this._shapeSlot, this._shapeRow(0))
+
+    // Row 1 — index spinner (only when slot is bound and source has ref points)
+    if (this._shapeSlot.isActive && this._cachedRefPoints.length > 0) {
+      this._renderShapeSpinnerRow(ctx, this._shapeRow(1))
+    } else {
+      this._shapeSpinnerPrev = null
+      this._shapeSpinnerNext = null
+    }
+  }
+
+  // [◀] <idx/total> [▶] spinner row — cycles the selected reference point
+  // index and re-enables shape binding.
+  private _renderShapeSpinnerRow(ctx: Ctx2D, b: BBox): void {
+    const midY = b.y + b.height / 2
+    const by   = b.y + (b.height - BTN_H) / 2
+    let   cx   = b.x + LABEL_W
+
+    const prevBtn  = { x: cx, y: by, width: BTN_W, height: BTN_H }; cx += BTN_W + 4
+    const labelBox = { x: cx, y: by, width: MODE_LABEL_W, height: BTN_H }; cx += MODE_LABEL_W + 4
+    const nextBtn  = { x: cx, y: by, width: BTN_W, height: BTN_H }
+
+    this._shapeSpinnerPrev = prevBtn
+    this._shapeSpinnerNext = nextBtn
+
+    const n   = this._cachedRefPoints.length
+    const idx = this._shapeRefIndex
+
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('ref', b.x + 8, midY)
+
+    this._drawNavBtn(ctx, prevBtn, '◀', midY)
+
+    // Centre label: "n/total" — highlighted when shape is enabled
+    ctx.fillStyle = this._shapeEnabled ? REF_COL + '22' : 'rgba(255,255,255,0.07)'
+    ctx.beginPath(); ctx.roundRect(labelBox.x, labelBox.y, labelBox.width, labelBox.height, 3); ctx.fill()
+    ctx.font      = '11px monospace'
+    ctx.fillStyle = this._shapeEnabled ? REF_COL : 'rgba(255,255,255,0.55)'
+    ctx.textAlign = 'center'
+    ctx.fillText(`${idx + 1}/${n}`, labelBox.x + labelBox.width / 2, midY)
+
+    this._drawNavBtn(ctx, nextBtn, '▶', midY)
+    ctx.restore()
+  }
+
   // Row 1's on/off toggle button, drawn at the right edge of the wander-
   // toggle slot row — same convention as VideoLayer's freeze toggle /
   // ShapeLayer's event-slot toggles.
@@ -1065,13 +1352,28 @@ export class PointLayer extends Layer implements PointSource {
     return { x: cb.x, y: cb.y + cb.height + 8, width: cb.width, height: ROW_H }
   }
 
-  // The consolidated wander pill — directly below the Point-binding row.
-  private _wanderPillBounds(): BBox {
+  // Shape binding pill — directly below the Point-binding row.
+  // Height: 1 row (unbound) or 2 rows (bound, adds spinner).
+  private _shapePillBounds(): BBox {
     const pb = this._pointSlotPillBounds()
-    return { x: pb.x, y: pb.y + pb.height + 8, width: pb.width, height: WANDER_PILL_H }
+    const nRows = this._shapeSlot.isActive ? 2 : 1
+    const h = PILL_PAD * 2 + nRows * ROW_H + (nRows - 1) * ROW_GAP
+    return { x: pb.x, y: pb.y + pb.height + 8, width: pb.width, height: h }
   }
 
-  // Row `i` (0-4) within the wander pill.
+  // Row `i` within the shape pill.
+  private _shapeRow(i: number): BBox {
+    const b = this._shapePillBounds()
+    return { x: b.x, y: b.y + PILL_PAD + i * (ROW_H + ROW_GAP), width: b.width, height: ROW_H }
+  }
+
+  // The consolidated wander pill — directly below the Shape pill.
+  private _wanderPillBounds(): BBox {
+    const sb = this._shapePillBounds()
+    return { x: sb.x, y: sb.y + sb.height + 8, width: sb.width, height: WANDER_PILL_H }
+  }
+
+  // Row `i` (0–6) within the wander pill.
   private _wanderRow(i: number): BBox {
     const b = this._wanderPillBounds()
     return { x: b.x, y: b.y + PILL_PAD + i * (ROW_H + ROW_GAP), width: b.width, height: ROW_H }

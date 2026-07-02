@@ -156,6 +156,13 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof TextLayer) wireTextMaskButton(newLayer)
   if (newLayer instanceof LineLayer) wireLineMaskButton(newLayer)
+  if (newLayer instanceof ShapeLayer &&
+      !(newLayer instanceof ClipRectLayer) &&
+      !(newLayer instanceof ClipEllipseLayer) &&
+      !(newLayer instanceof ClipPathLayer)) wirePointButton(newLayer)
+  if (newLayer instanceof LineLayer) wirePointButton(newLayer)
+  if (newLayer instanceof StrokeLayer) wireStrokeSnapPoint(newLayer)
+  if (newLayer instanceof LineLayer)   wireLineSnapPoint(newLayer)
   applyDefaultBindings(newLayer)
 
   if (newLayer instanceof AnimPathLayer) {
@@ -334,6 +341,64 @@ function wireLineMaskButton(layer: LineLayer): void {
     BindingLayer.create(layer, mask.firstShapeSlot)
     postInsertLayer(mask)
     refreshStack()
+  })
+}
+
+function wirePointButton(layer: ShapeLayer | LineLayer): void {
+  layer.setOnAddPoint(() => {
+    // Use the layer's first reference point as initial position so the binding
+    // starts as a no-op (the PointLayer is already at the ref point it will drive).
+    const src = layer as unknown as { getRefPoints?(): { x: number; y: number }[] }
+    const refPts = typeof src.getRefPoints === 'function' ? src.getRefPoints() : []
+    const initPt = refPts[0] ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+    const pt = new PointLayer(initPt)
+    Layer.assignDebugName(pt)
+    pt.bounds = { x: X, y: 24, width: W, height: 36 }
+    pt.insertAbove(layer)
+    BindingLayer.create(layer, pt.shapeSlot)
+    pt.setShapeEnabled(true)
+    postInsertLayer(pt)
+    refreshStack(pt)
+  })
+}
+
+// Create a PointLayer pinned to a shape's ref point, then bind it as the
+// stroke's start or end endpoint. Called when the user drags an endpoint
+// onto a shape's reference point during a StrokeLayer or LineLayer edit.
+function createSnapPointLayer(
+  shapeLayer: Layer,
+  refIdx:     number,
+  above:      Layer,
+): PointLayer {
+  const src = shapeLayer as unknown as { getRefPoints?(): { x: number; y: number }[] }
+  const refPts = typeof src.getRefPoints === 'function' ? src.getRefPoints() : []
+  const initPt = refPts[refIdx] ?? { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+  const pt = new PointLayer(initPt)
+  Layer.assignDebugName(pt)
+  pt.bounds = { x: X, y: 24, width: W, height: 36 }
+  pt.insertAbove(above)
+  BindingLayer.create(shapeLayer, pt.shapeSlot)
+  pt.setShapeRefIndex(refIdx)
+  pt.setShapeEnabled(true)
+  postInsertLayer(pt)
+  return pt
+}
+
+function wireStrokeSnapPoint(stroke: StrokeLayer): void {
+  stroke.setOnSnapPoint((which, shapeLayer, refIdx) => {
+    const pt = createSnapPointLayer(shapeLayer, refIdx, stroke)
+    const slot = which === 'start' ? stroke.startSlot : stroke.endSlot
+    BindingLayer.create(pt, slot)
+    refreshStack(pt)
+  })
+}
+
+function wireLineSnapPoint(line: LineLayer): void {
+  line.setOnSnapPoint((which, shapeLayer, refIdx) => {
+    const pt = createSnapPointLayer(shapeLayer, refIdx, line)
+    const slot = which === 'start' ? line.startSlot : line.endSlot
+    BindingLayer.create(pt, slot)
+    refreshStack(pt)
   })
 }
 
@@ -678,6 +743,10 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL)) wireMaskButton(scanL)
     if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
     if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
+    if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL)) wirePointButton(scanL)
+    if (scanL instanceof LineLayer)       wirePointButton(scanL)
+    if (scanL instanceof StrokeLayer)     wireStrokeSnapPoint(scanL)
+    if (scanL instanceof LineLayer)       wireLineSnapPoint(scanL)
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
@@ -689,6 +758,10 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived)) wireMaskButton(archived)
     if (archived instanceof TextLayer)       wireTextMaskButton(archived)
     if (archived instanceof LineLayer)       wireLineMaskButton(archived)
+    if (archived instanceof ShapeLayer && !isClipShapeMovable(archived)) wirePointButton(archived)
+    if (archived instanceof LineLayer)       wirePointButton(archived)
+    if (archived instanceof StrokeLayer)     wireStrokeSnapPoint(archived)
+    if (archived instanceof LineLayer)       wireLineSnapPoint(archived)
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)
