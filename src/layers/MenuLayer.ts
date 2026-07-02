@@ -311,7 +311,7 @@ export class MenuLayer extends Layer {
     // If the layer directly below is a shape whose filled state differs from
     // outlineDefault, the user manually changed it — snap the default to match
     // so subsequent shapes continue in the same style without extra clicks.
-    if (below instanceof ShapeLayer && below.filled === Node.outlineDefault) {
+    if (below instanceof ShapeLayer && !(below instanceof StrokeLayer) && below.filled === Node.outlineDefault) {
       Node.outlineDefault = !below.filled
     }
 
