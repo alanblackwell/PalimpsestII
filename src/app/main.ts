@@ -428,7 +428,7 @@ function wireTutorialLayer(tl: TutorialLayer): void {
 function randomClosedShapeLayer(canvasW: number, canvasH: number): Layer {
   const s = rndShape(canvasW, canvasH)
   const pick = Math.floor(Math.random() * 3)
-  const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour()
+  const c = Node.greyDefault ? OUTLINE_COLOUR : rndColour()
   const shape =
     pick === 0 ? new RectLayer(s.cx, s.cy, s.sw, s.sh, c) :
     pick === 1 ? new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) :
@@ -514,6 +514,14 @@ container.appendChild(widgetCanvas)
 // should be fixed in the viewport (desktop) or move with the canvas (mobile).
 Node.isMobileDevice = window.matchMedia('(pointer: coarse)').matches
 
+// Desktop default: coloured outlines suit the fine-arts artistic mode audience.
+// Mobile: filled coloured shapes (outlines too fine to read; artistic detail lost).
+Node.outlineDefault = true
+if (Node.isMobileDevice) {
+  Node.artisticMode   = false
+  Node.outlineDefault = false
+}
+
 const evaluator = new Evaluator(canvas, widgetCanvas)
 // Correct viewport — canvas may be larger than the viewport on mobile.
 // This also resizes the widget canvas to the actual viewport size so it
@@ -574,6 +582,7 @@ Node.selectLayer = (layer) => {
 // CaptureLayer's stack-capture toggle.
 Node.renderStackWidget = (ctx) => widget.render(ctx, true)
 Node.sendToBackground = (node) => { if (node instanceof Layer) backgroundLayer.add(node) }
+Node.markAllDirty = () => { for (const n of graph.nodes) n.forceDirty() }
 
 const interaction = new InteractionSystem(canvas)
 interaction.setLayerStackWidget(widget)
@@ -976,7 +985,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // this slot (handle position, slider value, dial angle, ...), seed the
     // new layer with that value so the binding is a no-op until the user
     // changes it.
-    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction || (slot.type === ValueType.Colour && !Node.geometricMode)) {
+    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction || (slot.type === ValueType.Colour && !Node.greyDefault)) {
       const def = consumer.getSlotDefault(slot)
       if (def !== null) {
         let newLayer: Layer
@@ -1122,6 +1131,13 @@ const startupLayer = new StartupLayer(
   },
   // "Tutorial" button: show widget, insert MenuLayer + TutorialLayer, refresh.
   () => {
+    // Tutorial mode: colourful outlines with grid, no artistic rendering.
+    // Grid communicates the mathematical constraint architecture to new users.
+    // Outlines (not fills) keep shapes visually distinct; coloured (not grey).
+    Node.artisticMode   = false
+    Node.showGrid       = true
+    Node.outlineDefault = true
+    // greyDefault stays false — coloured outlines
     widget.setVisible(true)
     startupLayer.removeFromStack()
     menuLayer.insertAbove(deletionLayer)

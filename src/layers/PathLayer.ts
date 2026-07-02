@@ -248,10 +248,10 @@ export class PathLayer extends ShapeLayer {
     const col  = `#${Math.round(col0.r*255).toString(16).padStart(2,'0')}${Math.round(col0.g*255).toString(16).padStart(2,'0')}${Math.round(col0.b*255).toString(16).padStart(2,'0')}`
     const seed = hashString(this.debugName)
     if (this._filled) {
-      if (!Node.geometricMode) fillTornPaper(bctx, pts, col, sz, seed)
+      if (Node.artisticMode) fillTornPaper(bctx, pts, col, sz, seed)
       return
     }
-    if (Node.geometricMode) return
+    if (!Node.artisticMode) return
     const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
     const hw = BRUSH_BLEND_HW
     if (sz > pt1 - hw && sz < pt1 + hw) {
@@ -851,10 +851,10 @@ export class PathLayer extends ShapeLayer {
   }
 
   // Suppress orange spline outline in stroke mode — brush rendering is the visual.
-  protected _showSplineGuide(): boolean { return this._filled && Node.geometricMode }
+  protected _showSplineGuide(): boolean { return this._filled && !Node.artisticMode }
 
   override renderSelf(ctx: Ctx2D): void {
-    if (Node.geometricMode) {
+    if (!Node.artisticMode) {
       super.renderSelf(ctx)
     } else {
       ctx.save()

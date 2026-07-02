@@ -121,6 +121,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   readonly strokeWidthSlot: ParameterSlot
 
   protected _filled = true
+  get filled(): boolean { return this._filled }
   protected _strokeWidth = 2
   protected get _maxStrokeWidth(): number { return MAX_STROKE_WIDTH }
   protected get _minStrokeWidth(): number { return 0.5 }
@@ -171,7 +172,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._width  = width
     this._height = height
     if (colour !== undefined) this._colour = colour
-    if (Node.geometricMode) this._filled = false
+    if (Node.outlineDefault) this._filled = false
 
     this.positionSlot  = new ParameterSlot(ValueType.Point,     this, 'position')
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')

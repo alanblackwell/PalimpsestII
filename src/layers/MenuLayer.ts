@@ -38,6 +38,7 @@ import { LineLayer }       from './LineLayer.js'
 import { WarpLayer }       from './WarpLayer.js'
 import { MotionBlurLayer }    from './MotionBlurLayer.js'
 import { ArtisticTestLayer } from './ArtisticTestLayer.js'
+import { ShapeLayer }       from './ShapeLayer.js'
 
 // ------------------------------------------------------------
 // MenuLayer — grid of buttons that create new layers
@@ -111,12 +112,12 @@ const COLUMNS: ColDef[] = [
   {
     name: 'Shapes',
     top: [
-      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) } },
-      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new PathLayer(undefined, s.cx, s.cy, c) } },
-      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new RectLayer(s.cx, s.cy, s.sw, s.sh, c) } },
-      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer(undefined, Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
-      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer(Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
-      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer(Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.greyDefault ? OUTLINE_COLOUR : rndColour(); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.greyDefault ? OUTLINE_COLOUR : rndColour(); return new PathLayer(undefined, s.cx, s.cy, c) } },
+      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.greyDefault ? OUTLINE_COLOUR : rndColour(); return new RectLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer(undefined, Node.greyDefault ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer(Node.greyDefault ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer(Node.greyDefault ? OUTLINE_COLOUR : rndColour()) },
     ],
     bottom: [
       { label: 'Animate',  colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
@@ -275,9 +276,22 @@ export class MenuLayer extends Layer {
       const t = this._toggleBounds
       if (point.x >= t.x && point.x <= t.x + t.width &&
           point.y >= t.y && point.y <= t.y + t.height) {
-        Node.geometricMode = !Node.geometricMode
+        if (Node.isMobileDevice) {
+          Node.artisticMode = !Node.artisticMode
+        } else if (Node.artisticMode) {
+          // Desktop artistic → geometric
+          Node.artisticMode   = false
+          Node.showGrid       = true
+          Node.outlineDefault = true
+          Node.greyDefault    = true
+        } else {
+          // Desktop geometric → artistic (restore desktop session defaults)
+          Node.artisticMode   = true
+          Node.showGrid       = false
+          Node.outlineDefault = true
+          Node.greyDefault    = false
+        }
         this.markDirty()
-        Node.scheduleFrame?.()
         return true
       }
     }
@@ -290,13 +304,21 @@ export class MenuLayer extends Layer {
     if (btn.kind === 'save') { this._onSave?.(); return true }
     if (btn.kind === 'load') { this._onLoad?.(); return true }
 
-    const vw       = Node.viewportWidth
-    const vh       = Node.viewportHeight
+    const vw    = Node.viewportWidth
+    const vh    = Node.viewportHeight
+    const below = this.layerBelow
+
+    // If the layer directly below is a shape whose filled state differs from
+    // outlineDefault, the user manually changed it — snap the default to match
+    // so subsequent shapes continue in the same style without extra clicks.
+    if (below instanceof ShapeLayer && below.filled === Node.outlineDefault) {
+      Node.outlineDefault = !below.filled
+    }
+
     const newLayer = btn.factory!(vw / 2, vh / 2, vw, vh)
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { ...this.bounds, height: btn.height ?? this.bounds.height }
 
-    const below = this.layerBelow
     if (below !== null) newLayer.insertAbove(below)
 
     this._onAdded(newLayer, btn.selectAfterCreate ?? false)
@@ -402,7 +424,7 @@ export class MenuLayer extends Layer {
     const iconCY  = PANEL_Y + HEADER_H / 2
     this._toggleBounds = { x: iconCX - iconSz / 2 - 3, y: PANEL_Y, width: iconSz + 6, height: HEADER_H }
     ctx.fillStyle = 'rgba(255,255,255,0.55)'
-    drawIcon(ctx, Node.geometricMode ? 'shapes' : 'palette', iconCX, iconCY, iconSz)
+    drawIcon(ctx, Node.artisticMode ? 'palette' : 'shapes', iconCX, iconCY, iconSz)
 
     for (let c = 0; c < resolved.length; c++) {
       const col = resolved[c]!

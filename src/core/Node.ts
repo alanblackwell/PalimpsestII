@@ -142,7 +142,32 @@ export abstract class Node {
   // fit/fill toggle so the video aligns with the physical screen.
   static resetViewTransform: (() => void) | null = null
 
-  static geometricMode = false
+  // Set by main.ts to mark every registered node dirty — used when a global
+  // mode flag changes so all layers recompute with the new value, mirroring
+  // what the Clock's forceDirty cascade does each tick for time-dependent nodes.
+  static markAllDirty: (() => void) | null = null
+
+  // -- Global mode flags --------------------------------------------------
+  // showGrid and artisticMode use get/set so toggling them automatically
+  // marks all nodes dirty (same effect as a canvas resize).
+  // outlineDefault and greyDefault only affect layer creation, not rendering,
+  // so they don't need to trigger a dirty cascade.
+
+  // artisticMode defaults to true (torn-paper fills and brush strokes on by
+  // default). showGrid defaults to false (grid only in geometric mode).
+  // outlineDefault and greyDefault default to false (shapes start filled,
+  // random colour). The menu toggle flips all four together.
+  private static _showGrid     = false
+  private static _artisticMode = true
+
+  static get showGrid(): boolean    { return Node._showGrid }
+  static set showGrid(v: boolean)   { if (Node._showGrid !== v)     { Node._showGrid     = v; Node.markAllDirty?.(); Node.scheduleFrame?.() } }
+
+  static get artisticMode(): boolean  { return Node._artisticMode }
+  static set artisticMode(v: boolean) { if (Node._artisticMode !== v) { Node._artisticMode = v; Node.markAllDirty?.(); Node.scheduleFrame?.() } }
+
+  static outlineDefault = false
+  static greyDefault    = false
 
   // ----------------------------------------------------------
   // Dependency management

@@ -113,7 +113,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
   private _canvas:     OffscreenCanvas = new OffscreenCanvas(1, 1)
   private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
-  private _canvasGeometricMode = false
+  private _canvasArtisticMode = true
 
   // Mask convenience button
   private _addMaskDone = false
@@ -337,7 +337,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // ----------------------------------------------------------
 
   private _updateCanvas(): void {
-    this._canvasGeometricMode = Node.geometricMode
+    this._canvasArtisticMode = Node.artisticMode
     const cw = Node.canvasWidth, ch = Node.canvasHeight
     if (this._canvas.width !== cw || this._canvas.height !== ch) {
       this._canvas = new OffscreenCanvas(cw, ch)
@@ -375,7 +375,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     ctx.strokeStyle = css
     ctx.lineWidth   = w
 
-    const useArtistic = colour === undefined && !Node.geometricMode
+    const useArtistic = colour === undefined && Node.artisticMode
 
     if (!useArtistic) {
       // Outline mode or mask pass: plain geometric rendering.
@@ -455,7 +455,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   renderSelf(ctx: Ctx2D): void {
     // If canvas was resized between recomputes, rebuild before drawing.
     const cw = Node.canvasWidth, ch = Node.canvasHeight
-    if (this._canvas.width !== cw || this._canvas.height !== ch || this._canvasGeometricMode !== Node.geometricMode) this._updateCanvas()
+    if (this._canvas.width !== cw || this._canvas.height !== ch || this._canvasArtisticMode !== Node.artisticMode) this._updateCanvas()
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.drawImage(this._canvas, 0, 0)

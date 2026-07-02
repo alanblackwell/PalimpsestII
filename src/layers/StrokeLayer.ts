@@ -232,7 +232,7 @@ export class StrokeLayer extends PathLayer {
     const col  = `#${Math.round(c.r*255).toString(16).padStart(2,'0')}${Math.round(c.g*255).toString(16).padStart(2,'0')}${Math.round(c.b*255).toString(16).padStart(2,'0')}`
     const seed = hashString(this.debugName)
     if (this._drawMode) {
-      if (Node.geometricMode) {
+      if (!Node.artisticMode) {
         bctx.strokeStyle = col
         bctx.lineWidth   = sz
         bctx.lineCap     = 'round'
@@ -246,7 +246,7 @@ export class StrokeLayer extends PathLayer {
       }
       drawPencilLine(bctx, pts, col, sz, seed)
     } else {
-      if (Node.geometricMode) return
+      if (!Node.artisticMode) return
       const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
       const hw = BRUSH_BLEND_HW
       if (sz > pt1 - hw && sz < pt1 + hw) {
@@ -306,7 +306,7 @@ export class StrokeLayer extends PathLayer {
   // ----------------------------------------------------------
 
   override renderSelf(ctx: Ctx2D): void {
-    if (Node.geometricMode && !this._drawMode) {
+    if (!Node.artisticMode && !this._drawMode) {
       super.renderSelf(ctx)
       return
     }
