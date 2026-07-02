@@ -232,8 +232,21 @@ export class StrokeLayer extends PathLayer {
     const col  = `#${Math.round(c.r*255).toString(16).padStart(2,'0')}${Math.round(c.g*255).toString(16).padStart(2,'0')}${Math.round(c.b*255).toString(16).padStart(2,'0')}`
     const seed = hashString(this.debugName)
     if (this._drawMode) {
+      if (Node.geometricMode) {
+        bctx.strokeStyle = col
+        bctx.lineWidth   = sz
+        bctx.lineCap     = 'round'
+        bctx.lineJoin    = 'round'
+        bctx.globalAlpha = c.a
+        bctx.beginPath()
+        bctx.moveTo(pts[0]!.x, pts[0]!.y)
+        for (let i = 1; i < pts.length; i++) bctx.lineTo(pts[i]!.x, pts[i]!.y)
+        bctx.stroke()
+        return
+      }
       drawPencilLine(bctx, pts, col, sz, seed)
     } else {
+      if (Node.geometricMode) return
       const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
       const hw = BRUSH_BLEND_HW
       if (sz > pt1 - hw && sz < pt1 + hw) {
@@ -293,6 +306,10 @@ export class StrokeLayer extends PathLayer {
   // ----------------------------------------------------------
 
   override renderSelf(ctx: Ctx2D): void {
+    if (Node.geometricMode && !this._drawMode) {
+      super.renderSelf(ctx)
+      return
+    }
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity * this._colour.a))
     ctx.drawImage(this._brushCanvas, 0, 0)

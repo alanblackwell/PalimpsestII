@@ -267,7 +267,7 @@ export class Evaluator {
 
       if (depth === 0) {
         // In outline mode, draw grid paper behind the current layer.
-        if (Node.outlineMode) drawOutlineGrid(this.ctx, width, height)
+        if (Node.geometricMode) drawOutlineGrid(this.ctx, width, height)
         // Current layer floats above the rest with a drop shadow.
         // Use the shadow* properties rather than ctx.filter('drop-shadow(...)') —
         // the latter is not rendered on older Safari versions.

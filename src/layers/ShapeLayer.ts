@@ -171,7 +171,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._width  = width
     this._height = height
     if (colour !== undefined) this._colour = colour
-    if (Node.outlineMode) this._filled = false
+    if (Node.geometricMode) this._filled = false
 
     this.positionSlot  = new ParameterSlot(ValueType.Point,     this, 'position')
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
@@ -486,7 +486,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     const state   = this.fillModeSlot.state
     const isActive    = state === SlotState.Bound
     const isSuspended = state === SlotState.SuspendedBound
-    const outlineMode = !this._filled
+    const strokeMode = !this._filled
 
     ctx.save()
     if (isActive) {
@@ -515,7 +515,7 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.beginPath()
     ctx.arc(btnX + BTN_SZ / 2, midY, cbr, 0, Math.PI * 2)
     ctx.stroke()
-    if (outlineMode) {
+    if (strokeMode) {
       ctx.fillStyle = colour
       ctx.beginPath()
       ctx.arc(btnX + BTN_SZ / 2, midY, cbr - 2, 0, Math.PI * 2)

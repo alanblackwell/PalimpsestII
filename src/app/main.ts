@@ -428,7 +428,7 @@ function wireTutorialLayer(tl: TutorialLayer): void {
 function randomClosedShapeLayer(canvasW: number, canvasH: number): Layer {
   const s = rndShape(canvasW, canvasH)
   const pick = Math.floor(Math.random() * 3)
-  const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour()
+  const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour()
   const shape =
     pick === 0 ? new RectLayer(s.cx, s.cy, s.sw, s.sh, c) :
     pick === 1 ? new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) :
@@ -976,7 +976,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     // this slot (handle position, slider value, dial angle, ...), seed the
     // new layer with that value so the binding is a no-op until the user
     // changes it.
-    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction || (slot.type === ValueType.Colour && !Node.outlineMode)) {
+    if (slot.type === ValueType.Point || slot.type === ValueType.Amount || slot.type === ValueType.Direction || (slot.type === ValueType.Colour && !Node.geometricMode)) {
       const def = consumer.getSlotDefault(slot)
       if (def !== null) {
         let newLayer: Layer

@@ -3,6 +3,7 @@ import { Node } from '../core/Node.js'
 import type { Colour, Ctx2D, Point } from '../core/types.js'
 import {
   hashString,
+  fillTornPaper,
   drawPencilLine, drawNibPen,       NIB_PEN_DEFAULTS,
   drawCalligraphyBrush,             BRUSH_DEFAULTS,
   drawNibBrushBlend,
@@ -28,7 +29,6 @@ export class EllipseLayer extends ShapeLayer {
       this._brushCanvas = new OffscreenCanvas(w, h)
     const bctx = this._brushCanvas.getContext('2d')!
     bctx.clearRect(0, 0, w, h)
-    if (this._filled) return
     const pts: Point[] = []
     for (let i = 0; i <= BRUSH_SAMPLES; i++)
       pts.push(this.samplePerimeter(i / BRUSH_SAMPLES))
@@ -36,6 +36,11 @@ export class EllipseLayer extends ShapeLayer {
     const col0 = this._colour
     const col  = `#${Math.round(col0.r*255).toString(16).padStart(2,'0')}${Math.round(col0.g*255).toString(16).padStart(2,'0')}${Math.round(col0.b*255).toString(16).padStart(2,'0')}`
     const seed = hashString(this.debugName)
+    if (this._filled) {
+      if (!Node.geometricMode) fillTornPaper(bctx, pts, col, sz, seed)
+      return
+    }
+    if (Node.geometricMode) return
     const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
     const hw = BRUSH_BLEND_HW
     if (sz > pt1 - hw && sz < pt1 + hw) {
@@ -55,7 +60,7 @@ export class EllipseLayer extends ShapeLayer {
   }
 
   override renderSelf(ctx: Ctx2D): void {
-    if (this._filled) {
+    if (Node.geometricMode) {
       super.renderSelf(ctx)
     } else {
       ctx.save()

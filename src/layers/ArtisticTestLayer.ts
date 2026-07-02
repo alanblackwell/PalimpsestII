@@ -158,7 +158,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
   private _caseIndex   = 1
   private _strokeSize  = CASE_DEFAULT_SIZES[1]!
   private _secondPass  = false
-  private _showArrow   = false
+  private _arrowMode   = 0   // 0=none 1=end 2=start 3=both
 
   // Per-case tunable params (copies of defaults, mutated by sliders)
   private _torn:        TornPaperParams    = { ...TORN_PAPER_DEFAULTS }
@@ -254,22 +254,31 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
       udx: number; udy: number
       hw: number; aLen: number
     }
-    let arrow: ArrowInfo | null = null
-    let drawPts: { x: number; y: number }[] = sCurvePts
-
-    if (this._showArrow && this._caseIndex !== 0 && sCurvePts.length >= 2) {
-      const tip  = sCurvePts[sCurvePts.length - 1]!
-      const prev = sCurvePts[sCurvePts.length - 2]!
+    const computeArrow = (tip: { x: number; y: number }, prev: { x: number; y: number }): ArrowInfo | null => {
       const dx = tip.x - prev.x, dy = tip.y - prev.y
       const d  = Math.hypot(dx, dy)
-      if (d > 0.001) {
-        const udx  = dx / d, udy = dy / d
-        const aHw  = sz / 2 + ARROW_MIN_EXTEND
-        const aAng = (15 + Math.max(0, Math.min(1, sz / STROKE_MAX)) * 30) * (Math.PI / 180)
-        const aLen = aHw / Math.tan(aAng)
-        arrow   = { tip, bx: tip.x - udx * aLen, by: tip.y - udy * aLen,
-                    nx: -udy, ny: udx, udx, udy, hw: aHw, aLen }
-        drawPts = setbackPath(sCurvePts, aLen)
+      if (d <= 0.001) return null
+      const udx = dx / d, udy = dy / d
+      const aHw = sz / 2 + ARROW_MIN_EXTEND
+      const aAng = (15 + Math.max(0, Math.min(1, sz / STROKE_MAX)) * 30) * (Math.PI / 180)
+      const aLen = aHw / Math.tan(aAng)
+      return { tip, bx: tip.x - udx * aLen, by: tip.y - udy * aLen,
+               nx: -udy, ny: udx, udx, udy, hw: aHw, aLen }
+    }
+    let endArrow:   ArrowInfo | null = null
+    let startArrow: ArrowInfo | null = null
+    let drawPts: { x: number; y: number }[] = sCurvePts
+
+    if (this._arrowMode > 0 && this._caseIndex !== 0 && sCurvePts.length >= 2) {
+      if (this._arrowMode & 1) {
+        endArrow = computeArrow(sCurvePts[sCurvePts.length - 1]!, sCurvePts[sCurvePts.length - 2]!)
+        if (endArrow && this._caseIndex > 3) drawPts = setbackPath(drawPts, endArrow.aLen)
+      }
+      if (this._arrowMode & 2) {
+        startArrow = computeArrow(sCurvePts[0]!, sCurvePts[1]!)
+        if (startArrow && this._caseIndex > 3) {
+          drawPts = setbackPath([...drawPts].reverse(), startArrow.aLen).reverse()
+        }
       }
     }
 
@@ -293,62 +302,26 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     }
 
     // Case-specific arrowhead drawn on top of the brush stroke.
-    if (arrow) {
-      const { tip, bx, by, nx, ny, udx, udy, hw: aHw, aLen } = arrow
-      const lw = { x: bx + nx * aHw, y: by + ny * aHw }  // left wing
-      const rw = { x: bx - nx * aHw, y: by - ny * aHw }  // right wing
-      const ci = this._caseIndex
-
+    const ci = this._caseIndex
+    const drawArrowHead = (a: ArrowInfo) => {
+      const { tip, bx, by, nx, ny, hw: aHw } = a
+      const lw = { x: bx + nx * aHw, y: by + ny * aHw }
+      const rw = { x: bx - nx * aHw, y: by - ny * aHw }
       if (ci === 1) {
-        // Pencil — two open V lines from wings to tip
         drawPencilLine(ctx, [lw, tip], col, eff(1), seed, this._pencil)
         drawPencilLine(ctx, [rw, tip], col, eff(1), seed, this._pencil)
-
       } else if (ci === 2) {
-        // Nib pen — single bent stroke: left wing → tip → right wing
-        drawNibPen(ctx, [lw, tip, rw], col, eff(2), seed, this._nib)
-
+        drawNibPen(ctx, [lw, tip, rw], col, eff(2), seed, { ...this._nib, splatDensity: 0 })
       } else if (ci === 3) {
-        // Brush — two short curved flicks sweeping from behind the base to each wing
-        const origin = { x: bx - udx * aLen * 0.25, y: by - udy * aLen * 0.25 }
-        // Control points arc forward (toward tip) then outward to each wing
-        const cL = { x: tip.x + nx * aHw * 0.2, y: tip.y + ny * aHw * 0.2 }
-        const cR = { x: tip.x - nx * aHw * 0.2, y: tip.y - ny * aHw * 0.2 }
-        const flickSz = Math.max(2, sz * 0.30)
-        drawCalligraphyBrush(ctx, bezier2(origin, cL, lw, 10), col, flickSz, seed, this._brush)
-        drawCalligraphyBrush(ctx, bezier2(origin, cR, rw, 10), col, flickSz, seed, this._brush)
-
-      } else if (ci === 4) {
-        // Lichtenstein — block triangle filled via clip; fibres extend from body into triangle
-        ctx.save()
-        ctx.beginPath()
-        ctx.moveTo(tip.x, tip.y)
-        ctx.lineTo(lw.x, lw.y)
-        ctx.lineTo(rw.x, rw.y)
-        ctx.closePath()
-        ctx.clip()
-        // Continue body stroke direction into the triangle at full arrowhead width
-        const bodyExt = { x: bx - udx * sz * 0.8, y: by - udy * sz * 0.8 }
-        drawLichtensteinStroke(ctx, [bodyExt, tip], col, aHw * 2, seed, this._lichtenstein)
-        ctx.restore()
-        // Triangle outline
-        if (this._lichtenstein.outlineWidth > 0) {
-          ctx.save()
-          ctx.strokeStyle = col
-          ctx.lineWidth   = this._lichtenstein.outlineWidth
-          ctx.lineJoin    = 'miter'
-          ctx.beginPath()
-          ctx.moveTo(tip.x, tip.y)
-          ctx.lineTo(lw.x, lw.y)
-          ctx.lineTo(rw.x, rw.y)
-          ctx.closePath()
-          ctx.stroke()
-          ctx.restore()
-        }
-
+        const cL = { x: (tip.x + lw.x) / 2 + nx * aHw * 0.5, y: (tip.y + lw.y) / 2 + ny * aHw * 0.5 }
+        const cR = { x: (tip.x + rw.x) / 2 - nx * aHw * 0.5, y: (tip.y + rw.y) / 2 - ny * aHw * 0.5 }
+        const flickParams = { ...this._brush, taperLength: 0.30 }
+        drawCalligraphyBrush(ctx, bezier2(tip, cL, lw, 10), col, Math.max(2, sz * 0.35), seed, flickParams)
+        drawCalligraphyBrush(ctx, bezier2(tip, cR, rw, 10), col, Math.max(2, sz * 0.35), seed, flickParams)
       } else {
-        // Blend zone (2↔3) — simple filled triangle fallback
+        // Case 4 and blend zone: plain opaque filled triangle
         ctx.save()
+        ctx.globalAlpha = 1
         ctx.fillStyle = col
         ctx.beginPath()
         ctx.moveTo(tip.x, tip.y); ctx.lineTo(lw.x, lw.y); ctx.lineTo(rw.x, rw.y)
@@ -356,6 +329,8 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
         ctx.restore()
       }
     }
+    if (endArrow)   drawArrowHead(endArrow)
+    if (startArrow) drawArrowHead(startArrow)
   }
 
   // ── Rendering ────────────────────────────────────────────────
@@ -420,7 +395,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     // Right side: colour swatch + [→] arrow button + [2nd] button
     const rightEdge  = left + pw - pad
     const secondBtnW = 36
-    const arrowBtnW  = 26
+    const arrowBtnW  = 30
     const swatchSz   = btnSz
 
     // Colour swatch — click target not needed, purely informational
@@ -432,16 +407,17 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     ctx.beginPath(); ctx.roundRect(swatchX, py + (ph - swatchSz) / 2, swatchSz, swatchSz, 3); ctx.stroke()
     ctx.restore()
 
-    // [→] arrowhead toggle
+    // [→/←/↔] arrowhead cycle button (none / end / start / both)
+    const ARROW_LABELS = ['–', '→', '←', '↔']
     const arrowB = { x: rightEdge - secondBtnW - 4 - arrowBtnW, y: py + (ph - btnSz) / 2, width: arrowBtnW, height: btnSz }
     this._arrowBtnB = arrowB
     ctx.save()
-    ctx.fillStyle = this._showArrow ? 'rgba(127,207,127,0.30)' : 'rgba(255,255,255,0.10)'
+    ctx.fillStyle = this._arrowMode > 0 ? 'rgba(127,207,127,0.30)' : 'rgba(255,255,255,0.10)'
     ctx.beginPath(); ctx.roundRect(arrowB.x, arrowB.y, arrowB.width, arrowB.height, 4); ctx.fill()
-    ctx.fillStyle = this._showArrow ? '#7ecf7e' : DIM_COL
+    ctx.fillStyle = this._arrowMode > 0 ? '#7ecf7e' : DIM_COL
     ctx.font = 'bold 13px sans-serif'
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.fillText('→', arrowB.x + arrowB.width / 2, arrowB.y + arrowB.height / 2)
+    ctx.fillText(ARROW_LABELS[this._arrowMode]!, arrowB.x + arrowB.width / 2, arrowB.y + arrowB.height / 2)
     ctx.restore()
 
     const secB = { x: rightEdge - secondBtnW, y: py + (ph - btnSz) / 2, width: secondBtnW, height: btnSz }
@@ -852,7 +828,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
       this.markDirty(); return true
     }
     if (this._arrowBtnB && boundingBoxContains(this._arrowBtnB, point)) {
-      this._showArrow = !this._showArrow
+      this._arrowMode = (this._arrowMode + 1) % 4
       this.markDirty(); return true
     }
     // Blend zone wings (before dividers — centre of divider-1 still wins via the divider check below)
@@ -976,7 +952,7 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      caseIndex: this._caseIndex, strokeSize: this._strokeSize, secondPass: this._secondPass, showArrow: this._showArrow,
+      caseIndex: this._caseIndex, strokeSize: this._strokeSize, secondPass: this._secondPass, arrowMode: this._arrowMode,
       transitionPts: [...this._transitionPts], blendHalfWidth: this._blendHalfWidth,
       hue: this._hue, sat: this._sat, val: this._val,
       sizeOffset: [...this._sizeOffset],
@@ -990,7 +966,8 @@ export class ArtisticTestLayer extends Layer implements ImageSource {
     if (typeof s.caseIndex      === 'number')  this._caseIndex      = s.caseIndex
     if (typeof s.strokeSize     === 'number')  this._strokeSize     = s.strokeSize
     if (typeof s.secondPass     === 'boolean') this._secondPass     = s.secondPass
-    if (typeof s.showArrow      === 'boolean') this._showArrow      = s.showArrow
+    if (typeof s.arrowMode === 'number')  this._arrowMode = s.arrowMode
+    else if (s.showArrow === true)        this._arrowMode = 1  // migrate old saves
     if (typeof s.blendHalfWidth === 'number')  this._blendHalfWidth = s.blendHalfWidth
     if (Array.isArray(s.transitionPts) && s.transitionPts.length === 3) {
       this._transitionPts = s.transitionPts as [number, number, number]

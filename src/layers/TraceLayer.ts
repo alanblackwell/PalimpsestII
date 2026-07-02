@@ -408,7 +408,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const state       = this.fillModeSlot.state
     const isActive    = state === SlotState.Bound
     const isSuspended = state === SlotState.SuspendedBound
-    const outlineMode = !this._filled
+    const strokeMode = !this._filled
 
     ctx.save()
     ctx.fillStyle = isActive ? ACCENT + '33' : isSuspended ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
@@ -430,7 +430,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.beginPath()
     ctx.arc(btnX + CTRL_BTN_SZ / 2, midY, 4, 0, Math.PI * 2)
     ctx.stroke()
-    if (outlineMode) {
+    if (strokeMode) {
       ctx.fillStyle = colour
       ctx.beginPath()
       ctx.arc(btnX + CTRL_BTN_SZ / 2, midY, 2, 0, Math.PI * 2)

@@ -58,6 +58,14 @@ Abstract base. Key statics:
   maintained by `InteractionSystem` (set on pointermove/pointerdown, cleared on
   pointerleave). Lets any layer's `recompute()`/simulation read "where is the
   mouse right now" without prop plumbing.
+- `Node.geometricMode: boolean` — global toggle between **geometric mode** (plain
+  canvas primitives, graph-paper background, shapes forced to stroke) and **artistic
+  mode** (torn-paper fills, brush strokes, Lichtenstein halftone). Toggled by the
+  palette/shapes icon button in `MenuLayer`. Gate artistic rendering on
+  `!Node.geometricMode`; gate geometric fallbacks on `Node.geometricMode`.
+  Distinct from the per-shape `_filled` flag (filled vs. stroke boundary of an
+  individual shape), which uses the local variable name `strokeMode` in
+  `ShapeLayer` / `TraceLayer` render code.
 
 Dirty propagation is **push** (marking dirty propagates to dependents immediately).
 Evaluation is **pull** (lazy — `evaluate()` depth-first resolves dependencies before recomputing).

@@ -17,6 +17,13 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import {
+  hashString,
+  drawPencilLine, drawNibPen, NIB_PEN_DEFAULTS,
+  drawCalligraphyBrush, BRUSH_DEFAULTS,
+  drawNibBrushBlend,
+  drawLichtensteinStroke,
+} from './artisticBrush.js'
 
 // ------------------------------------------------------------
 // LineLayer — a straight line with configurable endpoints,
@@ -27,7 +34,7 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 //   Start/end drag handles — drag to reposition each endpoint.
 //     Dragging a handle while its slot is Bound suspends the
 //     binding (suspend-on-touch).
-//   Width slider — manual [0,1] maps to [0.5, 30] px. Dragging
+//   Width slider — manual [0,1] maps to [0.5, 80] px. Dragging
 //     the slider while widthSlot is Bound suspends it first.
 //   Arrow toggles (◀ / ▶) — toggle arrowheads at the start or
 //     end of the line. Arrowhead shape adapts to stroke width:
@@ -45,7 +52,7 @@ const ACCENT      = '#e87e7e'    // Line layer accent colour
 const AM_COL      = '#4a8fe8'    // Amount type accent (width slot)
 const HANDLE_R    = 7            // handle circle radius (px)
 const HANDLE_HIT  = 14           // pointer hit radius for handles (px)
-const MAX_STROKE_W = 30          // Amount [0,1] → width [0.5, 30] px
+const MAX_STROKE_W = 80          // Amount [0,1] → width [0.5, 80] px
 const INIT_MARGIN = 0.15         // fraction of canvas kept clear on random init
 const SNAP_COL    = '#7ecfcf'    // snap highlight colour (Direction accent)
 const LINE_SNAP_ANGLES: readonly number[] = Array.from({ length: 8 }, (_, i) => i * Math.PI / 4)
@@ -62,7 +69,22 @@ const SW_VALUE_W  = 38
 type BBox = { x: number; y: number; width: number; height: number }
 type HandleDrag = 'start' | 'end'
 
+const BRUSH_TRANSITIONS = [5, 13, 25] as const
+const BRUSH_BLEND_HW    = 2
+const BRUSH_OFFSETS     = [0, 0, 3, 5, 11]
+
 function ptDist(a: Point, b: Point): number { return Math.hypot(a.x - b.x, a.y - b.y) }
+
+function bezier2(
+  p0: { x: number; y: number }, p1: { x: number; y: number }, p2: { x: number; y: number }, n: number,
+): { x: number; y: number }[] {
+  const out = []
+  for (let i = 0; i <= n; i++) {
+    const t = i / n, u = 1 - t
+    out.push({ x: u*u*p0.x + 2*u*t*p1.x + t*t*p2.x, y: u*u*p0.y + 2*u*t*p1.y + t*t*p2.y })
+  }
+  return out
+}
 
 export class LineLayer extends Layer implements ImageSource, MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask])
@@ -91,6 +113,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
   private _canvas:     OffscreenCanvas = new OffscreenCanvas(1, 1)
   private _maskCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
+  private _canvasGeometricMode = false
 
   // Mask convenience button
   private _addMaskDone = false
@@ -303,7 +326,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // Half-width: at least ARROW_MIN_EXTEND beyond the stroke edge on each side.
   private _arrowGeom(): { hw: number; len: number } {
     const w   = this._strokeWidth
-    const t   = Math.max(0, Math.min(1, w / MAX_STROKE_W))
+    const t   = Math.max(0, Math.min(1, w / BRUSH_TRANSITIONS[2]))
     const ang = (15 + t * 30) * (Math.PI / 180)
     const hw  = w / 2 + ARROW_MIN_EXTEND
     return { hw, len: hw / Math.tan(ang) }
@@ -314,6 +337,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   // ----------------------------------------------------------
 
   private _updateCanvas(): void {
+    this._canvasGeometricMode = Node.geometricMode
     const cw = Node.canvasWidth, ch = Node.canvasHeight
     if (this._canvas.width !== cw || this._canvas.height !== ch) {
       this._canvas = new OffscreenCanvas(cw, ch)
@@ -333,97 +357,94 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   }
 
   private _drawLineContent(ctx: OffscreenCanvasRenderingContext2D, colour?: Colour): void {
-    const start = this._renderedStart
-    const end   = this._renderedEnd
-    const dx  = end.x - start.x
-    const dy  = end.y - start.y
+    const start = this._renderedStart, end = this._renderedEnd
+    const dx = end.x - start.x, dy = end.y - start.y
     const len = Math.hypot(dx, dy)
     if (len < 0.5) return
 
-    const udx = dx / len, udy = dy / len        // unit axis A→B
-    const nx  = -udy, ny  = udx                 // left-hand perp unit vector
+    const udx = dx / len, udy = dy / len
+    const nx  = -udy, ny = udx
     const w   = this._strokeWidth
     const r   = w / 2
     const { hw, len: aLen } = this._arrowGeom()
 
     const c   = colour ?? this._colour
-    const css = `rgba(${Math.round(c.r * 255)},${Math.round(c.g * 255)},${Math.round(c.b * 255)},${c.a})`
+    const css = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
 
     ctx.fillStyle   = css
     ctx.strokeStyle = css
     ctx.lineWidth   = w
 
-    if (!this._arrowStart && !this._arrowEnd) {
-      // Simple case: single round-capped stroke → one draw call, one shadow.
-      ctx.lineCap = 'round'
-      ctx.beginPath()
-      ctx.moveTo(start.x, start.y)
-      ctx.lineTo(end.x,   end.y)
-      ctx.stroke()
+    const useArtistic = colour === undefined && !Node.geometricMode
+
+    if (!useArtistic) {
+      // Outline mode or mask pass: plain geometric rendering.
+      if (!this._arrowStart && !this._arrowEnd) {
+        ctx.lineCap = 'round'
+        ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.lineTo(end.x, end.y); ctx.stroke()
+        return
+      }
+      const bsx = start.x + udx*aLen, bsy = start.y + udy*aLen
+      const bex = end.x   - udx*aLen, bey = end.y   - udy*aLen
+      const OVERLAP = 1
+      const lineS = { x: this._arrowStart ? bsx - udx*OVERLAP : start.x, y: this._arrowStart ? bsy - udy*OVERLAP : start.y }
+      const lineE = { x: this._arrowEnd   ? bex + udx*OVERLAP : end.x,   y: this._arrowEnd   ? bey + udy*OVERLAP : end.y   }
+      ctx.lineCap = 'butt'
+      ctx.beginPath(); ctx.moveTo(lineS.x, lineS.y); ctx.lineTo(lineE.x, lineE.y); ctx.stroke()
+      if (!this._arrowStart) { ctx.beginPath(); ctx.arc(start.x, start.y, r, 0, Math.PI*2); ctx.fill() }
+      if (!this._arrowEnd)   { ctx.beginPath(); ctx.arc(end.x,   end.y,   r, 0, Math.PI*2); ctx.fill() }
+      if (this._arrowEnd)   { ctx.beginPath(); ctx.moveTo(end.x, end.y); ctx.lineTo(bex+nx*hw, bey+ny*hw); ctx.lineTo(bex-nx*hw, bey-ny*hw); ctx.closePath(); ctx.fill() }
+      if (this._arrowStart) { ctx.beginPath(); ctx.moveTo(start.x, start.y); ctx.lineTo(bsx+nx*hw, bsy+ny*hw); ctx.lineTo(bsx-nx*hw, bsy-ny*hw); ctx.closePath(); ctx.fill() }
       return
     }
 
-    // One or both arrowheads present.
-    // Strategy:
-    //   1. Draw the line body with butt caps, extending 1px under each arrowhead
-    //      to close any anti-aliasing gap at the junction.
-    //   2. Explicitly fill a circle at each non-arrowhead end to restore the
-    //      round cap there.
-    //   3. Fill each arrowhead triangle so its base meets the body end.
+    // Artistic rendering: brush style chosen by stroke width.
+    const [pt0, pt1, pt2] = BRUSH_TRANSITIONS
+    const caseIdx = w < pt0 ? 1 : w < pt1 ? 2 : w < pt2 ? 3 : 4
+    const eff     = Math.max(1, w - (BRUSH_OFFSETS[caseIdx] ?? 0))
+    const seed    = hashString(this.debugName)
 
-    // Body endpoints: trimmed to arrowhead base positions.
-    const bsx = start.x + udx * aLen
-    const bsy = start.y + udy * aLen
-    const bex = end.x   - udx * aLen
-    const bey = end.y   - udy * aLen
+    // Body: cases 1–3 run to the endpoint (arrowhead overlaps); case 4 sets back.
+    const bodyS = (this._arrowStart && caseIdx === 4) ? { x: start.x + udx*aLen, y: start.y + udy*aLen } : start
+    const bodyE = (this._arrowEnd   && caseIdx === 4) ? { x: end.x   - udx*aLen, y: end.y   - udy*aLen } : end
+    const pts   = [bodyS, bodyE]
 
-    // Extend body 1px under arrowheads to avoid AA gaps at the junction.
-    const OVERLAP = 1
-    const lineS = {
-      x: this._arrowStart ? bsx - udx * OVERLAP : start.x,
-      y: this._arrowStart ? bsy - udy * OVERLAP : start.y,
-    }
-    const lineE = {
-      x: this._arrowEnd ? bex + udx * OVERLAP : end.x,
-      y: this._arrowEnd ? bey + udy * OVERLAP : end.y,
-    }
-
-    ctx.lineCap = 'butt'
-    ctx.beginPath()
-    ctx.moveTo(lineS.x, lineS.y)
-    ctx.lineTo(lineE.x, lineE.y)
-    ctx.stroke()
-
-    // Round caps at non-arrowhead ends (full circle = round lineCap equivalent).
-    if (!this._arrowStart) {
-      ctx.beginPath()
-      ctx.arc(start.x, start.y, r, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    if (!this._arrowEnd) {
-      ctx.beginPath()
-      ctx.arc(end.x, end.y, r, 0, Math.PI * 2)
-      ctx.fill()
+    if (w > pt1 - BRUSH_BLEND_HW && w < pt1 + BRUSH_BLEND_HW) {
+      const t        = (w - (pt1 - BRUSH_BLEND_HW)) / (2 * BRUSH_BLEND_HW)
+      const effBlend = Math.max(1, w - ((1-t)*(BRUSH_OFFSETS[2]??0) + t*(BRUSH_OFFSETS[3]??0)))
+      drawNibBrushBlend(ctx, pts, css, effBlend, seed, NIB_PEN_DEFAULTS, BRUSH_DEFAULTS, t)
+    } else {
+      switch (caseIdx) {
+        case 1: drawPencilLine(ctx,         pts, css, eff, seed); break
+        case 2: drawNibPen(ctx,             pts, css, eff, seed); break
+        case 3: drawCalligraphyBrush(ctx,   pts, css, eff, seed); break
+        case 4: drawLichtensteinStroke(ctx, pts, css, eff, seed); break
+      }
     }
 
-    // Arrowhead triangles.
-    // Both use +/- perp of the main axis for their wing points; the tip
-    // is exactly at end/start and the base center is at (bex/bsx, bey/bsy).
-    if (this._arrowEnd) {
-      ctx.beginPath()
-      ctx.moveTo(end.x, end.y)
-      ctx.lineTo(bex + nx * hw, bey + ny * hw)
-      ctx.lineTo(bex - nx * hw, bey - ny * hw)
-      ctx.closePath()
-      ctx.fill()
-    }
-    if (this._arrowStart) {
-      ctx.beginPath()
-      ctx.moveTo(start.x, start.y)
-      ctx.lineTo(bsx + nx * hw, bsy + ny * hw)
-      ctx.lineTo(bsx - nx * hw, bsy - ny * hw)
-      ctx.closePath()
-      ctx.fill()
+    // Arrowheads.
+    if (this._arrowEnd || this._arrowStart) {
+      const drawHead = (tip: Point, bx: number, by: number) => {
+        const lw = { x: bx + nx*hw, y: by + ny*hw }
+        const rw = { x: bx - nx*hw, y: by - ny*hw }
+        if (caseIdx === 4) {
+          ctx.save(); ctx.globalAlpha = 1; ctx.fillStyle = css
+          ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(lw.x, lw.y); ctx.lineTo(rw.x, rw.y); ctx.closePath(); ctx.fill()
+          ctx.restore()
+        } else if (caseIdx === 1) {
+          drawPencilLine(ctx, [lw, tip], css, eff, seed)
+          drawPencilLine(ctx, [rw, tip], css, eff, seed)
+        } else if (caseIdx === 2) {
+          drawNibPen(ctx, [lw, tip, rw], css, eff, seed, { ...NIB_PEN_DEFAULTS, splatDensity: 0 })
+        } else {
+          const cL = { x: (tip.x+lw.x)/2 + nx*hw*0.5, y: (tip.y+lw.y)/2 + ny*hw*0.5 }
+          const cR = { x: (tip.x+rw.x)/2 - nx*hw*0.5, y: (tip.y+rw.y)/2 - ny*hw*0.5 }
+          drawCalligraphyBrush(ctx, bezier2(tip, cL, lw, 10), css, Math.max(2, eff*0.35), seed, { ...BRUSH_DEFAULTS, taperLength: 0.30 })
+          drawCalligraphyBrush(ctx, bezier2(tip, cR, rw, 10), css, Math.max(2, eff*0.35), seed, { ...BRUSH_DEFAULTS, taperLength: 0.30 })
+        }
+      }
+      if (this._arrowEnd)   drawHead(end,   end.x   - udx*aLen, end.y   - udy*aLen)
+      if (this._arrowStart) drawHead(start, start.x  + udx*aLen, start.y + udy*aLen)
     }
   }
 
@@ -434,7 +455,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
   renderSelf(ctx: Ctx2D): void {
     // If canvas was resized between recomputes, rebuild before drawing.
     const cw = Node.canvasWidth, ch = Node.canvasHeight
-    if (this._canvas.width !== cw || this._canvas.height !== ch) this._updateCanvas()
+    if (this._canvas.width !== cw || this._canvas.height !== ch || this._canvasGeometricMode !== Node.geometricMode) this._updateCanvas()
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
     ctx.drawImage(this._canvas, 0, 0)
@@ -794,10 +815,10 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     }
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
     if (this._arrowEndBounds   !== null && this._inBox(point, this._arrowEndBounds))   return this
-    if (this._inBox(point, this._widthSliderRowBounds())) return this
     const dirMode = this._dirTranslateMode
     if (ptDist(point, dirMode ? this._renderedStart : this._start) <= HANDLE_HIT) return this
     if (ptDist(point, dirMode ? this._renderedEnd   : this._end)   <= HANDLE_HIT) return this
+    if (this._inBox(point, this._widthSliderRowBounds())) return this
     return null
   }
 
@@ -827,12 +848,6 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
     if (this._arrowEndBounds !== null && this._inBox(point, this._arrowEndBounds)) {
       this._arrowEnd = !this._arrowEnd
       this.markDirty()
-      return true
-    }
-
-    if (this._inBox(point, this._widthSliderRowBounds())) {
-      this._sliderDrag = true
-      this._setWidthFromPointer(point.x)
       return true
     }
 
@@ -886,6 +901,12 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
       this._drag = 'end'; this._dragStartMouse = { ...point }
       this._dragStartPt = { ...this._end }; this._dragStartOtherPt = null
       this._lineSnapper.reset()
+      return true
+    }
+
+    if (this._inBox(point, this._widthSliderRowBounds())) {
+      this._sliderDrag = true
+      this._setWidthFromPointer(point.x)
       return true
     }
 

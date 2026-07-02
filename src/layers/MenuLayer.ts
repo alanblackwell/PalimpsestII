@@ -111,12 +111,12 @@ const COLUMNS: ColDef[] = [
   {
     name: 'Shapes',
     top: [
-      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) } },
-      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new PathLayer(undefined, s.cx, s.cy, c) } },
-      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.outlineMode ? OUTLINE_COLOUR : rndColour(); return new RectLayer(s.cx, s.cy, s.sw, s.sh, c) } },
-      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer(undefined, Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
-      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer(Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
-      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer(Node.outlineMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Ellipse',  colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new EllipseLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Path',     colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new PathLayer(undefined, s.cx, s.cy, c) } },
+      { label: 'Rectangle', colour: '#e8a04a', factory: (_,__,w,h) => { const s = rndShape(w,h); const c = Node.geometricMode ? OUTLINE_COLOUR : rndColour(); return new RectLayer(s.cx, s.cy, s.sw, s.sh, c) } },
+      { label: 'Text',     colour: '#888888', factory: ()          => new TextLayer(undefined, Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Stroke',   colour: '#e86a4a', factory: ()          => new StrokeLayer(Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
+      { label: 'Line',     colour: '#e87e7e', factory: ()          => new LineLayer(Node.geometricMode ? OUTLINE_COLOUR : rndColour()) },
     ],
     bottom: [
       { label: 'Animate',  colour: '#cf7ecf', factory: (_,__,w,h) => new AnimPathLayer(w/2, h/2) },
@@ -275,7 +275,7 @@ export class MenuLayer extends Layer {
       const t = this._toggleBounds
       if (point.x >= t.x && point.x <= t.x + t.width &&
           point.y >= t.y && point.y <= t.y + t.height) {
-        Node.outlineMode = !Node.outlineMode
+        Node.geometricMode = !Node.geometricMode
         this.markDirty()
         Node.scheduleFrame?.()
         return true
@@ -402,7 +402,7 @@ export class MenuLayer extends Layer {
     const iconCY  = PANEL_Y + HEADER_H / 2
     this._toggleBounds = { x: iconCX - iconSz / 2 - 3, y: PANEL_Y, width: iconSz + 6, height: HEADER_H }
     ctx.fillStyle = 'rgba(255,255,255,0.55)'
-    drawIcon(ctx, Node.outlineMode ? 'shapes' : 'dots-nine', iconCX, iconCY, iconSz)
+    drawIcon(ctx, Node.geometricMode ? 'shapes' : 'palette', iconCX, iconCY, iconSz)
 
     for (let c = 0; c < resolved.length; c++) {
       const col = resolved[c]!
