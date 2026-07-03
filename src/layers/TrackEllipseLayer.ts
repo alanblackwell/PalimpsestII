@@ -8,7 +8,7 @@ import {
 import { MotionTrackerCore }  from './MotionTrackerCore.js'
 import type { Layer }         from '../core/Layer.js'
 import {
-  TRK_COL, TRK_W, TRK_BTN_H,
+  TRK_COL, TRK_W, TRK_BTN_H, TRK_OUTLINE_COL,
   renderTrackRepBtn, trackRepBtnLayout,
   drawSliderTrack, smoothValueFromPointer,
 } from './trackConvBtn.js'
@@ -143,7 +143,21 @@ export class TrackEllipseLayer extends EllipseLayer implements PointSource {
 
   // ── Rendering ──────────────────────────────────────────────────────────
 
-  override renderSelf(_ctx: Ctx2D): void { /* tracked point only */ }
+  override renderSelf(ctx: Ctx2D): void {
+    const hw = (this._width * this._scale) / 2
+    const hh = (this._height * this._scale) / 2
+    ctx.save()
+    ctx.globalAlpha = 0.85
+    ctx.translate(this._cx, this._cy)
+    ctx.rotate(this._angle)
+    ctx.strokeStyle = TRK_OUTLINE_COL
+    ctx.lineWidth   = 1.5
+    ctx.setLineDash([5, 3])
+    ctx.beginPath()
+    ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.restore()
+  }
 
   override renderPanel(ctx: Ctx2D): void {
     this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)

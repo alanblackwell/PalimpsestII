@@ -11,7 +11,7 @@ import {
 import { MotionTrackerCore } from './MotionTrackerCore.js'
 import type { Layer }        from '../core/Layer.js'
 import {
-  TRK_BTN_H, TRK_W,
+  TRK_BTN_H, TRK_W, TRK_OUTLINE_COL,
   renderTrackRepBtn, trackRepBtnLayout,
 } from './trackConvBtn.js'
 
@@ -177,9 +177,20 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   // Rendering
   // ----------------------------------------------------------
 
-  override renderSelf(_ctx: Ctx2D): void {
-    // Point layer — no canvas content drawn.
-    // The tracked-point crosshair is shown in renderOverlay when selected.
+  override renderSelf(ctx: Ctx2D): void {
+    const hw = (this._width * this._scale) / 2
+    const hh = (this._height * this._scale) / 2
+    ctx.save()
+    ctx.globalAlpha = 0.85
+    ctx.translate(this._cx, this._cy)
+    ctx.rotate(this._angle)
+    ctx.strokeStyle = TRK_OUTLINE_COL
+    ctx.lineWidth   = 1.5
+    ctx.setLineDash([5, 3])
+    ctx.beginPath()
+    ctx.rect(-hw, -hh, hw * 2, hh * 2)
+    ctx.stroke()
+    ctx.restore()
   }
 
   override renderPanel(ctx: Ctx2D): void {

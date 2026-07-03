@@ -8,7 +8,7 @@ import {
 import { MotionTrackerCore } from './MotionTrackerCore.js'
 import type { Layer }        from '../core/Layer.js'
 import {
-  TRK_COL, TRK_W, TRK_BTN_H,
+  TRK_COL, TRK_W, TRK_BTN_H, TRK_OUTLINE_COL,
   renderTrackRepBtn, trackRepBtnLayout,
   drawSliderTrack, smoothValueFromPointer,
 } from './trackConvBtn.js'
@@ -142,7 +142,24 @@ export class TrackPathLayer extends PathLayer implements PointSource {
 
   // ── Rendering ────────────────────────────────────────────────────────
 
-  override renderSelf(_ctx: Ctx2D): void { /* tracked point only */ }
+  override renderSelf(ctx: Ctx2D): void {
+    if (this._points.length < this._minPoints) return
+    const N = 120
+    ctx.save()
+    ctx.globalAlpha  = 0.85
+    ctx.strokeStyle  = TRK_OUTLINE_COL
+    ctx.lineWidth    = 1.5
+    ctx.setLineDash([5, 3])
+    ctx.beginPath()
+    for (let i = 0; i <= N; i++) {
+      const pt = this.samplePerimeter(i / N)
+      if (i === 0) ctx.moveTo(pt.x, pt.y)
+      else ctx.lineTo(pt.x, pt.y)
+    }
+    ctx.closePath()
+    ctx.stroke()
+    ctx.restore()
+  }
 
   override renderPanel(ctx: Ctx2D): void {
     this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)

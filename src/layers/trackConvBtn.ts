@@ -10,7 +10,8 @@ import { contentLeft } from '../interaction/layout.js'
 export const TRK_BTN_H   = 30
 export const TRK_BTN_GAP = 14
 export const TRK_BTN_SEP = 8
-export const TRK_COL     = '#cf7ecf'   // Point accent
+export const TRK_COL          = '#cf7ecf'   // Point accent
+export const TRK_OUTLINE_COL  = '#e8944a'   // orange region outline
 
 /** Width for each button label (sized to fit the text at 11px monospace + padding) */
 export const TRK_W: Record<'rect' | 'ellipse' | 'path' | 'draw', number> = {
