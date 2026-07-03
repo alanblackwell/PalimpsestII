@@ -133,9 +133,9 @@ export class MotionTrackerCore {
     ctx.restore()
   }
 
-  renderTrackedPoint(ctx: Ctx2D): void {
+  renderTrackedPoint(ctx: Ctx2D, override?: Point): void {
     if (!this._hasCapture) return
-    const { x, y } = this._trackedPoint
+    const { x, y } = override ?? this._trackedPoint
     const r = CROSSHAIR_R
     ctx.save()
     ctx.strokeStyle = CROSSHAIR_COL

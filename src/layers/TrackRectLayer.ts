@@ -10,6 +10,12 @@ import {
 } from '../core/types.js'
 import { MotionTrackerCore } from './MotionTrackerCore.js'
 import type { Layer }        from '../core/Layer.js'
+import {
+  TRK_BTN_H, TRK_W,
+  renderTrackRepBtn, trackRepBtnLayout,
+} from './trackConvBtn.js'
+
+type BBox = { x: number; y: number; width: number; height: number }
 
 // ------------------------------------------------------------
 // TrackRectLayer — hue-histogram motion tracker
@@ -30,9 +36,14 @@ import type { Layer }        from '../core/Layer.js'
 const SEARCH_RADIUS  = 120     // search window half-size (px) per frame
 const FROZEN_OPACITY = 0.55    // opacity of frozen reference frame in edit mode
 
-const CAPTURE_COL = '#cf7ecf'  // Point accent
-const CAPTURE_W   = 72
-const CAPTURE_H   = 26
+const CAPTURE_COL  = '#cf7ecf'  // Point accent
+const CAPTURE_W    = 72
+const CAPTURE_H    = 26
+const SMOOTH_MAX   = 100
+// Match ShapeLayer's slider layout constants (not exported, so duplicated here)
+const SM_LABEL_W   = 78
+const SM_VALUE_W   = 38
+const SM_SLOT_H    = 30
 
 export class TrackRectLayer extends RectLayer implements PointSource {
   override readonly types: ReadonlySet<ValueType> =
@@ -40,12 +51,28 @@ export class TrackRectLayer extends RectLayer implements PointSource {
 
   readonly imageSlot: ParameterSlot
 
-  private readonly _tracker = new MotionTrackerCore()
-  private _needsCapture     = true
+  private readonly _tracker  = new MotionTrackerCore()
+  private _needsCapture      = true
   private _captureBtnBounds: { x: number; y: number; w: number; h: number } | null = null
-  private _thumbCanvas      = new OffscreenCanvas(1, 1)
+  private _smoothDrag        = false
+
+  private _repEllipseBounds: BBox | null = null
+  private _repPathBounds: BBox | null = null
+  private _repDrawBounds: BBox | null = null
+  private _onReplaceEllipse: (() => void) | null = null
+  private _onReplacePath: (() => void) | null = null
+  private _onReplaceDraw: (() => void) | null = null
+
+  setOnReplaceEllipse(fn: () => void): void { this._onReplaceEllipse = fn }
+  setOnReplacePath(fn: () => void): void { this._onReplacePath = fn }
+  setOnReplaceDraw(fn: () => void): void { this._onReplaceDraw = fn }
+  private _thumbCanvas       = new OffscreenCanvas(1, 1)
   private _iterHistory: Point[] = []
-  private _iterTime     = 0
+  private _iterTime          = 0
+  // Moving-average smoothing of the raw tracked point
+  private _smoothWindow      = 1
+  private _pointBuf: Point[] = []
+  private _smoothedPoint: Point = { x: 0, y: 0 }
 
   constructor() {
     super(
@@ -70,7 +97,7 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   // PointSource
   // ----------------------------------------------------------
 
-  getPoint(): Point { return this._tracker.getPoint() }
+  getPoint(): Point { return { ...this._smoothedPoint } }
 
   // ----------------------------------------------------------
   // Node
@@ -84,10 +111,22 @@ export class TrackRectLayer extends RectLayer implements PointSource {
 
     if (this._needsCapture) {
       this._tracker.capture(image, this.getMask(), { x: this._cx, y: this._cy })
-      this._needsCapture = false
+      this._needsCapture  = false
+      this._pointBuf      = []
+      this._smoothedPoint = { x: this._cx, y: this._cy }
     } else {
       this._iterHistory = this._tracker.track(image, SEARCH_RADIUS)
       this._iterTime    = performance.now()
+      // Push raw point into the moving-average buffer
+      const raw = this._tracker.getPoint()
+      this._pointBuf.push({ ...raw })
+      if (this._pointBuf.length > this._smoothWindow)
+        this._pointBuf.splice(0, this._pointBuf.length - this._smoothWindow)
+      const n = this._pointBuf.length
+      this._smoothedPoint = {
+        x: this._pointBuf.reduce((s, p) => s + p.x, 0) / n,
+        y: this._pointBuf.reduce((s, p) => s + p.y, 0) / n,
+      }
     }
     this._updateThumb()
   }
@@ -153,8 +192,23 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)   // shape handles + snap guides
     this._renderIterations(ctx)
-    this._tracker.renderTrackedPoint(ctx)
+    this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
     this._renderCaptureBtn(ctx)
+    this._drawSmoothSlider(ctx)
+    this._renderReplaceBtns(ctx)
+  }
+
+  private _renderReplaceBtns(ctx: Ctx2D): void {
+    const defs = [
+      { w: TRK_W.ellipse, label: 'Ellipse' },
+      { w: TRK_W.path,    label: 'Path'    },
+      { w: TRK_W.draw,    label: 'Draw'    },
+    ]
+    const layout = trackRepBtnLayout(defs)
+    this._repEllipseBounds = { x: layout[0]!.x, y: layout[0]!.y, width: layout[0]!.w, height: TRK_BTN_H }
+    this._repPathBounds    = { x: layout[1]!.x, y: layout[1]!.y, width: layout[1]!.w, height: TRK_BTN_H }
+    this._repDrawBounds    = { x: layout[2]!.x, y: layout[2]!.y, width: layout[2]!.w, height: TRK_BTN_H }
+    for (const { x, y, w, label } of layout) renderTrackRepBtn(ctx, x, y, w, label)
   }
 
   private _renderIterations(ctx: Ctx2D): void {
@@ -178,35 +232,62 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
-    // Place the Capture button just below the stroke/fill pill.
     const pb = this._strokePillBounds()
     const x  = pb.x
     const y  = pb.y + pb.height + 8
     this._captureBtnBounds = { x, y, w: CAPTURE_W, h: CAPTURE_H }
 
     ctx.save()
-
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, CAPTURE_W, CAPTURE_H, 5)
-    ctx.fill()
-
+    ctx.beginPath(); ctx.roundRect(x, y, CAPTURE_W, CAPTURE_H, 5); ctx.fill()
     ctx.fillStyle = CAPTURE_COL + 'cc'
-    ctx.beginPath()
-    ctx.roundRect(x, y, 3, CAPTURE_H, [5, 0, 0, 5])
-    ctx.fill()
-
+    ctx.beginPath(); ctx.roundRect(x, y, 3, CAPTURE_H, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
-    ctx.beginPath()
-    ctx.rect(x, y, CAPTURE_W, CAPTURE_H)
-    ctx.clip()
-    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-    ctx.font         = '10px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
+    ctx.beginPath(); ctx.rect(x, y, CAPTURE_W, CAPTURE_H); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '10px monospace'
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
     ctx.fillText('Capture', x + 8, y + CAPTURE_H / 2)
     ctx.restore()
+    ctx.restore()
+  }
 
+  private _smoothRowBounds() {
+    const pb = this._strokePillBounds()
+    const cb = this.canvasBounds
+    return { x: cb.x, y: pb.y + pb.height + 8 + CAPTURE_H + 8, width: cb.width, height: SM_SLOT_H }
+  }
+
+  private _smoothSliderGeom() {
+    const b        = this._smoothRowBounds()
+    const midY     = b.y + b.height / 2
+    const labelX   = b.x + 12
+    const indX     = b.x + b.width - 8
+    const valueRight = indX - 14
+    const sld0     = labelX + SM_LABEL_W
+    const sldR     = valueRight - SM_VALUE_W - 6
+    return { b, midY, labelX, sld0, sldR, valueRight }
+  }
+
+  private _drawSmoothSlider(ctx: Ctx2D): void {
+    const g   = this._smoothSliderGeom()
+    const { x, y, width, height } = g.b
+    const v01 = (this._smoothWindow - 1) / (SMOOTH_MAX - 1)
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath(); ctx.roundRect(x, y, width, height, 6); ctx.fill()
+
+    ctx.font = '10px monospace'; ctx.textBaseline = 'middle'
+    ctx.fillStyle = 'rgba(255,255,255,0.62)'
+    ctx.textAlign = 'left'
+    ctx.fillText('smooth', g.labelX, g.midY)
+
+    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, CAPTURE_COL)
+
+    ctx.font = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${this._smoothWindow}f`, g.valueRight, g.midY)
     ctx.restore()
   }
 
@@ -215,21 +296,66 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    const b = this._captureBtnBounds
-    if (b && point.x >= b.x && point.x <= b.x + b.w &&
-             point.y >= b.y && point.y <= b.y + b.h) return this
+    const cb = this._captureBtnBounds
+    if (cb && point.x >= cb.x && point.x <= cb.x + cb.w &&
+              point.y >= cb.y && point.y <= cb.y + cb.h) return this
+    const sb = this._smoothRowBounds()
+    if (point.x >= sb.x && point.x <= sb.x + sb.width &&
+        point.y >= sb.y && point.y <= sb.y + sb.height) return this
+    for (const bb of [this._repEllipseBounds, this._repPathBounds, this._repDrawBounds]) {
+      if (bb && point.x >= bb.x && point.x <= bb.x + bb.width &&
+                point.y >= bb.y && point.y <= bb.y + bb.height) return this
+    }
     return super.hitTestSelf(point)
   }
 
   override handlePointerDown(point: Point): boolean {
-    const b = this._captureBtnBounds
-    if (b && point.x >= b.x && point.x <= b.x + b.w &&
-             point.y >= b.y && point.y <= b.y + b.h) {
+    const cb = this._captureBtnBounds
+    if (cb && point.x >= cb.x && point.x <= cb.x + cb.w &&
+              point.y >= cb.y && point.y <= cb.y + cb.h) {
       this.triggerCapture()
       Node.scheduleFrame?.()
       return true
     }
+    const sb = this._smoothRowBounds()
+    if (point.x >= sb.x && point.x <= sb.x + sb.width &&
+        point.y >= sb.y && point.y <= sb.y + sb.height) {
+      this._smoothDrag = true
+      this._applySmoothSlider(point.x)
+      return true
+    }
+    const repHit = (bb: BBox | null, fn: (() => void) | null) => {
+      if (!bb || !fn) return false
+      if (point.x >= bb.x && point.x <= bb.x + bb.width &&
+          point.y >= bb.y && point.y <= bb.y + bb.height) { fn(); return true }
+      return false
+    }
+    if (repHit(this._repEllipseBounds, this._onReplaceEllipse)) return true
+    if (repHit(this._repPathBounds,    this._onReplacePath))    return true
+    if (repHit(this._repDrawBounds,    this._onReplaceDraw))    return true
     return super.handlePointerDown(point)
+  }
+
+  override handlePointerMove(point: Point): void {
+    if (this._smoothDrag) { this._applySmoothSlider(point.x); return }
+    super.handlePointerMove(point)
+  }
+
+  override handlePointerUp(): void {
+    this._smoothDrag = false
+    super.handlePointerUp()
+  }
+
+  private _applySmoothSlider(px: number): void {
+    const g     = this._smoothSliderGeom()
+    const thumbR = 5
+    const lo    = g.sld0 + thumbR
+    const hi    = g.sldR - thumbR
+    const frac  = Math.max(0, Math.min(1, (px - lo) / Math.max(1, hi - lo)))
+    this._smoothWindow = Math.max(1, Math.round(1 + frac * (SMOOTH_MAX - 1)))
+    if (this._pointBuf.length > this._smoothWindow)
+      this._pointBuf.splice(0, this._pointBuf.length - this._smoothWindow)
+    Node.scheduleFrame?.()
   }
 
   // ----------------------------------------------------------
@@ -247,15 +373,21 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { ...super.serializeState(), tracker: this._tracker.serializeState() }
+    return {
+      ...super.serializeState(),
+      tracker:      this._tracker.serializeState(),
+      smoothWindow: this._smoothWindow,
+    }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     super.deserializeState(state)
     if (state.tracker && typeof state.tracker === 'object') {
       this._tracker.deserializeState(state.tracker as Record<string, unknown>)
-      // Resume from stored histogram + last point; skip capture if we have one
-      this._needsCapture = !this._tracker.hasCapture
+      this._needsCapture  = !this._tracker.hasCapture
+      this._smoothedPoint = this._tracker.getPoint()
     }
+    if (typeof state.smoothWindow === 'number')
+      this._smoothWindow = Math.max(1, Math.min(SMOOTH_MAX, state.smoothWindow))
   }
 }

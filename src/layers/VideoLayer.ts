@@ -14,6 +14,7 @@ import { graph } from '../dataflow/Graph.js'
 import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFaceDetect.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon } from '../ui/icons.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -172,6 +173,13 @@ export class VideoLayer extends Layer implements ImageSource {
   private _scrubTrackB:       BBox | null = null
   private _stallRestartBounds: BBox | null = null
 
+  // ── Track button ──────────────────────────────────────────────
+  private _trackBtnB:    BBox | null = null
+  private _addTrackDone  = false
+  private _onAddTrack: (() => void) | null = null
+
+  setOnAddTrack(fn: () => void): void { this._onAddTrack = fn }
+
   // ── Construction ─────────────────────────────────────────────
 
   constructor() {
@@ -269,6 +277,7 @@ export class VideoLayer extends Layer implements ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
+      addTrackDone:    this._addTrackDone,
       sourceType:      this._sourceType,
       deviceIdx:       this._deviceIdx,
       frozen:          this._frozen,
@@ -316,6 +325,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.manualTransform === 'boolean') this._manualTransform = state.manualTransform
     if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
     if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
+    if (typeof state.addTrackDone === 'boolean')    this._addTrackDone    = state.addTrackDone
 
     // Restart the camera stream after restoring deviceIdx so the correct
     // device is selected. Screen and file sources can't be auto-restarted.
@@ -865,6 +875,27 @@ export class VideoLayer extends Layer implements ImageSource {
   override renderOverlay(ctx: Ctx2D): void {
     if (this._sourceType !== 'none') this._renderHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
+    if (!this._addTrackDone && this._sourceType !== 'none') this._renderTrackBtn(ctx)
+  }
+
+  private _renderTrackBtn(ctx: Ctx2D): void {
+    const left = contentLeft(Node.canvasWidth)
+    const TRK_W = 56, TRK_H = 30, TRK_GAP = 14
+    const x = left + Math.max(0, (Node.viewportWidth - left - TRK_W) / 2)
+    const y = Node.viewportHeight - TRK_H - TRK_GAP
+    this._trackBtnB = { x, y, width: TRK_W, height: TRK_H }
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, TRK_W, TRK_H, 5); ctx.fill()
+    ctx.fillStyle = '#cf7ecfcc'   // Point accent
+    ctx.beginPath(); ctx.roundRect(x, y, 3, TRK_H, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, TRK_W, TRK_H); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '11px monospace'
+    ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText('Track', x + 10, y + TRK_H / 2)
+    ctx.restore(); ctx.restore()
   }
 
   override renderSlots(ctx: Ctx2D): void {
@@ -999,6 +1030,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._fitBtnB     !== null && boundingBoxContains(this._fitBtnB,     point)) return this
     if (this._mirrorBtnB  !== null && boundingBoxContains(this._mirrorBtnB,  point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
+    if (this._trackBtnB   !== null && boundingBoxContains(this._trackBtnB,   point)) return this
     if (this._scrubHit(point)) return this
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     if (this._displayW > 0) {
@@ -1084,6 +1116,11 @@ export class VideoLayer extends Layer implements ImageSource {
     // Toggle slot button
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
       this._handleToggle()
+      return true
+    }
+    if (this._trackBtnB !== null && boundingBoxContains(this._trackBtnB, point)) {
+      this._onAddTrack?.()
+      this._addTrackDone = true
       return true
     }
     // Transform handles

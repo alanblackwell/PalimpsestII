@@ -51,7 +51,10 @@ import { PathLayer }         from '../layers/PathLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import { WarpLayer }         from '../layers/WarpLayer.js'
 import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
-import { TrackRectLayer }    from '../layers/TrackRectLayer.js'
+import { TrackRectLayer }     from '../layers/TrackRectLayer.js'
+import { TrackEllipseLayer }  from '../layers/TrackEllipseLayer.js'
+import { TrackPathLayer }     from '../layers/TrackPathLayer.js'
+import { TrackDrawingLayer }  from '../layers/TrackDrawingLayer.js'
 
 // ------------------------------------------------------------
 // Persistence — save/load a Palimpsest session as a single JSON document
@@ -168,7 +171,10 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   BindingMapLayer:  () => new BindingMapLayer(),
   WarpLayer:        () => new WarpLayer(),
   MotionBlurLayer:  () => new MotionBlurLayer(),
-  TrackRectLayer:   () => new TrackRectLayer(),
+  TrackRectLayer:     () => new TrackRectLayer(),
+  TrackEllipseLayer:  () => new TrackEllipseLayer(),
+  TrackPathLayer:     () => new TrackPathLayer(),
+  TrackDrawingLayer:  () => new TrackDrawingLayer(),
 }
 
 // ------------------------------------------------------------
