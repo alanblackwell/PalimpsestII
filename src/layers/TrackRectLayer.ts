@@ -185,8 +185,7 @@ export class TrackRectLayer extends RectLayer implements PointSource {
     ctx.translate(this._cx, this._cy)
     ctx.rotate(this._angle)
     ctx.strokeStyle = TRK_OUTLINE_COL
-    ctx.lineWidth   = 1.5
-    ctx.setLineDash([5, 3])
+    ctx.lineWidth   = 2.5
     ctx.beginPath()
     ctx.rect(-hw, -hh, hw * 2, hh * 2)
     ctx.stroke()

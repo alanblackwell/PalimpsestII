@@ -148,8 +148,7 @@ export class TrackPathLayer extends PathLayer implements PointSource {
     ctx.save()
     ctx.globalAlpha  = 0.85
     ctx.strokeStyle  = TRK_OUTLINE_COL
-    ctx.lineWidth    = 1.5
-    ctx.setLineDash([5, 3])
+    ctx.lineWidth    = 2.5
     ctx.beginPath()
     for (let i = 0; i <= N; i++) {
       const pt = this.samplePerimeter(i / N)

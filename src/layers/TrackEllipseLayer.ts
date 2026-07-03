@@ -151,8 +151,7 @@ export class TrackEllipseLayer extends EllipseLayer implements PointSource {
     ctx.translate(this._cx, this._cy)
     ctx.rotate(this._angle)
     ctx.strokeStyle = TRK_OUTLINE_COL
-    ctx.lineWidth   = 1.5
-    ctx.setLineDash([5, 3])
+    ctx.lineWidth   = 2.5
     ctx.beginPath()
     ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2)
     ctx.stroke()
