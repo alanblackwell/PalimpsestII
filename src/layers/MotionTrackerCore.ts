@@ -79,10 +79,11 @@ export class MotionTrackerCore {
   // this converges to the *nearest* local colour mode rather than the global
   // weighted mean, preventing the result from jumping to a background region
   // that shares the target hue.
-  track(image: OffscreenCanvas | ImageBitmap, searchRadius: number): void {
-    if (!this._hasCapture) return
+  track(image: OffscreenCanvas | ImageBitmap, searchRadius: number): Point[] {
+    if (!this._hasCapture) return []
     const iw = image.width, ih = image.height
     const hist = this._histogram
+    const history: Point[] = []
 
     let cx = this._trackedPoint.x
     let cy = this._trackedPoint.y
@@ -112,10 +113,12 @@ export class MotionTrackerCore {
       const nx = wx / wSum, ny = wy / wSum
       const shift = Math.hypot(nx - cx, ny - cy)
       cx = nx; cy = ny
+      history.push({ x: cx, y: cy })
       if (shift < CONVERGE_PX) break
     }
 
     this._trackedPoint = { x: cx, y: cy }
+    return history
   }
 
   // ----------------------------------------------------------

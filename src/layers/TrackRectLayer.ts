@@ -44,6 +44,8 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   private _needsCapture     = true
   private _captureBtnBounds: { x: number; y: number; w: number; h: number } | null = null
   private _thumbCanvas      = new OffscreenCanvas(1, 1)
+  private _iterHistory: Point[] = []
+  private _iterTime     = 0
 
   constructor() {
     super(
@@ -84,7 +86,8 @@ export class TrackRectLayer extends RectLayer implements PointSource {
       this._tracker.capture(image, this.getMask(), { x: this._cx, y: this._cy })
       this._needsCapture = false
     } else {
-      this._tracker.track(image, SEARCH_RADIUS)
+      this._iterHistory = this._tracker.track(image, SEARCH_RADIUS)
+      this._iterTime    = performance.now()
     }
     this._updateThumb()
   }
@@ -149,8 +152,29 @@ export class TrackRectLayer extends RectLayer implements PointSource {
 
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)   // shape handles + snap guides
+    this._renderIterations(ctx)
     this._tracker.renderTrackedPoint(ctx)
     this._renderCaptureBtn(ctx)
+  }
+
+  private _renderIterations(ctx: Ctx2D): void {
+    if (this._iterHistory.length === 0) return
+    const FADE_MS = 700
+    const alpha = Math.max(0, 1 - (performance.now() - this._iterTime) / FADE_MS)
+    if (alpha <= 0) return
+
+    ctx.save()
+    ctx.strokeStyle = CAPTURE_COL
+    ctx.lineWidth   = 1
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'
+    ctx.shadowBlur  = 2
+    for (const pt of this._iterHistory) {
+      ctx.globalAlpha = alpha * 0.65
+      ctx.beginPath()
+      ctx.arc(pt.x, pt.y, 8, 0, Math.PI * 2)
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
