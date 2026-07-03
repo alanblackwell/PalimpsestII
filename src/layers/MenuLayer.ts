@@ -37,7 +37,6 @@ import { RotateLayer }     from './RotateLayer.js'
 import { LineLayer }       from './LineLayer.js'
 import { WarpLayer }       from './WarpLayer.js'
 import { MotionBlurLayer }    from './MotionBlurLayer.js'
-import { ArtisticTestLayer } from './ArtisticTestLayer.js'
 import { ShapeLayer }       from './ShapeLayer.js'
 
 // ------------------------------------------------------------
@@ -174,7 +173,6 @@ const COLUMNS: ColDef[] = [
     bottom: [
       { label: 'Load',    colour: '#a0a4b8', kind: 'load' },
       { label: 'Save',    colour: '#a0a4b8', kind: 'save' },
-      { label: 'ArtTest', colour: '#7ecf7e', factory: () => new ArtisticTestLayer(), selectAfterCreate: true },
     ],
   },
 ]
@@ -213,6 +211,9 @@ const COLUMNS: ColDef[] = [
 //     seem to have much utility here
 //
 //   RotateLayer - functionality now provided by rotation of Angle
+//
+//   ArtisticTestLayer - development harness for artistic/geometric rendering;
+//     button removed from menu but source retained for future dev work
 //
 // ── MenuLayer ─────────────────────────────────────────────────
 
