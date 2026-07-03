@@ -39,6 +39,7 @@ import type { ClipShapeLayer } from '../layers/ClipLayer.js'
 import { FilterLayer }       from '../layers/FilterLayer.js'
 import { ShapeLayer }        from '../layers/ShapeLayer.js'
 import { ClipRectLayer }     from '../layers/ClipRectLayer.js'
+import { TrackRectLayer }    from '../layers/TrackRectLayer.js'
 import { ClipEllipseLayer }  from '../layers/ClipEllipseLayer.js'
 import { ClipPathLayer }     from '../layers/ClipPathLayer.js'
 import { ClipTextLayer }     from '../layers/ClipTextLayer.js'
@@ -214,6 +215,9 @@ function postInsertLayer(newLayer: Layer): void {
     }
   }
 
+  if (newLayer instanceof ClipRectLayer) {
+    wireClipRectTrackButton(newLayer)
+  }
   if (newLayer instanceof ClipRectLayer || newLayer instanceof ClipEllipseLayer || newLayer instanceof ClipPathLayer || newLayer instanceof ClipDrawingLayer) {
     wireClipShapeLayer(newLayer)
 
@@ -422,6 +426,43 @@ function wireClipShapeLayer(layer: ClipShapeMovable): void {
     if (helper !== null) backgroundLayer.add(helper)
     postInsertLayer(transform)
     refreshStack(transform)
+  })
+}
+
+// Wire ClipRectLayer's "Track" convenience button. Pressing it creates a
+// TrackRectLayer at the same stack position, transfers the image binding and
+// shape geometry, performs an immediate initial capture, then archives the
+// ClipRectLayer and its hidden mask-tracker helper.
+function wireClipRectTrackButton(layer: ClipRectLayer): void {
+  layer.setOnAddTrack(() => {
+    const helper         = layer.hiddenHelper
+    const insertionPoint = helper !== null ? helper.layerBelow : layer.layerBelow
+
+    const tracker = new TrackRectLayer()
+    Layer.assignDebugName(tracker)
+    tracker.bounds = { ...layer.bounds }
+    tracker.deserializeState(layer.serializeState())   // transfers cx/cy/w/h/angle/colour/etc.
+
+    const imgBinding = BindingLayer.findForSlot(layer.imageSlot)
+    const imgSource  = imgBinding?.source ?? null
+    imgBinding?.remove()
+
+    deletionLayer.archive(layer)
+    if (helper !== null) deletionLayer.archive(helper)
+
+    tracker.insertAbove(insertionPoint ?? root)
+    if (imgSource !== null) BindingLayer.create(imgSource, tracker.imageSlot)
+
+    // If the image source was sent to BackgroundLayer (the normal case when a
+    // ClipRect is created from a Video/Image layer), restore it to the main
+    // stack directly below the tracker so the live feed remains visible.
+    if (imgSource instanceof Layer && backgroundLayer.removeItem(imgSource)) {
+      imgSource.insertBelow(tracker)
+      imgSource.forceDirty()
+    }
+
+    postInsertLayer(tracker)
+    refreshStack(tracker)
   })
 }
 
@@ -739,6 +780,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof AnimPathLayer)   wireAnimPathLayer(scanL)
     if (scanL instanceof ImageLayer)      wireImageLayer(scanL)
     if (isAnimatableShape(scanL))         wireAnimatableShape(scanL)
+    if (scanL instanceof ClipRectLayer)   wireClipRectTrackButton(scanL)
     if (isClipShapeMovable(scanL))        wireClipShapeLayer(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL)) wireMaskButton(scanL)
     if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
@@ -754,6 +796,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
     if (archived instanceof ImageLayer)      wireImageLayer(archived)
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
+    if (archived instanceof ClipRectLayer)   wireClipRectTrackButton(archived)
     if (isClipShapeMovable(archived))        wireClipShapeLayer(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived)) wireMaskButton(archived)
     if (archived instanceof TextLayer)       wireTextMaskButton(archived)

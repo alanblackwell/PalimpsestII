@@ -8,7 +8,60 @@ import {
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
 import type { MaskLayer } from './MaskLayer.js'
-import { moveButtonHitTest, renderMoveButton } from './ClipMoveButton.js'
+import { contentLeft } from '../interaction/layout.js'
+
+// ------------------------------------------------------------
+// Clip-family bottom-of-screen button layout (Track + Move)
+// ------------------------------------------------------------
+
+const BTN_H   = 30
+const BTN_GAP = 14   // gap from viewport bottom edge
+const BTN_SEP = 8    // gap between the two buttons
+const TRACK_W = 56
+const MOVE_W  = 60
+const TRACK_COL = '#cf7ecf'   // Point accent
+const MOVE_COL  = '#7ecf7e'   // Image accent
+
+type BtnPos = { x: number; y: number }
+
+function clipBtnLayout(
+  showTrack: boolean, showMove: boolean,
+  viewportW: number, viewportH: number, canvasW: number,
+): { track: BtnPos | null; move: BtnPos | null; y: number } {
+  const left  = contentLeft(canvasW)
+  const total = (showTrack ? TRACK_W : 0) + (showMove ? MOVE_W : 0) +
+                (showTrack && showMove ? BTN_SEP : 0)
+  const y     = viewportH - BTN_H - BTN_GAP
+  let x = left + Math.max(0, (viewportW - left - total) / 2)
+  let track: BtnPos | null = null
+  let move:  BtnPos | null = null
+  if (showTrack) { track = { x, y }; x += TRACK_W + BTN_SEP }
+  if (showMove)  { move  = { x, y } }
+  return { track, move, y }
+}
+
+function renderClipBtn(ctx: Ctx2D, x: number, y: number, w: number, label: string, col: string): void {
+  ctx.save()
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'
+  ctx.beginPath()
+  ctx.roundRect(x, y, w, BTN_H, 5)
+  ctx.fill()
+  ctx.fillStyle = col + 'cc'
+  ctx.beginPath()
+  ctx.roundRect(x, y, 3, BTN_H, [5, 0, 0, 5])
+  ctx.fill()
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(x, y, w, BTN_H)
+  ctx.clip()
+  ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+  ctx.font         = '11px monospace'
+  ctx.textAlign    = 'left'
+  ctx.textBaseline = 'middle'
+  ctx.fillText(label, x + 10, y + BTN_H / 2)
+  ctx.restore()
+  ctx.restore()
+}
 
 // ------------------------------------------------------------
 // ClipRectLayer — a RectLayer that renders a clipped image
@@ -30,8 +83,11 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
 
   private _offscreen: OffscreenCanvas
   private _maskTracker: MaskLayer | null = null
-  private _addMoveDone = false
+  private _addMoveDone  = false
   private _onAddMove: (() => void) | null = null
+
+  private _addTrackDone = false
+  private _onAddTrack: (() => void) | null = null
 
   constructor() {
     super(Node.canvasWidth / 2, Node.canvasHeight / 2, Node.canvasWidth * 0.35, Node.canvasHeight * 0.3)
@@ -55,7 +111,8 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
     helper.trackedShape = this
   }
 
-  setOnAddMove(fn: () => void): void { this._onAddMove = fn }
+  setOnAddMove(fn: () => void): void  { this._onAddMove  = fn }
+  setOnAddTrack(fn: () => void): void { this._onAddTrack = fn }
 
   override markDirty(): void {
     super.markDirty()
@@ -64,16 +121,39 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
 
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)
-    renderMoveButton(ctx, this._addMoveDone)
+    const { track, move, y } = clipBtnLayout(
+      !this._addTrackDone, !this._addMoveDone,
+      Node.viewportWidth, Node.viewportHeight, Node.canvasWidth,
+    )
+    if (track) renderClipBtn(ctx, track.x, y, TRACK_W, 'Track', TRACK_COL)
+    if (move)  renderClipBtn(ctx, move.x,  y, MOVE_W,  'Move',  MOVE_COL)
   }
 
   protected override hitTestSelf(point: Point): this | null {
-    if (moveButtonHitTest(point, this._addMoveDone)) return this
+    const { track, move, y } = clipBtnLayout(
+      !this._addTrackDone, !this._addMoveDone,
+      Node.viewportWidth, Node.viewportHeight, Node.canvasWidth,
+    )
+    if (track && this._hitBtn(point, track.x, TRACK_W, y)) return this
+    if (move  && this._hitBtn(point, move.x,  MOVE_W,  y)) return this
     return super.hitTestSelf(point)
   }
 
+  private _hitBtn(p: Point, bx: number, bw: number, by: number): boolean {
+    return p.x >= bx && p.x <= bx + bw && p.y >= by && p.y <= by + BTN_H
+  }
+
   handlePointerDown(point: Point): boolean {
-    if (moveButtonHitTest(point, this._addMoveDone)) {
+    const { track, move, y } = clipBtnLayout(
+      !this._addTrackDone, !this._addMoveDone,
+      Node.viewportWidth, Node.viewportHeight, Node.canvasWidth,
+    )
+    if (track && this._hitBtn(point, track.x, TRACK_W, y)) {
+      this._onAddTrack?.()
+      this._addTrackDone = true
+      return true
+    }
+    if (move && this._hitBtn(point, move.x, MOVE_W, y)) {
       this._onAddMove?.()
       this._addMoveDone = true
       return true
@@ -82,12 +162,17 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
   }
 
   override serializeState(): Record<string, unknown> {
-    return { ...super.serializeState(), addMoveDone: this._addMoveDone }
+    return {
+      ...super.serializeState(),
+      addMoveDone:  this._addMoveDone,
+      addTrackDone: this._addTrackDone,
+    }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     super.deserializeState(state)
-    if (typeof state.addMoveDone === 'boolean') this._addMoveDone = state.addMoveDone
+    if (typeof state.addMoveDone  === 'boolean') this._addMoveDone  = state.addMoveDone
+    if (typeof state.addTrackDone === 'boolean') this._addTrackDone = state.addTrackDone
   }
 
   // ----------------------------------------------------------

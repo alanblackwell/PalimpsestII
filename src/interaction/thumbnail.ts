@@ -58,6 +58,29 @@ export function drawLayerThumbnail(
   ctx.fillStyle = '#16161e'
   ctx.fillRect(0, 0, w, h)
 
+  // ── Custom thumbnail (e.g. TrackRectLayer) ─────────────────
+  // A layer may expose getThumbnailImage() to override the default
+  // type-based rendering with a bespoke composite.
+  const customThumb = l['getThumbnailImage']?.() as OffscreenCanvas | null | undefined
+  if (customThumb != null) {
+    try { ctx.drawImage(customThumb as CanvasImageSource, 0, 0, cw, ch, 0, 0, w, h) } catch { /* skip */ }
+    // Overlay the tracked point at thumbnail scale — same style as the Point
+    // layer thumbnail so it reads clearly regardless of image content.
+    const pt = l['getPoint']?.() as { x: number; y: number } | undefined
+    if (pt) {
+      const tc = typeColor(layer)
+      const nx = Math.max(2, Math.min(w - 2, (pt.x / cw) * w))
+      const ny = Math.max(2, Math.min(h - 2, (pt.y / ch) * h))
+      ctx.strokeStyle = tc + '88'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(0, ny); ctx.lineTo(w, ny); ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(nx, 0); ctx.lineTo(nx, h); ctx.stroke()
+      ctx.fillStyle = tc
+      ctx.beginPath(); ctx.arc(nx, ny, 4, 0, Math.PI * 2); ctx.fill()
+    }
+    drawLabel(ctx, layer, w, h)
+    return
+  }
+
   // ── Image ──────────────────────────────────────────────────
   if (t.has(ValueType.Image)) {
     const img = l['getImage']?.()
