@@ -2,13 +2,15 @@ import { MaskLayer }         from './MaskLayer.js'
 import { Node }              from '../core/Node.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import {
-  ValueType,
-  type ImageSource, type PointSource, type Point, type Ctx2D,
+  ValueType, SlotState,
+  type ImageSource, type EventSource,
+  type PointSource, type Point, type Ctx2D,
 } from '../core/types.js'
 import { MotionTrackerCore } from './MotionTrackerCore.js'
 import type { Layer }        from '../core/Layer.js'
 import {
   TRK_COL, TRK_W, TRK_BTN_H,
+  PLAY_BTN_W, PLAY_BTN_GAP, renderPlayPauseBtn,
   renderTrackRepBtn, trackRepBtnLayout,
   drawSliderTrack, smoothValueFromPointer,
 } from './trackConvBtn.js'
@@ -36,12 +38,16 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
   override readonly types: ReadonlySet<ValueType> =
     new Set([ValueType.Point, ValueType.Mask])
 
-  readonly imageSlot: ParameterSlot
+  readonly trackingSlot: ParameterSlot
+  readonly imageSlot:   ParameterSlot
 
-  private readonly _tracker    = new MotionTrackerCore()
-  private _needsCapture        = true
+  private readonly _tracker        = new MotionTrackerCore()
+  private _needsCapture            = true
+  private _trackingEnabled         = true
+  private _lastTrackEventTime: number | null = null
   private _captureBtnBounds: BBox | null = null
-  private _smoothDrag          = false
+  private _playBtnBounds: BBox | null    = null
+  private _smoothDrag                    = false
   private _thumbCanvas         = new OffscreenCanvas(1, 1)
   private _thumbReveal         = new OffscreenCanvas(1, 1)
   private _iterHistory: Point[] = []
@@ -65,8 +71,9 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
 
   constructor() {
     super()
-    this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
-    this.slots.push(this.imageSlot)
+    this.trackingSlot = new ParameterSlot(ValueType.Event, this, 'tracking')
+    this.imageSlot    = new ParameterSlot(ValueType.Image, this, 'image')
+    this.slots.push(this.trackingSlot, this.imageSlot)
     this.debugName       = 'TrackDraw'
     this.displayBaseName = 'Tracker'
   }
@@ -79,19 +86,28 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
 
   protected override recompute(): void {
     super.recompute()   // MaskLayer: update freehand + shape slots
+
+    if (this.trackingSlot.isActive) {
+      const t = (this.trackingSlot.source as EventSource).getEventTime()
+      if (t !== this._lastTrackEventTime) {
+        this._lastTrackEventTime = t
+        this._trackingEnabled    = !this._trackingEnabled
+      }
+    }
+
     if (!this.imageSlot.isActive) return
     const image = (this.imageSlot.source as ImageSource).getImage()
     if (image === null) return
 
-    // Use the freehand mask centroid as the initial capture point
     const mw = Node.canvasWidth, mh = Node.canvasHeight
     if (this._needsCapture) {
       const cx = mw / 2, cy = mh / 2
       this._tracker.capture(image, this.getMask(), { x: cx, y: cy })
-      this._needsCapture  = false
-      this._pointBuf      = []
-      this._smoothedPoint = { x: cx, y: cy }
-    } else {
+      this._needsCapture    = false
+      this._pointBuf        = []
+      this._smoothedPoint   = { x: cx, y: cy }
+      this._trackingEnabled = true
+    } else if (this._trackingEnabled) {
       this._iterHistory = this._tracker.track(image, SEARCH_RADIUS)
       this._iterTime    = performance.now()
       const raw = this._tracker.getPoint()
@@ -146,13 +162,13 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
     super.renderPanel(ctx)
   }
 
-  // Add the imageSlot pill below MaskLayer's own slot groups, and record
-  // the bottom of all slot rows so renderOverlay can position the slider.
+  // Add the trackingSlot + imageSlot pill below MaskLayer's own slot groups,
+  // and record the bottom so renderOverlay can position the capture/play buttons.
   override renderSlots(ctx: Ctx2D): void {
     super.renderSlots(ctx)   // shape-slots pill + invert-slot pill
     let bottom = this.panelBottom
     for (const b of this._slotBounds.values()) bottom = Math.max(bottom, b.y + b.height)
-    const pillBottom = this.renderSlotGroup(ctx, [this.imageSlot], bottom + 8)
+    const pillBottom = this.renderSlotGroup(ctx, [this.trackingSlot, this.imageSlot], bottom + 8)
     this._slotsBottom = pillBottom
   }
 
@@ -161,8 +177,16 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
     this._renderIterations(ctx)
     this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
     this._renderCaptureBtn(ctx)
+    this._renderPlayBtn(ctx)
     this._drawSmoothSlider(ctx)
     this._renderReplaceBtns(ctx)
+  }
+
+  private _renderPlayBtn(ctx: Ctx2D): void {
+    const x = this.canvasBounds.x + CAPTURE_W + PLAY_BTN_GAP
+    const y = this._slotsBottom + 8
+    this._playBtnBounds = { x, y, width: PLAY_BTN_W, height: CAPTURE_H }
+    renderPlayPauseBtn(ctx, x, y, CAPTURE_H, this._trackingEnabled)
   }
 
   private _renderIterations(ctx: Ctx2D): void {
@@ -242,6 +266,9 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
     const cb = this._captureBtnBounds
     if (cb && pt.x >= cb.x && pt.x <= cb.x + cb.width &&
               pt.y >= cb.y && pt.y <= cb.y + cb.height) return this
+    const pb = this._playBtnBounds
+    if (pb && pt.x >= pb.x && pt.x <= pb.x + pb.width &&
+              pt.y >= pb.y && pt.y <= pb.y + pb.height) return this
     const sb = this._smoothRowBounds()
     if (pt.x >= sb.x && pt.x <= sb.x + sb.width &&
         pt.y >= sb.y && pt.y <= sb.y + sb.height) return this
@@ -257,6 +284,15 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
     if (cb && pt.x >= cb.x && pt.x <= cb.x + cb.width &&
               pt.y >= cb.y && pt.y <= cb.y + cb.height) {
       this.triggerCapture(); Node.scheduleFrame?.(); return true
+    }
+    const pb = this._playBtnBounds
+    if (pb && pt.x >= pb.x && pt.x <= pb.x + pb.width &&
+              pt.y >= pb.y && pt.y <= pb.y + pb.height) {
+      const s = this.trackingSlot.state
+      if (s === SlotState.Bound)               this.trackingSlot.suspend()
+      else if (s === SlotState.SuspendedBound) this.trackingSlot.resume()
+      else this._trackingEnabled = !this._trackingEnabled
+      Node.scheduleFrame?.(); return true
     }
     const sb = this._smoothRowBounds()
     if (pt.x >= sb.x && pt.x <= sb.x + sb.width &&
@@ -303,8 +339,9 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
   override serializeState(): Record<string, unknown> {
     return {
       ...super.serializeState(),
-      tracker:      this._tracker.serializeState(),
-      smoothWindow: this._smoothWindow,
+      tracker:         this._tracker.serializeState(),
+      smoothWindow:    this._smoothWindow,
+      trackingEnabled: this._trackingEnabled,
     }
   }
 
@@ -317,5 +354,7 @@ export class TrackDrawingLayer extends MaskLayer implements PointSource {
     }
     if (typeof state.smoothWindow === 'number')
       this._smoothWindow = Math.max(1, Math.min(SMOOTH_MAX, state.smoothWindow))
+    if (typeof state.trackingEnabled === 'boolean')
+      this._trackingEnabled = state.trackingEnabled
   }
 }

@@ -13,6 +13,24 @@ export const TRK_BTN_SEP = 8
 export const TRK_COL          = '#cf7ecf'   // Point accent
 export const TRK_OUTLINE_COL  = '#e8944a'   // orange region outline
 
+export const PLAY_BTN_W   = 36
+export const PLAY_BTN_GAP = 6   // horizontal gap between Capture and Play buttons
+
+export function renderPlayPauseBtn(
+  ctx: Ctx2D, x: number, y: number, h: number, enabled: boolean,
+): void {
+  ctx.save()
+  ctx.fillStyle = 'rgba(0,0,0,0.55)'
+  ctx.beginPath(); ctx.roundRect(x, y, PLAY_BTN_W, h, 5); ctx.fill()
+  ctx.fillStyle = TRK_COL + 'cc'
+  ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
+  ctx.fillStyle = 'rgba(255,255,255,0.85)'
+  ctx.font = '13px monospace'
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+  ctx.fillText(enabled ? '⏸' : '▶', x + PLAY_BTN_W / 2, y + h / 2)
+  ctx.restore()
+}
+
 /** Width for each button label (sized to fit the text at 11px monospace + padding) */
 export const TRK_W: Record<'rect' | 'ellipse' | 'path' | 'draw', number> = {
   rect: 55, ellipse: 72, path: 55, draw: 55,
