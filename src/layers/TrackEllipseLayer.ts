@@ -143,7 +143,24 @@ export class TrackEllipseLayer extends EllipseLayer implements PointSource {
 
   // ── Rendering ──────────────────────────────────────────────────────────
 
-  override renderSelf(ctx: Ctx2D): void {
+  override renderSelf(_ctx: Ctx2D): void { /* composite output is blank — outline is an edit-mode overlay */ }
+
+  override renderPanel(ctx: Ctx2D): void {
+    this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)
+    super.renderPanel(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    this._renderOutline(ctx)
+    super.renderOverlay(ctx)
+    this._renderIterations(ctx)
+    this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
+    this._renderCaptureBtn(ctx)
+    this._drawSmoothSlider(ctx)
+    this._renderReplaceBtns(ctx)
+  }
+
+  private _renderOutline(ctx: Ctx2D): void {
     const hw = (this._width * this._scale) / 2
     const hh = (this._height * this._scale) / 2
     ctx.save()
@@ -156,20 +173,6 @@ export class TrackEllipseLayer extends EllipseLayer implements PointSource {
     ctx.ellipse(0, 0, hw, hh, 0, 0, Math.PI * 2)
     ctx.stroke()
     ctx.restore()
-  }
-
-  override renderPanel(ctx: Ctx2D): void {
-    this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)
-    super.renderPanel(ctx)
-  }
-
-  override renderOverlay(ctx: Ctx2D): void {
-    super.renderOverlay(ctx)
-    this._renderIterations(ctx)
-    this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
-    this._renderCaptureBtn(ctx)
-    this._drawSmoothSlider(ctx)
-    this._renderReplaceBtns(ctx)
   }
 
   private _renderIterations(ctx: Ctx2D): void {

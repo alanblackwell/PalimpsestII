@@ -142,7 +142,24 @@ export class TrackPathLayer extends PathLayer implements PointSource {
 
   // ── Rendering ────────────────────────────────────────────────────────
 
-  override renderSelf(ctx: Ctx2D): void {
+  override renderSelf(_ctx: Ctx2D): void { /* composite output is blank — outline is an edit-mode overlay */ }
+
+  override renderPanel(ctx: Ctx2D): void {
+    this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)
+    super.renderPanel(ctx)
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    this._renderOutline(ctx)
+    super.renderOverlay(ctx)
+    this._renderIterations(ctx)
+    this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
+    this._renderCaptureBtn(ctx)
+    this._drawSmoothSlider(ctx)
+    this._renderReplaceBtns(ctx)
+  }
+
+  private _renderOutline(ctx: Ctx2D): void {
     if (this._points.length < this._minPoints) return
     const N = 120
     ctx.save()
@@ -158,20 +175,6 @@ export class TrackPathLayer extends PathLayer implements PointSource {
     ctx.closePath()
     ctx.stroke()
     ctx.restore()
-  }
-
-  override renderPanel(ctx: Ctx2D): void {
-    this._tracker.renderFrozenFrame(ctx, FROZEN_OPACITY)
-    super.renderPanel(ctx)
-  }
-
-  override renderOverlay(ctx: Ctx2D): void {
-    super.renderOverlay(ctx)
-    this._renderIterations(ctx)
-    this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
-    this._renderCaptureBtn(ctx)
-    this._drawSmoothSlider(ctx)
-    this._renderReplaceBtns(ctx)
   }
 
   private _renderIterations(ctx: Ctx2D): void {

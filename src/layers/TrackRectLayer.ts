@@ -177,20 +177,7 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   // Rendering
   // ----------------------------------------------------------
 
-  override renderSelf(ctx: Ctx2D): void {
-    const hw = (this._width * this._scale) / 2
-    const hh = (this._height * this._scale) / 2
-    ctx.save()
-    ctx.globalAlpha = 0.85
-    ctx.translate(this._cx, this._cy)
-    ctx.rotate(this._angle)
-    ctx.strokeStyle = TRK_OUTLINE_COL
-    ctx.lineWidth   = 2.5
-    ctx.beginPath()
-    ctx.rect(-hw, -hh, hw * 2, hh * 2)
-    ctx.stroke()
-    ctx.restore()
-  }
+  override renderSelf(_ctx: Ctx2D): void { /* composite output is blank — outline is an edit-mode overlay */ }
 
   override renderPanel(ctx: Ctx2D): void {
     // Draw the frozen reference frame behind the shape handles so the user can
@@ -200,6 +187,7 @@ export class TrackRectLayer extends RectLayer implements PointSource {
   }
 
   override renderOverlay(ctx: Ctx2D): void {
+    this._renderOutline(ctx)
     super.renderOverlay(ctx)   // shape handles + snap guides
     this._renderIterations(ctx)
     this._tracker.renderTrackedPoint(ctx, this._smoothedPoint)
@@ -219,6 +207,21 @@ export class TrackRectLayer extends RectLayer implements PointSource {
     this._repPathBounds    = { x: layout[1]!.x, y: layout[1]!.y, width: layout[1]!.w, height: TRK_BTN_H }
     this._repDrawBounds    = { x: layout[2]!.x, y: layout[2]!.y, width: layout[2]!.w, height: TRK_BTN_H }
     for (const { x, y, w, label } of layout) renderTrackRepBtn(ctx, x, y, w, label)
+  }
+
+  private _renderOutline(ctx: Ctx2D): void {
+    const hw = (this._width * this._scale) / 2
+    const hh = (this._height * this._scale) / 2
+    ctx.save()
+    ctx.globalAlpha = 0.85
+    ctx.translate(this._cx, this._cy)
+    ctx.rotate(this._angle)
+    ctx.strokeStyle = TRK_OUTLINE_COL
+    ctx.lineWidth   = 2.5
+    ctx.beginPath()
+    ctx.rect(-hw, -hh, hw * 2, hh * 2)
+    ctx.stroke()
+    ctx.restore()
   }
 
   private _renderIterations(ctx: Ctx2D): void {
