@@ -42,6 +42,7 @@ export class TrackPathLayer extends PathLayer implements PointSource {
   readonly imageSlot:   ParameterSlot
 
   private readonly _tracker        = new MotionTrackerCore()
+  private _slotsBottom             = 0
   private _needsCapture            = true
   private _trackingEnabled         = true
   private _lastTrackEventTime: number | null = null
@@ -69,6 +70,7 @@ export class TrackPathLayer extends PathLayer implements PointSource {
 
   constructor() {
     super()
+    this.slots.length = 0   // discard inherited ShapeLayer + PathLayer slot rows
     this.trackingSlot = new ParameterSlot(ValueType.Event, this, 'tracking')
     this.imageSlot    = new ParameterSlot(ValueType.Image, this, 'image')
     this.slots.push(this.trackingSlot, this.imageSlot)
@@ -159,6 +161,18 @@ export class TrackPathLayer extends PathLayer implements PointSource {
 
   // ── Rendering ────────────────────────────────────────────────────────
 
+  override renderSlots(ctx: Ctx2D): void {
+    super.renderSlots(ctx)
+    let bottom = this.panelBottom
+    for (const b of this._slotBounds.values()) bottom = Math.max(bottom, b.y + b.height)
+    this._slotsBottom = bottom
+  }
+
+  protected override _drawStrokePill(_ctx: Ctx2D): void {}
+  protected override _drawRadiusPill(_ctx: Ctx2D): void {}
+  protected override _strokeSliderHit(_p: Point): boolean { return false }
+  protected override _scaleSliderHit(_p: Point): boolean { return false }
+
   override renderSelf(_ctx: Ctx2D): void { /* composite output is blank — outline is an edit-mode overlay */ }
 
   override renderPanel(ctx: Ctx2D): void {
@@ -178,9 +192,8 @@ export class TrackPathLayer extends PathLayer implements PointSource {
   }
 
   private _renderPlayBtn(ctx: Ctx2D): void {
-    const pb = this._strokePillBounds()
-    const x  = pb.x + CAPTURE_W + PLAY_BTN_GAP
-    const y  = pb.y + pb.height + 8
+    const x = this.canvasBounds.x + CAPTURE_W + PLAY_BTN_GAP
+    const y = this._slotsBottom + 8
     this._playBtnBounds = { x, y, width: PLAY_BTN_W, height: CAPTURE_H }
     renderPlayPauseBtn(ctx, x, y, CAPTURE_H, this._trackingEnabled)
   }
@@ -218,8 +231,7 @@ export class TrackPathLayer extends PathLayer implements PointSource {
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
-    const pb = this._strokePillBounds()
-    const x = pb.x, y = pb.y + pb.height + 8
+    const x = this.canvasBounds.x, y = this._slotsBottom + 8
     this._captureBtnBounds = { x, y, width: CAPTURE_W, height: CAPTURE_H }
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
@@ -235,9 +247,8 @@ export class TrackPathLayer extends PathLayer implements PointSource {
   }
 
   private _smoothRowBounds(): BBox {
-    const pb = this._strokePillBounds()
     const cb = this.canvasBounds
-    return { x: cb.x, y: pb.y + pb.height + 8 + CAPTURE_H + 8, width: cb.width, height: SM_SLOT_H }
+    return { x: cb.x, y: this._slotsBottom + 8 + CAPTURE_H + 8, width: cb.width, height: SM_SLOT_H }
   }
 
   private _smoothSliderGeom() {
