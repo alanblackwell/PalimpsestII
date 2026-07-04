@@ -70,7 +70,7 @@ import { drawIcon } from '../ui/icons.js'
 
 interface BlendMode {
   readonly label: string
-  readonly op:    GlobalCompositeOperation
+  readonly op:    GlobalCompositeOperation | 'hue-add'
 }
 
 const MODES: readonly BlendMode[] = [
@@ -87,7 +87,48 @@ const MODES: readonly BlendMode[] = [
   { label: 'soft-light', op: 'soft-light'   },
   { label: 'burn',       op: 'color-burn'   },
   { label: 'dodge',      op: 'color-dodge'  },
+  { label: 'hue-add',    op: 'hue-add'      },
 ]
+
+// ------------------------------------------------------------------
+// HSL helpers for hue-add pixel blend
+// ------------------------------------------------------------------
+
+// RGB (0–255 each) → [hue 0–360, saturation 0–1, lightness 0–1]
+function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+  const rn = r / 255, gn = g / 255, bn = b / 255
+  const max = Math.max(rn, gn, bn), min = Math.min(rn, gn, bn)
+  const l = (max + min) * 0.5
+  if (max === min) return [0, 0, l]
+  const d = max - min
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min)
+  let h: number
+  if      (max === rn) h = (gn - bn) / d + (gn < bn ? 6 : 0)
+  else if (max === gn) h = (bn - rn) / d + 2
+  else                 h = (rn - gn) / d + 4
+  return [h * 60, s, l]
+}
+
+function _hueChannel(p: number, q: number, t: number): number {
+  if (t < 0) t += 1; if (t > 1) t -= 1
+  if (t < 1 / 6) return p + (q - p) * 6 * t
+  if (t < 0.5)   return q
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+  return p
+}
+
+// [hue 0–360, saturation 0–1, lightness 0–1] → RGB (0–255 each)
+function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+  if (s === 0) { const v = Math.round(l * 255); return [v, v, v] }
+  const q  = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p  = 2 * l - q
+  const hk = h / 360
+  return [
+    Math.round(_hueChannel(p, q, hk + 1 / 3) * 255),
+    Math.round(_hueChannel(p, q, hk)          * 255),
+    Math.round(_hueChannel(p, q, hk - 1 / 3) * 255),
+  ]
+}
 
 // ------------------------------------------------------------------
 // Constants
@@ -122,13 +163,15 @@ export class CompositeLayer extends Layer implements ImageSource {
   private readonly _slider: SliderRegion
 
   // Off-screen surfaces — recreated on resize()
-  private _result: OffscreenCanvas
-  private _temp:   OffscreenCanvas
+  private _result:   OffscreenCanvas
+  private _temp:     OffscreenCanvas
+  private _tempLeft: OffscreenCanvas  // used by hue-add pixel blend
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
     this._result      = new OffscreenCanvas(canvasWidth, canvasHeight)
     this._temp        = new OffscreenCanvas(canvasWidth, canvasHeight)
+    this._tempLeft    = new OffscreenCanvas(canvasWidth, canvasHeight)
     this._leftSlot    = new ParameterSlot(ValueType.Image,  this)
     this._rightSlot   = new ParameterSlot(ValueType.Image,  this)
     this._maskSlot    = new ParameterSlot(ValueType.Mask,   this)
@@ -209,8 +252,9 @@ export class CompositeLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   resize(w: number, h: number): void {
-    this._result = new OffscreenCanvas(w, h)
-    this._temp   = new OffscreenCanvas(w, h)
+    this._result   = new OffscreenCanvas(w, h)
+    this._temp     = new OffscreenCanvas(w, h)
+    this._tempLeft = new OffscreenCanvas(w, h)
     this.markDirty()
   }
 
@@ -241,8 +285,9 @@ export class CompositeLayer extends Layer implements ImageSource {
     const cw = Node.canvasWidth
     const ch = Node.canvasHeight
     if (this._result.width !== cw || this._result.height !== ch) {
-      this._result = new OffscreenCanvas(cw, ch)
-      this._temp   = new OffscreenCanvas(cw, ch)
+      this._result   = new OffscreenCanvas(cw, ch)
+      this._temp     = new OffscreenCanvas(cw, ch)
+      this._tempLeft = new OffscreenCanvas(cw, ch)
     }
 
     const left    = this._leftSlot.isActive
@@ -265,16 +310,26 @@ export class CompositeLayer extends Layer implements ImageSource {
     const rctx = this._result.getContext('2d')!
     rctx.clearRect(0, 0, cw, ch)
 
-    // Draw left
+    if (right === null) {
+      if (left !== null) rctx.drawImage(left as CanvasImageSource, 0, 0)
+      return
+    }
+
+    const mode = MODES[this._modeIndex]
+
+    if (mode.op === 'hue-add') {
+      this._hueAddBlend(left, right, mask, opacity)
+      return
+    }
+
+    // Draw left (canvas compositing modes only)
     if (left !== null) {
       rctx.globalCompositeOperation = 'source-over'
       rctx.globalAlpha = 1
       rctx.drawImage(left as CanvasImageSource, 0, 0)
     }
 
-    if (right === null) return
-
-    const mode = MODES[this._modeIndex]
+    const canvasOp = mode.op as GlobalCompositeOperation
 
     if (mask !== null) {
       // 1. Draw right onto temp canvas
@@ -290,18 +345,98 @@ export class CompositeLayer extends Layer implements ImageSource {
       tctx.drawImage(mask as CanvasImageSource, 0, 0)
 
       // 3. Composite masked right onto result
-      rctx.globalCompositeOperation = mode.op
+      rctx.globalCompositeOperation = canvasOp
       rctx.globalAlpha = opacity
       rctx.drawImage(this._temp as CanvasImageSource, 0, 0)
     } else {
       // No mask — composite right directly
-      rctx.globalCompositeOperation = mode.op
+      rctx.globalCompositeOperation = canvasOp
       rctx.globalAlpha = opacity
       rctx.drawImage(right as CanvasImageSource, 0, 0)
     }
 
     rctx.globalCompositeOperation = 'source-over'
     rctx.globalAlpha = 1
+  }
+
+  // ----------------------------------------------------------
+  // Hue-add pixel blend
+  // ----------------------------------------------------------
+  //
+  // For each pixel: output HSL = weighted average of left and right HSL
+  // channels, with the hue combined using plain modulo arithmetic (not
+  // circular shortest-path interpolation).  That means complementary or
+  // near-complementary hues can wrap around the colour wheel and land on
+  // unexpected colours — e.g. blue (240°) + yellow (60°) at t=0.5
+  // produces (240*0.5 + 60*0.5) % 360 = 150° (cyan), not the red/neutral
+  // you would get from shortest-path blending.
+  //
+  // opacity (t) is the slider: 0 → pure left, 1 → pure right.
+  // The mask scales t per-pixel when present.
+
+  private _hueAddBlend(
+    left:    ImageValue | null,
+    right:   ImageValue,
+    mask:    MaskValue  | null,
+    opacity: number,
+  ): void {
+    const cw = this._result.width
+    const ch = this._result.height
+    const n  = cw * ch * 4
+
+    // Sample left into _tempLeft
+    const lctx = this._tempLeft.getContext('2d')!
+    lctx.clearRect(0, 0, cw, ch)
+    if (left !== null) lctx.drawImage(left as CanvasImageSource, 0, 0)
+    const ld = lctx.getImageData(0, 0, cw, ch).data
+
+    // Sample right into _temp
+    const tctx = this._temp.getContext('2d')!
+    tctx.clearRect(0, 0, cw, ch)
+    tctx.drawImage(right as CanvasImageSource, 0, 0)
+    const rd = tctx.getImageData(0, 0, cw, ch).data
+
+    // Sample mask into _result temporarily, then copy before overwriting
+    const rctx = this._result.getContext('2d')!
+    let md: Uint8ClampedArray | null = null
+    if (mask !== null) {
+      rctx.clearRect(0, 0, cw, ch)
+      rctx.drawImage(mask as CanvasImageSource, 0, 0)
+      md = new Uint8ClampedArray(rctx.getImageData(0, 0, cw, ch).data)
+    }
+
+    const out = new ImageData(cw, ch)
+    const od  = out.data
+    const t   = opacity
+
+    for (let i = 0; i < n; i += 4) {
+      const la = ld[i + 3]!
+      const ra = rd[i + 3]!
+      const mt = md !== null ? md[i + 3]! / 255 : 1
+      const bt = t * mt   // effective blend fraction for this pixel
+
+      if (bt === 0) {
+        od[i] = ld[i]!; od[i + 1] = ld[i + 1]!; od[i + 2] = ld[i + 2]!; od[i + 3] = la
+        continue
+      }
+
+      const [lh, ls, ll] = rgbToHsl(ld[i]!, ld[i + 1]!, ld[i + 2]!)
+      const [rh, rs, rl] = rgbToHsl(rd[i]!, rd[i + 1]!, rd[i + 2]!)
+
+      // Non-circular weighted hue sum — the surprising part
+      const h = ((lh * (1 - bt) + rh * bt) % 360 + 360) % 360
+      const s =   ls * (1 - bt) + rs * bt
+      const l =   ll * (1 - bt) + rl * bt
+
+      const [fr, fg, fb] = hslToRgb(h, s, l)
+      od[i]     = fr
+      od[i + 1] = fg
+      od[i + 2] = fb
+      od[i + 3] = Math.round(la * (1 - bt) + ra * bt)
+    }
+
+    rctx.clearRect(0, 0, cw, ch)
+    rctx.putImageData(out, 0, 0)
   }
 
   // ----------------------------------------------------------

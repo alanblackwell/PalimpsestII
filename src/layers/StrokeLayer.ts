@@ -170,6 +170,7 @@ export class StrokeLayer extends PathLayer {
 
   // Block pixel-pick scan while the user is actively sketching.
   get blockPixelPick(): boolean { return this._drawMode }
+  get isEmpty(): boolean { return this._points.length === 0 }
 
   // ----------------------------------------------------------
   // Persistence
@@ -647,6 +648,11 @@ export class StrokeLayer extends PathLayer {
   // ----------------------------------------------------------
   // Freehand fitting
   // ----------------------------------------------------------
+
+  beginStrokeAt(point: Point): void {
+    this._enterDrawMode()
+    this._rawPoints = [{ ...point }]
+  }
 
   private _enterDrawMode(): void {
     this._drawMode  = true

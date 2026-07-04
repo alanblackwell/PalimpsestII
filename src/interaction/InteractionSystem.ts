@@ -3,6 +3,7 @@ import { Node }                 from '../core/Node.js'
 import { ParameterSlot }        from '../core/ParameterSlot.js'
 import { SlotState, ValueType, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
+import { StrokeLayer }          from '../layers/StrokeLayer.js'
 import type { LayerStackWidget } from './LayerStackWidget.js'
 import {
   classifySwipe, computePinchTransform, computeWheelTransform,
@@ -545,6 +546,23 @@ export class InteractionSystem {
         if (picked !== null && hasPositionDrag(picked)) {
           this._pendingPickDrag = { layer: picked, point, pointerId: e.pointerId }
           this._canvas.setPointerCapture(e.pointerId)
+        } else if (picked === null) {
+          // True empty-area miss (not a slot tap) — if a StrokeLayer is below
+          // the current layer, switch to it and begin a new stroke at this point.
+          const sel = this._widget?.selected ?? null
+          if (sel !== null && !(sel instanceof StrokeLayer) && sel.hitTestSlot(testPt) === null) {
+            for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
+              if (!l.isHiddenHelper && l instanceof StrokeLayer && l.isEmpty) {
+                this._widget!.selected = l
+                l.beginStrokeAt(point)
+                this._active = { node: l, pointerId: e.pointerId, useVpt: false }
+                this._canvas.setPointerCapture(e.pointerId)
+                this._setCursor('grabbing')
+                Node.scheduleFrame?.()
+                break
+              }
+            }
+          }
         }
         return
       }
