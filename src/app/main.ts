@@ -394,6 +394,9 @@ function createSnapPointLayer(
   Layer.assignDebugName(pt)
   pt.bounds = { x: X, y: 24, width: W, height: 36 }
   pt.insertAbove(above)
+  pt.isHiddenHelper = true
+  pt.helperHost = above
+  above.hiddenHelper = pt
   BindingLayer.create(shapeLayer, pt.shapeSlot)
   pt.setShapeRefIndex(refIdx)
   pt.setShapeEnabled(true)
@@ -406,7 +409,7 @@ function wireStrokeSnapPoint(stroke: StrokeLayer): void {
     const pt = createSnapPointLayer(shapeLayer, refIdx, stroke)
     const slot = which === 'start' ? stroke.startSlot : stroke.endSlot
     BindingLayer.create(pt, slot)
-    refreshStack(pt)
+    refreshStack()
   })
 }
 
@@ -415,7 +418,7 @@ function wireLineSnapPoint(line: LineLayer): void {
     const pt = createSnapPointLayer(shapeLayer, refIdx, line)
     const slot = which === 'start' ? line.startSlot : line.endSlot
     BindingLayer.create(pt, slot)
-    refreshStack(pt)
+    refreshStack()
   })
 }
 

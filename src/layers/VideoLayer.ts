@@ -614,9 +614,7 @@ export class VideoLayer extends Layer implements ImageSource {
     const hasPos = state === 'found' && face0 !== undefined
     const cx  = hasPos ? face0!.cx     : cw / 2
     const cy  = hasPos ? face0!.cy     : ch / 2
-    const R   = hasPos
-      ? Math.max(30, Math.min(face0!.radius, Math.min(cw, ch) * 0.35))
-      : Math.min(cw, ch) * 0.13
+    const R   = Math.min(cw, ch) * 0.04
     const lw  = Math.max(2, R * 0.055)
 
     const colour = state === 'found'     ? '#55ee77'
@@ -626,7 +624,7 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.save()
 
     // Dark backdrop disc
-    ctx.fillStyle = 'rgba(0,0,0,0.40)'
+    ctx.fillStyle = 'rgba(0,0,0,0.12)'
     ctx.beginPath()
     ctx.arc(cx, cy, R * 1.35, 0, Math.PI * 2)
     ctx.fill()
@@ -635,7 +633,7 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.fillStyle   = colour
     ctx.lineWidth   = lw
     ctx.lineCap     = 'round'
-    ctx.globalAlpha = state === 'scanning' ? 0.65 : 0.90
+    ctx.globalAlpha = 0.25
 
     // Head circle
     ctx.beginPath()
@@ -669,7 +667,7 @@ export class VideoLayer extends Layer implements ImageSource {
       const scanY = cy - R + t * R * 2
       const halfW = Math.sqrt(Math.max(0, R * R - (scanY - cy) ** 2))
       if (halfW > 2) {
-        ctx.globalAlpha = 0.50
+        ctx.globalAlpha = 0.25
         ctx.lineWidth   = lw * 0.6
         ctx.setLineDash([Math.max(3, R * 0.08), Math.max(3, R * 0.08)])
         ctx.beginPath()
@@ -677,12 +675,12 @@ export class VideoLayer extends Layer implements ImageSource {
         ctx.stroke()
         ctx.setLineDash([])
         ctx.lineWidth   = lw
-        ctx.globalAlpha = 0.65
+        ctx.globalAlpha = 0.25
       }
     }
 
     // Label below the face
-    ctx.globalAlpha  = state === 'scanning' ? 0.60 : 0.85
+    ctx.globalAlpha  = 0.25
     ctx.font         = `${Math.max(11, Math.round(R * 0.21))}px monospace`
     ctx.fillStyle    = colour
     ctx.textAlign    = 'center'
