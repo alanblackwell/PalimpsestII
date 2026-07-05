@@ -51,9 +51,11 @@ import { detectContour } from './contourTrace.js'
 //   fillModeSlot    (Event)  — each pulse toggles fill ↔ outline
 //   strokeWidthSlot (Amount)
 
-const ACCENT     = '#e8a04a'   // shape amber — matches Rect/Ellipse/Path
-const DIR_ACCENT = '#7ecfcf'
-const AM_COL     = '#4a8fe8'
+const ACCENT      = '#e8a04a'   // shape amber — matches Rect/Ellipse/Path
+const DIR_ACCENT  = '#7ecfcf'
+const AM_COL      = '#4a8fe8'
+const CAPTURE_W   = 72
+const CAPTURE_H   = 26
 const MIN_POINTS = 4
 const MAX_POINTS = 32
 const DEF_POINTS = 10
@@ -138,6 +140,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   // UI state
   private _toggleBounds:    BBox | null = null
   private _strokeSliderDrag = false
+  private _slotsBottom      = 0
+  private _captureBtnBounds: BBox | null = null
 
   // Handle drag state
   private _angle:           number = 0
@@ -349,11 +353,36 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
     this._drawStrokePill(ctx)
+    let bottom = this.panelBottom
+    for (const b of this._slotBounds.values()) bottom = Math.max(bottom, b.y + b.height)
+    this._slotsBottom = bottom
   }
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
     if (this.phaseSlot.isActive) this._drawPhaseIndicator(ctx)
+    this._renderCaptureBtn(ctx)
+  }
+
+  private _renderCaptureBtn(ctx: Ctx2D): void {
+    const x = this.canvasBounds.x
+    const y = this._slotsBottom + 8
+    this._captureBtnBounds = { x, y, width: CAPTURE_W, height: CAPTURE_H }
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, CAPTURE_W, CAPTURE_H, 5); ctx.fill()
+    ctx.fillStyle = ACCENT + 'cc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, CAPTURE_H, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, CAPTURE_W, CAPTURE_H); ctx.clip()
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '10px monospace'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('Capture', x + 8, y + CAPTURE_H / 2)
+    ctx.restore()
+    ctx.restore()
   }
 
   // ── Stroke-control pill (mirrors ShapeLayer pattern) ─────────────
@@ -589,6 +618,9 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     // DETECT button (canvas-space pill)
     if (boundingBoxContains(this._detectBtnBounds(this.canvasBounds), point)) return this
 
+    // Capture button (below slot rows)
+    if (this._captureBtnBounds !== null && boundingBoxContains(this._captureBtnBounds, point)) return this
+
     if (this._controlPoints.length < 2) return null
     const r2 = HIT_R * HIT_R
     const c  = this._centroid()
@@ -623,8 +655,13 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       return true
     }
 
-    // DETECT button
+    // DETECT button (in pill header)
     if (boundingBoxContains(this._detectBtnBounds(this.canvasBounds), point)) {
+      this._forceDetect = true; this.markDirty(); return true
+    }
+
+    // Capture button (below slot rows)
+    if (this._captureBtnBounds !== null && boundingBoxContains(this._captureBtnBounds, point)) {
       this._forceDetect = true; this.markDirty(); return true
     }
 
