@@ -10,6 +10,8 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { RateLayer, sliderToHz, hzToSlider } from './RateLayer.js'
+import { SliderRegion } from '../regions/SliderRegion.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
 
@@ -26,9 +28,11 @@ import { drawIcon } from '../ui/icons.js'
 // Output:
 //   Point — the canvas coordinate at the current phase on the shape
 
-const ACCENT  = '#cf7ecf'   // purple, distinct from shape amber
-const RING_R  = 10
-const DOT_R   = 3
+const ACCENT       = '#cf7ecf'   // purple, distinct from shape amber
+const RING_R       = 10
+const DOT_R        = 3
+const SLIDER_H     = 26    // rate slider section height inside the combined rate+phase pill
+const AMOUNT_TC    = '#4a8fe8'   // Amount type accent colour (for phase slot binding box)
 
 // Slot-row constants (must match Layer.ts renderSlots)
 const SLOT_H   = 30
@@ -61,6 +65,9 @@ export class AnimPathLayer extends Layer implements PointSource {
   private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
   private _cwBounds:      { x: number; y: number; width: number; height: number } | null = null
 
+  private _hiddenRate:  RateLayer | null = null
+  private _rateSlider:  SliderRegion
+
   // Set by main.ts after insertion (and after load) — invoked when the
   // bottom "Amount" convenience button is pressed.
   private _onAddAmount: (() => void) | null = null
@@ -77,11 +84,22 @@ export class AnimPathLayer extends Layer implements PointSource {
     this.cwSlot      = new ParameterSlot(ValueType.Event,  this, 'clockwise')
     this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot, this.cwSlot)
 
+    this._rateSlider = new SliderRegion(this, hzToSlider(1.0))
+    this._rateSlider.interactive = false
+
     graph.register(this)
   }
 
   // Called from main.ts to wire the bottom "Amount" button.
   setOnAddAmount(fn: () => void): void { this._onAddAmount = fn }
+
+  // Called by SliderRegion when the user drags the rate slider.
+  setValue(v: Amount): void {
+    if (this._hiddenRate !== null) {
+      this._hiddenRate.setRateHz(sliderToHz(v))
+    }
+    this.markDirty()
+  }
 
   // PointSource
   getPoint(): Point { return { ...this._currentPoint } }
@@ -175,6 +193,20 @@ export class AnimPathLayer extends Layer implements PointSource {
         this._currentPoint = (this.shapeSlot.source as PointSource).getPoint()
       }
     }
+
+    // Dynamically track which RateLayer is bound to phaseSlot.
+    // This handles both the hidden-helper Rate and any manually bound Rate.
+    const boundRate = (this.phaseSlot.isActive && this.phaseSlot.source instanceof RateLayer)
+      ? (this.phaseSlot.source as RateLayer) : null
+    if (boundRate !== this._hiddenRate) {
+      this._hiddenRate = boundRate
+      this._rateSlider.interactive = boundRate !== null
+    }
+    // Always sync slider from the rate source so the display stays current
+    // even when the Rate layer's Hz is changed while this layer is not selected.
+    if (boundRate !== null) this._rateSlider.setValue(hzToSlider(boundRate.getRate()))
+
+    this._syncSliderBounds()
   }
 
   // Effective perimeter parameter [0,1] accounting for direction and offset.
@@ -224,70 +256,157 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._drawPill(ctx, this.canvasBounds)
   }
 
-  // Draw radio checkbox overlay on the runModeSlot row, and CW/CCW button on cwSlot row.
+  // Three-pill slot layout:
+  //   Pill 1 — shape slot (standard renderSlotGroup)
+  //   Pill 2 — rate slider + phase slot binding row (combined)
+  //   Pill 3 — run mode + clockwise slots (with toggle overlays)
   override renderSlots(ctx: Ctx2D): void {
-    super.renderSlots(ctx)
+    this._slotBounds.clear()
 
     const PANEL_X = contentLeft(Node.canvasWidth)
     const PANEL_W = panelWidth(Node.canvasWidth)
+    const drag    = Node.bindDrag
 
-    // Run-mode radio checkbox
-    const runIdx = this.slots.indexOf(this.runModeSlot)
-    if (runIdx >= 0) {
-      const y    = this.panelBottom + runIdx * (SLOT_H + SLOT_GAP)
-      const midY = y + SLOT_H / 2
-      const cbx  = PANEL_X + LABEL_W - 14
-      const cbr  = 5
+    let y = this.panelBottom
 
-      this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+    // ── Pill 1: shape slot ───────────────────────────────────────
+    y = this.renderSlotGroup(ctx, [this.shapeSlot], y) + SLOT_GAP
 
-      ctx.save()
-      ctx.strokeStyle = 'rgba(255,255,255,0.70)'
-      ctx.lineWidth   = 1.5
-      ctx.beginPath()
-      ctx.arc(cbx, midY, cbr, 0, Math.PI * 2)
-      ctx.stroke()
-      if (this._running) {
-        ctx.fillStyle = 'rgba(255,255,255,0.85)'
-        ctx.beginPath()
-        ctx.arc(cbx, midY, cbr - 2, 0, Math.PI * 2)
-        ctx.fill()
-      }
-      ctx.restore()
-    }
-
-    // CW/CCW toggle button on the cwSlot row
-    const cwIdx = this.slots.indexOf(this.cwSlot)
-    if (cwIdx >= 0) {
-      const y    = this.panelBottom + cwIdx * (SLOT_H + SLOT_GAP)
-      const midY = y + SLOT_H / 2
-      const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
-      const btnY = y + 3
-      const state   = this.cwSlot.state
-      const bound   = state === SlotState.Bound
-      const susp    = state === SlotState.SuspendedBound
-
-      this._cwBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+    // ── Pill 2: combined rate slider + phase slot row ────────────
+    {
+      const showSlider = this._hiddenRate !== null
+      const combinedH  = (showSlider ? SLIDER_H : 0) + SLOT_H
+      const phaseY     = y + (showSlider ? SLIDER_H : 0)
 
       ctx.save()
-      ctx.fillStyle = bound ? ACCENT + '33' : susp ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
+      ctx.font         = '10px monospace'
+      ctx.textBaseline = 'middle'
+
+      // Backdrop
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
       ctx.beginPath()
-      ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
+      ctx.roundRect(PANEL_X, y, PANEL_W, combinedH, 6)
       ctx.fill()
 
-      ctx.strokeStyle = bound ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
-      ctx.lineWidth = 1
-      if (susp) ctx.setLineDash([2, 2])
-      ctx.beginPath()
-      ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
-      ctx.stroke()
-      ctx.setLineDash([])
+      if (showSlider && this._hiddenRate !== null) {
+        this._rateSlider.bounds = {
+          x:      PANEL_X + 10,
+          y:      y + 4,
+          width:  Math.max(0, PANEL_W - 88),
+          height: SLIDER_H - 8,
+        }
+        this._rateSlider.renderSelf(ctx)
 
-      ctx.fillStyle = ACCENT
-      drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
-        btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
+        ctx.fillStyle = 'rgba(255,255,255,0.75)'
+        ctx.textAlign = 'right'
+        ctx.fillText(this._hiddenRate.getRate().toFixed(2) + ' Hz',
+          PANEL_X + PANEL_W - 6, y + SLIDER_H / 2)
+      }
+
+      // Phase slot row
+      const slot = this.phaseSlot
+      const isCompat = (drag.active && drag.source !== null && slot.type !== null
+                        && drag.source.types.has(slot.type))
+                    || (Node.fileDragActive && slot.type === ValueType.Image
+                        && slot.state === SlotState.Unbound)
+
+      this._slotBounds.set(slot, { x: PANEL_X, y: phaseY, width: PANEL_W, height: SLOT_H })
+
+      ctx.fillStyle = 'rgba(255,255,255,0.62)'
+      ctx.textAlign = 'left'
+      ctx.fillText(slot.label, PANEL_X + 6, phaseY + SLOT_H / 2)
+
+      const vx = PANEL_X + LABEL_W
+      const vw = PANEL_W - LABEL_W - 2
+      const bby = phaseY + 3
+      const bh  = SLOT_H - 6
+
+      if (slot.isActive && !isCompat) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = AMOUNT_TC + '22'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = AMOUNT_TC + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+        ctx.fillText(srcName, vx + 6, phaseY + SLOT_H / 2)
+      } else if (isCompat) {
+        ctx.fillStyle = 'rgba(50,200,70,0.18)'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+        ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, phaseY + SLOT_H / 2)
+      } else if (slot.state === SlotState.SuspendedBound) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = AMOUNT_TC + '11'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+        ctx.fillText('⏸ ' + srcName, vx + 6, phaseY + SLOT_H / 2)
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+        ctx.fillText('unbound', vx + 6, phaseY + SLOT_H / 2)
+      }
+
       ctx.restore()
+      y += combinedH + SLOT_GAP
     }
+
+    // ── Pill 3: run mode + clockwise ─────────────────────────────
+    this.renderSlotGroup(ctx, [this.runModeSlot, this.cwSlot], y)
+
+    // Run-mode radio checkbox overlay
+    const runMidY = y + SLOT_H / 2
+    const cbx = PANEL_X + LABEL_W - 14
+    this._toggleBounds = { x: PANEL_X, y, width: LABEL_W, height: SLOT_H }
+
+    ctx.save()
+    ctx.strokeStyle = 'rgba(255,255,255,0.70)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath()
+    ctx.arc(cbx, runMidY, 5, 0, Math.PI * 2)
+    ctx.stroke()
+    if (this._running) {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.beginPath()
+      ctx.arc(cbx, runMidY, 3, 0, Math.PI * 2)
+      ctx.fill()
+    }
+    ctx.restore()
+
+    // CW/CCW toggle button overlay
+    const cwY   = y + SLOT_H + SLOT_GAP
+    const cwMidY = cwY + SLOT_H / 2
+    const btnX  = PANEL_X + PANEL_W - BTN_SZ - 3
+    const btnY  = cwY + 3
+    const cwState = this.cwSlot.state
+    const cwBound = cwState === SlotState.Bound
+    const cwSusp  = cwState === SlotState.SuspendedBound
+    this._cwBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+
+    ctx.save()
+    ctx.fillStyle = cwBound ? ACCENT + '33' : cwSusp ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
+    ctx.fill()
+    ctx.strokeStyle = cwBound ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth = 1
+    if (cwSusp) ctx.setLineDash([2, 2])
+    ctx.beginPath()
+    ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.fillStyle = ACCENT
+    drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
+      btnX + BTN_SZ / 2, cwMidY, BTN_SZ - 8)
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -296,7 +415,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   get isInteractive(): boolean { return this._toggleBounds !== null }
 
-  protected override hitTestSelf(point: Point): this | null {
+  protected override hitTestSelf(point: Point): Node | null {
     if (this._addBtnHitTest(point)) return this
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
@@ -307,6 +426,10 @@ export class AnimPathLayer extends Layer implements PointSource {
       const b = this._cwBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) return this
+    }
+    if (this._hiddenRate !== null) {
+      const hit = this._rateSlider.hitTest(point)
+      if (hit !== null) return hit
     }
     return null
   }
@@ -344,6 +467,20 @@ export class AnimPathLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
   // Private
   // ----------------------------------------------------------
+
+  private _syncSliderBounds(): void {
+    if (this._hiddenRate === null) return
+    const PANEL_X = contentLeft(Node.canvasWidth)
+    const PANEL_W = panelWidth(Node.canvasWidth)
+    // Combined pill starts at: panelBottom + shape pill (SLOT_H) + gap
+    const combinedPillY = this.panelBottom + SLOT_H + SLOT_GAP
+    this._rateSlider.bounds = {
+      x:      PANEL_X + 10,
+      y:      combinedPillY + 4,
+      width:  Math.max(0, PANEL_W - 88),
+      height: SLIDER_H - 8,
+    }
+  }
 
   // ----------------------------------------------------------
   // Bottom convenience button

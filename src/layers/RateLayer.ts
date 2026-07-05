@@ -36,16 +36,16 @@ import { SliderRegion } from '../regions/SliderRegion.js'
 //
 // Height should be ~44 px to accommodate two label lines.
 
-const MIN_RATE  = 0.001  // Hz — slider full-left
-const MAX_RATE  = 8      // Hz — slider full-right
+export const MIN_RATE  = 0.001  // Hz — slider full-left
+export const MAX_RATE  = 8      // Hz — slider full-right
 const ACCENT    = '#e87e7e'  // Rate type colour
 
 // Logarithmic mapping between slider [0,1] and Hz [MIN_RATE, MAX_RATE].
 const _logRange = Math.log(MAX_RATE / MIN_RATE)
-function sliderToHz(v: number): number {
+export function sliderToHz(v: number): number {
   return MIN_RATE * Math.exp(v * _logRange)
 }
-function hzToSlider(hz: number): number {
+export function hzToSlider(hz: number): number {
   return Math.log(Math.max(MIN_RATE, Math.min(MAX_RATE, hz)) / MIN_RATE) / _logRange
 }
 
@@ -94,6 +94,14 @@ export class RateLayer extends Layer implements AmountSource, RateSource {
 
   setValue(v: Amount): void {
     this._rateHz = v * MAX_RATE
+    this.markDirty()
+  }
+
+  // Set the rate directly (e.g. from a proxy slider on the host layer).
+  setRateHz(hz: number): void {
+    const clamped = Math.max(MIN_RATE, Math.min(MAX_RATE, hz))
+    this._rateSlider.setValue(hzToSlider(clamped))
+    this._rateHz = clamped
     this.markDirty()
   }
 
