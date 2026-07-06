@@ -11,23 +11,23 @@
 //     peaks near (or away from) meanProp according to circBias.
 //
 // Weight per sample:
-//   Without stroke bound: radialWeight — biases toward centroid or boundary.
-//   With stroke bound: Gaussian proximity to where the ray crosses the filled
-//     stroke/path region. The same weight applies whether the sample is inside
-//     or outside the boundary. circWeight is not applied when stroke is bound
+//   Without prior bound: radialWeight — biases toward centroid or boundary.
+//   With prior bound: Gaussian proximity to where the ray crosses the filled
+//     prior region. The same weight applies whether the sample is inside
+//     or outside the boundary. circWeight is not applied when prior is bound
 //     (the crossing gives a per-ray boundary estimate directly).
 //
-// When strokeSrc is provided it must be a filled white canvas of the path/stroke
-// interior (see TraceLayer._buildStrokeCanvas). The centroid is derived from
+// When priorSrc is provided it must be a filled white canvas of the shape/path
+// interior (see TraceLayer._buildPriorCanvas). The centroid is derived from
 // those filled pixels; each ray finds its crossing as the last sample inside
 // the filled region.
 //
 // radialBias ∈ [0,1]:
-//   Stroke bound  — 0 = no proximity weighting (pure gradient magnitude);
-//                   1 = crossing sample always wins (full Gaussian sharpness).
-//   No stroke     — 0 = weight toward centroid, 0.5 = neutral, 1 = toward boundary.
+//   Prior bound  — 0 = no proximity weighting (pure gradient magnitude);
+//                  1 = crossing sample always wins (full Gaussian sharpness).
+//   No prior     — 0 = weight toward centroid, 0.5 = neutral, 1 = toward boundary.
 // circBias   ∈ [0,1]: 0 = weight away from mean (spread), 0.5 = neutral, 1 = toward mean.
-//   Only used when no stroke source is bound.
+//   Only used when no prior source is bound.
 
 import type { Point } from '../core/types.js'
 
@@ -67,9 +67,9 @@ export function detectByGradient(
   windowSize: number,
   workSize:   number,
   radialBias: number,  // [0,1] — stroke bound: proximity strength; no stroke: centroid/boundary bias
-  circBias:   number,  // [0,1] — ignored when strokeSrc is bound
+  circBias:   number,  // [0,1] — ignored when priorSrc is bound
   gradMode:   number,  // [0,1]: 0=luma only, 0.5=blend, 1=chroma only
-  strokeSrc:  OffscreenCanvas | null, // filled-interior canvas of bound path/stroke
+  priorSrc:   OffscreenCanvas | null, // filled-interior canvas of bound shape/path/stroke
 ): Point[] | null {
   const W = workSize, H = workSize
   const scaleX = imageSrc.width  / W
@@ -95,21 +95,21 @@ export function detectByGradient(
     maskA = mCtx.getImageData(0, 0, W, H).data
   }
 
-  // Down-sample stroke fill (optional) — provides centroid and per-ray crossings
-  let strokeAlpha: Uint8ClampedArray | null = null
-  if (strokeSrc !== null) {
+  // Down-sample prior fill (optional) — provides centroid and per-ray crossings
+  let priorAlpha: Uint8ClampedArray | null = null
+  if (priorSrc !== null) {
     const sOsc = new OffscreenCanvas(W, H)
     const sCtx = sOsc.getContext('2d')!
-    sCtx.drawImage(strokeSrc, 0, 0, W, H)
-    strokeAlpha = sCtx.getImageData(0, 0, W, H).data
+    sCtx.drawImage(priorSrc, 0, 0, W, H)
+    priorAlpha = sCtx.getImageData(0, 0, W, H).data
   }
 
-  // Centroid — from stroke fill when bound, else mask alpha or salience
+  // Centroid — from prior fill when bound, else mask alpha or salience
   let cx = 0, cy = 0, wt = 0
-  if (strokeAlpha !== null) {
+  if (priorAlpha !== null) {
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
-        const a = strokeAlpha[(y * W + x) * 4 + 3]! / 255
+        const a = priorAlpha[(y * W + x) * 4 + 3]! / 255
         if (a < 0.5) continue
         cx += x; cy += y; wt++
       }
@@ -174,14 +174,14 @@ export function detectByGradient(
       sm[i] = cnt > 0 ? sum / cnt : 0
     }
 
-    // Find where this ray crosses the stroke boundary.
-    // The stroke canvas is a filled white interior, so rays start inside (alpha≈1)
+    // Find where this ray crosses the prior boundary.
+    // The prior canvas is a filled white interior, so rays start inside (alpha≈1)
     // and exit at the boundary. crossingIdx = last sample with alpha > 0.5.
     let crossingIdx = -1
-    if (strokeAlpha !== null) {
+    if (priorAlpha !== null) {
       for (let i = 0; i < n; i++) {
         const { x: spx, y: spy } = pos[i]!
-        if (strokeAlpha[(spy * W + spx) * 4 + 3]! > 127) crossingIdx = i
+        if (priorAlpha[(spy * W + spx) * 4 + 3]! > 127) crossingIdx = i
       }
     }
 

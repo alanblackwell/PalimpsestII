@@ -55,7 +55,9 @@ const ACCENT      = '#e8a04a'   // shape amber — matches Rect/Ellipse/Path
 const DIR_ACCENT  = '#7ecfcf'
 const CAPTURE_W   = 72
 const CAPTURE_H   = 26
-const PATH_BTN_W  = 60   // "Path" convenience button
+const PATH_BTN_W  = 60   // "Path" convenience button width
+const CLIP_BTN_W  = 60   // "Clip" convenience button width
+const CONV_BTN_GAP_X = 8   // gap between Path and Clip buttons
 const CONV_BTN_H  = 30   // viewport-bottom convenience button height
 const CONV_BTN_GAP = 14  // gap from viewport bottom edge
 // const MIN_POINTS = 4   // mothballed boundary-trace constants
@@ -118,7 +120,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   // Detection inputs
   readonly imageSlot:  ParameterSlot
   readonly maskSlot:   ParameterSlot
-  readonly strokeSlot: ParameterSlot
+  readonly priorSlot: ParameterSlot
 
   // Shape rendering inputs
   readonly phaseSlot: ParameterSlot
@@ -140,8 +142,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _lastRadialBias:    number       = 0.5
   private _lastCircBias:      number       = 0.5
   private _lastGradMode:      number       = 0.5
-  private _lastStrokeId:      object|null  = null
-  private _lastStrokeActive:  boolean      = false
+  private _lastPriorId:       object|null  = null
+  private _lastPriorActive:   boolean      = false
   private _lastMaskActive:    boolean      = false
   private _forceDetect:     boolean = false
 
@@ -153,6 +155,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _slotsBottom      = 0
   private _captureBtnBounds: BBox | null = null
   private _onAddPath: (() => void) | null = null
+  private _onAddClip: (() => void) | null = null
 
   // Handle drag state
   private _angle:           number = 0
@@ -167,7 +170,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     super()
     this.imageSlot  = new ParameterSlot(ValueType.Image,  this, 'image')
     this.maskSlot   = new ParameterSlot(ValueType.Mask,   this, 'mask')
-    this.strokeSlot = new ParameterSlot(ValueType.Mask,   this, 'stroke')
+    this.priorSlot  = new ParameterSlot(ValueType.Mask,   this, 'prior')
     this.phaseSlot  = new ParameterSlot(ValueType.Amount, this, 'phase')
     const initRays   = (DEF_RAYS   - MIN_RAYS)   / (MAX_RAYS   - MIN_RAYS)
     const initSmooth = (DEF_SMOOTH - MIN_SMOOTH) / (MAX_SMOOTH - MIN_SMOOTH)
@@ -178,7 +181,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     this._biasSlider     = new SliderRegion(this, 0.5)
     this._circSlider     = new SliderRegion(this, 0.5)
     this._gradModeSlider = new SliderRegion(this, 0.5)
-    this.slots.push(this.imageSlot, this.maskSlot, this.strokeSlot)
+    this.slots.push(this.imageSlot, this.maskSlot, this.priorSlot)
     this.debugName = 'Trace'
     graph.register(this)
   }
@@ -210,6 +213,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   getControlPoints(): Point[] { return this._controlPoints.map(p => ({ ...p })) }
 
   setOnAddPath(fn: () => void): void { this._onAddPath = fn }
+  setOnAddClip(fn: () => void): void { this._onAddClip = fn }
 
   // ----------------------------------------------------------
   // Persistence
@@ -268,43 +272,43 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const radialBias   = this._biasSlider.value
     const circBias     = this._circSlider.value
     const gradMode     = this._gradModeSlider.value
-    const maskActive   = this.maskSlot.isActive
-    const strokeActive = this.strokeSlot.isActive
-    const imageVal     = this.imageSlot.isActive
+    const maskActive  = this.maskSlot.isActive
+    const priorActive = this.priorSlot.isActive
+    const imageVal    = this.imageSlot.isActive
       ? (this.imageSlot.source as ImageSource).getImage() : null
-    const maskVal      = maskActive
+    const maskVal     = maskActive
       ? (this.maskSlot.source as MaskSource).getMask() : null
-    // getMask() used only for change-detection identity; actual stroke input is built below
-    const strokeMask   = strokeActive
-      ? (this.strokeSlot.source as MaskSource).getMask() : null
-    const imageId      = imageVal as object | null
-    const strokeId     = strokeMask as object | null
+    // getMask() used only for change-detection identity; actual prior input is built below
+    const priorMask   = priorActive
+      ? (this.priorSlot.source as MaskSource).getMask() : null
+    const imageId     = imageVal as object | null
+    const priorId     = priorMask as object | null
 
     if ((this._forceDetect || imageId !== this._lastImageId ||
          numRays !== this._lastNumRays || winSize !== this._lastWinSize ||
          workSize !== this._lastWorkSize || radialBias !== this._lastRadialBias ||
          circBias !== this._lastCircBias || gradMode !== this._lastGradMode ||
-         strokeId !== this._lastStrokeId || strokeActive !== this._lastStrokeActive ||
+         priorId !== this._lastPriorId || priorActive !== this._lastPriorActive ||
          maskActive !== this._lastMaskActive)
         && imageVal !== null) {
-      this._lastImageId      = imageId
-      this._lastNumRays      = numRays
-      this._lastWinSize      = winSize
-      this._lastWorkSize     = workSize
-      this._lastRadialBias   = radialBias
-      this._lastCircBias     = circBias
-      this._lastGradMode     = gradMode
-      this._lastStrokeId     = strokeId
-      this._lastStrokeActive = strokeActive
-      this._lastMaskActive   = maskActive
-      this._forceDetect      = false
-      // For path/stroke sources, rasterize the perimeter as a thin stroke so the
-      // centroid sits on the path boundary rather than inside a filled shape.
-      const strokeSrc: MaskValue = (strokeActive && this.strokeSlot.source !== null &&
-        typeof (this.strokeSlot.source as unknown as Record<string, unknown>)['samplePerimeter'] === 'function')
-        ? this._buildStrokeCanvas(this.strokeSlot.source as unknown as { samplePerimeter(t: number): Point })
-        : strokeMask
-      this._detectPath(imageVal, maskVal, strokeSrc, numRays, winSize, workSize, radialBias, circBias, gradMode)
+      this._lastImageId     = imageId
+      this._lastNumRays     = numRays
+      this._lastWinSize     = winSize
+      this._lastWorkSize    = workSize
+      this._lastRadialBias  = radialBias
+      this._lastCircBias    = circBias
+      this._lastGradMode    = gradMode
+      this._lastPriorId     = priorId
+      this._lastPriorActive = priorActive
+      this._lastMaskActive  = maskActive
+      this._forceDetect     = false
+      // For shape/stroke/path sources with samplePerimeter, rasterise the filled
+      // interior so each ray can find its crossing at the shape boundary.
+      const priorSrc: MaskValue = (priorActive && this.priorSlot.source !== null &&
+        typeof (this.priorSlot.source as unknown as Record<string, unknown>)['samplePerimeter'] === 'function')
+        ? this._buildPriorCanvas(this.priorSlot.source as unknown as { samplePerimeter(t: number): Point  })
+        : priorMask
+      this._detectPath(imageVal, maskVal, priorSrc, numRays, winSize, workSize, radialBias, circBias, gradMode)
     } else if (imageVal === null && this._controlPoints.length > 0) {
       this._lastImageId = null; this._controlPoints = []
     }
@@ -314,7 +318,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
 
   // ── Detection pipeline ───────────────────────────────────────────
 
-  private _buildStrokeCanvas(src: { samplePerimeter(t: number): Point }): OffscreenCanvas {
+  private _buildPriorCanvas(src: { samplePerimeter(t: number): Point }): OffscreenCanvas {
     const W = Node.canvasWidth, H = Node.canvasHeight
     const canvas = new OffscreenCanvas(W, H)
     const ctx = canvas.getContext('2d')!
@@ -346,7 +350,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _detectPath(
     imageSrc:   ImageBitmap | OffscreenCanvas,
     maskSrc:    MaskValue,
-    strokeSrc:  MaskValue,
+    priorSrc:   MaskValue,
     numRays:    number,
     winSize:    number,
     workSize:   number,
@@ -354,14 +358,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     circBias:   number,
     gradMode:   number,
   ): void {
-    /* OLD — Moore boundary-trace via contourTrace.detectContour:
-    const pts = detectContour(imageSrc, maskSrc as OffscreenCanvas | null, numPts)
-    this._controlPoints = pts ?? []
-    */
     const pts = detectByGradient(
       imageSrc, maskSrc as OffscreenCanvas | null,
       numRays, winSize, workSize, radialBias, circBias, gradMode,
-      strokeSrc as OffscreenCanvas | null,
+      priorSrc as OffscreenCanvas | null,
     )
     this._controlPoints = pts ?? []
   }
@@ -428,6 +428,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     this._drawControlHandles(ctx)
     this._renderCaptureBtn(ctx)
     this._renderPathBtn(ctx)
+    this._renderClipBtn(ctx)
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
@@ -451,25 +452,34 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.restore()
   }
 
+  private _convBtnStartX(): number {
+    const left   = contentLeft(Node.canvasWidth)
+    const totalW = PATH_BTN_W + CONV_BTN_GAP_X + CLIP_BTN_W
+    return left + Math.max(0, (Node.viewportWidth - left - totalW) / 2)
+  }
+
   private _pathBtnRect(): { x: number; y: number; w: number } {
-    const left = contentLeft(Node.canvasWidth)
-    const x = left + Math.max(0, (Node.viewportWidth - left - PATH_BTN_W) / 2)
-    const y = Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP
-    return { x, y, w: PATH_BTN_W }
+    return { x: this._convBtnStartX(), y: Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP, w: PATH_BTN_W }
+  }
+
+  private _clipBtnRect(): { x: number; y: number; w: number } {
+    return { x: this._convBtnStartX() + PATH_BTN_W + CONV_BTN_GAP_X, y: Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP, w: CLIP_BTN_W }
   }
 
   private _pathBtnVisible(): boolean {
     return this._onAddPath !== null && this._controlPoints.length >= 3
   }
 
-  private _renderPathBtn(ctx: Ctx2D): void {
-    if (!this._pathBtnVisible()) return
-    const { x, y, w } = this._pathBtnRect()
+  private _clipBtnVisible(): boolean {
+    return this._onAddClip !== null && this._controlPoints.length >= 3
+  }
+
+  private _renderConvBtn(ctx: Ctx2D, x: number, y: number, w: number, label: string, accent: string): void {
     const midY = y + CONV_BTN_H / 2
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath(); ctx.roundRect(x, y, w, CONV_BTN_H, 5); ctx.fill()
-    ctx.fillStyle = ACCENT + 'cc'
+    ctx.fillStyle = accent + 'cc'
     ctx.beginPath(); ctx.roundRect(x, y, 3, CONV_BTN_H, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
     ctx.beginPath(); ctx.rect(x, y, w, CONV_BTN_H); ctx.clip()
@@ -477,9 +487,21 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('Path', x + 10, midY)
+    ctx.fillText(label, x + 10, midY)
     ctx.restore()
     ctx.restore()
+  }
+
+  private _renderPathBtn(ctx: Ctx2D): void {
+    if (!this._pathBtnVisible()) return
+    const { x, y, w } = this._pathBtnRect()
+    this._renderConvBtn(ctx, x, y, w, 'Path', ACCENT)
+  }
+
+  private _renderClipBtn(ctx: Ctx2D): void {
+    if (!this._clipBtnVisible()) return
+    const { x, y, w } = this._clipBtnRect()
+    this._renderConvBtn(ctx, x, y, w, 'Clip', '#7ecf7e')
   }
 
   // ── Pill rendering ───────────────────────────────────────────────
@@ -603,6 +625,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       const { x, y, w } = this._pathBtnRect()
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) return this
     }
+    if (this._clipBtnVisible()) {
+      const { x, y, w } = this._clipBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) return this
+    }
     const raysHit = this._raysSlider.hitTest(point)
     if (raysHit !== null) return raysHit
     const smoothHit = this._smoothSlider.hitTest(point)
@@ -627,6 +653,15 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       const { x, y, w } = this._pathBtnRect()
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) {
         this._onAddPath?.()
+        this.markDirty()
+        return true
+      }
+    }
+    // Clip convenience button
+    if (this._clipBtnVisible()) {
+      const { x, y, w } = this._clipBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) {
+        this._onAddClip?.()
         this.markDirty()
         return true
       }

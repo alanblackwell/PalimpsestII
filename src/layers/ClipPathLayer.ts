@@ -4,7 +4,7 @@ import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
   type ImageValue, type ImageSource,
-  type Point, type Ctx2D,
+  type Point, type Colour, type Ctx2D,
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
 import type { MaskLayer } from './MaskLayer.js'
@@ -37,8 +37,9 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   private _addMoveDone = false
   private _onAddMove: (() => void) | null = null
 
-  constructor() {
-    super(undefined, Node.canvasWidth / 2, Node.canvasHeight / 2)
+  constructor(points?: Point[], colour?: Colour) {
+    super(points, Node.canvasWidth / 2, Node.canvasHeight / 2, colour)
+    if (points !== undefined && points.length >= 3) this._pathInitialized = true
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')

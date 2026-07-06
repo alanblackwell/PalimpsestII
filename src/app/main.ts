@@ -166,7 +166,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof TextLayer)  wireTextMaskButton(newLayer)
   if (newLayer instanceof LineLayer)  wireLineMaskButton(newLayer)
-  if (newLayer instanceof TraceLayer) wireTracePathButton(newLayer)
+  if (newLayer instanceof TraceLayer) wireTraceButtons(newLayer)
   if (newLayer instanceof ShapeLayer &&
       !(newLayer instanceof ClipRectLayer) &&
       !(newLayer instanceof ClipEllipseLayer) &&
@@ -363,7 +363,7 @@ function wireLineMaskButton(layer: LineLayer): void {
   })
 }
 
-function wireTracePathButton(layer: TraceLayer): void {
+function wireTraceButtons(layer: TraceLayer): void {
   layer.setOnAddPath(() => {
     const pts = layer.getControlPoints()
     if (pts.length < 3) return
@@ -374,6 +374,24 @@ function wireTracePathButton(layer: TraceLayer): void {
     pl.insertAbove(layer)
     postInsertLayer(pl)
     refreshStack(pl)
+  })
+
+  layer.setOnAddClip(() => {
+    const pts = layer.getControlPoints()
+    if (pts.length < 3) return
+    const c   = Node.greyDefault ? OUTLINE_COLOUR : rndColour()
+    const clip = new ClipPathLayer(pts, c)
+    Layer.assignDebugName(clip)
+    clip.bounds = { ...layer.bounds }
+    clip.insertAbove(layer)
+    // Bind the same image source that feeds this TraceLayer.
+    const imgBinding = BindingLayer.findForSlot(layer.imageSlot)
+    if (imgBinding !== null) {
+      BindingLayer.create(imgBinding.source, clip.imageSlot)
+      backgroundLayer.add(imgBinding.source as Layer)
+    }
+    postInsertLayer(clip)
+    refreshStack(clip)
   })
 }
 
@@ -849,7 +867,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wireMaskButton(scanL)
     if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
     if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
-    if (scanL instanceof TraceLayer)      wireTracePathButton(scanL)
+    if (scanL instanceof TraceLayer)      wireTraceButtons(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wirePointButton(scanL)
     if (scanL instanceof LineLayer)       wirePointButton(scanL)
     if (scanL instanceof StrokeLayer)     wireStrokeSnapPoint(scanL)
@@ -869,7 +887,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wireMaskButton(archived)
     if (archived instanceof TextLayer)       wireTextMaskButton(archived)
     if (archived instanceof LineLayer)       wireLineMaskButton(archived)
-    if (archived instanceof TraceLayer)      wireTracePathButton(archived)
+    if (archived instanceof TraceLayer)      wireTraceButtons(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wirePointButton(archived)
     if (archived instanceof LineLayer)       wirePointButton(archived)
     if (archived instanceof StrokeLayer)     wireStrokeSnapPoint(archived)
