@@ -1,3 +1,4 @@
+
 import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
@@ -571,12 +572,12 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const trkW  = Math.max(0, trkX1 - trkX0)
 
     const rows = [
-      { label: 'rays', slider: this._raysSlider,     text: `${this._numRays()}`  },
-      { label: 'smth', slider: this._smoothSlider,   text: `${this._winSize()}`  },
-      { label: 'size', slider: this._sizeSlider,     text: `${this._workSize()}` },
+      { label: 'pnts', slider: this._raysSlider,     text: `${this._numRays()}`  },
+      { label: 'slop', slider: this._smoothSlider,   text: `${this._winSize()}`  },
+      { label: 'gran', slider: this._sizeSlider,     text: `${this._workSize()}` },
       { label: 'bias', slider: this._biasSlider,     text: `${Math.round(this._biasSlider.value * 100)}` },
       { label: 'circ', slider: this._circSlider,     text: `${Math.round(this._circSlider.value * 100)}` },
-      { label: 'grad', slider: this._gradModeSlider, text: `${Math.round(this._gradModeSlider.value * 100)}` },
+      { label: 'hue', slider: this._gradModeSlider, text: `${Math.round(this._gradModeSlider.value * 100)}` },
     ]
 
     for (let i = 0; i < rows.length; i++) {
