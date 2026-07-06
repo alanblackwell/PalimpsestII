@@ -53,6 +53,7 @@ import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 import { LineLayer }         from '../layers/LineLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
+import { TraceLayer }        from '../layers/TraceLayer.js'
 import * as Persistence      from '../persistence/Persistence.js'
 import * as MobileStore      from '../persistence/MobileStore.js'
 import { openGallery }       from '../ui/MobileGallery.js'
@@ -163,8 +164,9 @@ function postInsertLayer(newLayer: Layer): void {
       !_isTrackShapeLayer(newLayer)) {
     wireMaskButton(newLayer)
   }
-  if (newLayer instanceof TextLayer) wireTextMaskButton(newLayer)
-  if (newLayer instanceof LineLayer) wireLineMaskButton(newLayer)
+  if (newLayer instanceof TextLayer)  wireTextMaskButton(newLayer)
+  if (newLayer instanceof LineLayer)  wireLineMaskButton(newLayer)
+  if (newLayer instanceof TraceLayer) wireTracePathButton(newLayer)
   if (newLayer instanceof ShapeLayer &&
       !(newLayer instanceof ClipRectLayer) &&
       !(newLayer instanceof ClipEllipseLayer) &&
@@ -358,6 +360,20 @@ function wireLineMaskButton(layer: LineLayer): void {
     BindingLayer.create(layer, mask.firstShapeSlot)
     postInsertLayer(mask)
     refreshStack()
+  })
+}
+
+function wireTracePathButton(layer: TraceLayer): void {
+  layer.setOnAddPath(() => {
+    const pts = layer.getControlPoints()
+    if (pts.length < 3) return
+    const c  = Node.greyDefault ? OUTLINE_COLOUR : rndColour()
+    const pl = new PathLayer(pts, 0, 0, c)
+    Layer.assignDebugName(pl)
+    pl.bounds = { ...layer.bounds }
+    pl.insertAbove(layer)
+    postInsertLayer(pl)
+    refreshStack(pl)
   })
 }
 
@@ -833,6 +849,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wireMaskButton(scanL)
     if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
     if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
+    if (scanL instanceof TraceLayer)      wireTracePathButton(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wirePointButton(scanL)
     if (scanL instanceof LineLayer)       wirePointButton(scanL)
     if (scanL instanceof StrokeLayer)     wireStrokeSnapPoint(scanL)
@@ -852,6 +869,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wireMaskButton(archived)
     if (archived instanceof TextLayer)       wireTextMaskButton(archived)
     if (archived instanceof LineLayer)       wireLineMaskButton(archived)
+    if (archived instanceof TraceLayer)      wireTracePathButton(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wirePointButton(archived)
     if (archived instanceof LineLayer)       wirePointButton(archived)
     if (archived instanceof StrokeLayer)     wireStrokeSnapPoint(archived)

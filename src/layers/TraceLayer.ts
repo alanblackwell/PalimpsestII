@@ -3,11 +3,9 @@ import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
-  SlotState,
   boundingBoxContains,
-  type Amount, type AmountSource,
-  type Colour, type ColourSource,
-  type EventValue, type EventSource,
+  type Amount,
+  type Colour,
   type ImageValue, type ImageSource,
   type MaskValue, type MaskSource,
   type Point, type PointSource,
@@ -16,7 +14,9 @@ import {
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { SliderRegion }  from '../regions/SliderRegion.js'
-import { detectContour } from './contourTrace.js'
+import { contentLeft }   from '../interaction/layout.js'
+// import { detectContour } from './contourTrace.js'  // mothballed — see _detectPath
+import { detectByGradient } from './gradientTrace.js'
 
 // ------------------------------------------------------------
 // TraceLayer — closed path traced from the boundary of a mask
@@ -53,14 +53,24 @@ import { detectContour } from './contourTrace.js'
 
 const ACCENT      = '#e8a04a'   // shape amber — matches Rect/Ellipse/Path
 const DIR_ACCENT  = '#7ecfcf'
-const AM_COL      = '#4a8fe8'
 const CAPTURE_W   = 72
 const CAPTURE_H   = 26
-const MIN_POINTS = 4
-const MAX_POINTS = 32
-const DEF_POINTS = 10
+const PATH_BTN_W  = 60   // "Path" convenience button
+const CONV_BTN_H  = 30   // viewport-bottom convenience button height
+const CONV_BTN_GAP = 14  // gap from viewport bottom edge
+// const MIN_POINTS = 4   // mothballed boundary-trace constants
+// const MAX_POINTS = 32
+// const DEF_POINTS = 10
+const MIN_RAYS    = 4
+const MAX_RAYS    = 16
+const DEF_RAYS    = 8
+const MIN_SMOOTH  = 1
+const MAX_SMOOTH  = 20
+const DEF_SMOOTH  = 5
+const MIN_SIZE    = 64
+const MAX_SIZE    = 512
+const DEF_SIZE    = 256
 const RENDER_PTS = 200
-const LABEL_W    = 46
 const BTN_W      = 54
 const BTN_H      = 22
 const BTN_M      = 6
@@ -68,13 +78,13 @@ const CP_R       = 6    // control-point handle radius
 const HIT_R      = 14   // pointer hit radius
 const ROT_OFF    = 24   // rotate handle offset beyond max radius
 
-// Stroke-control pill constants (match ShapeLayer)
-const SLOT_H          = 30
-const SLOT_GAP        = 4
-const CTRL_BTN_SZ     = SLOT_H - 6
-const SW_LABEL_W      = 78
-const SW_VALUE_W      = 38
-const MAX_STROKE_WIDTH = 30
+// Parameter-control pill (rays / smth / size / bias / circ sliders)
+const CPILL_ROW_H  = 26
+const CPILL_GAP    = 4
+const CPILL_PAD    = 6
+const CPILL_LBL_W  = 36
+const CPILL_VAL_W  = 32
+const CPILL_H      = 6 * CPILL_ROW_H + 5 * CPILL_GAP + 2 * CPILL_PAD
 
 // ── Geometry helpers ─────────────────────────────────────────────
 
@@ -106,42 +116,43 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point, ValueType.Mask, ValueType.Image])
 
   // Detection inputs
-  readonly imageSlot: ParameterSlot
-  readonly maskSlot:  ParameterSlot
+  readonly imageSlot:  ParameterSlot
+  readonly maskSlot:   ParameterSlot
+  readonly strokeSlot: ParameterSlot
 
   // Shape rendering inputs
-  readonly phaseSlot:       ParameterSlot
-  readonly colourSlot:      ParameterSlot
-  readonly opacitySlot:     ParameterSlot
-  readonly fillModeSlot:    ParameterSlot
-  readonly strokeWidthSlot: ParameterSlot
+  readonly phaseSlot: ParameterSlot
 
-  private readonly _numPtsSlider: SliderRegion
+  private readonly _raysSlider:     SliderRegion
+  private readonly _smoothSlider:   SliderRegion
+  private readonly _sizeSlider:     SliderRegion
+  private readonly _biasSlider:     SliderRegion
+  private readonly _circSlider:     SliderRegion
+  private readonly _gradModeSlider: SliderRegion
 
   // Detection state
-  private _phase:          number  = 0
-  private _controlPoints:  Point[] = []
-  private _lastImageId:    object | null = null
-  private _lastNumPts:     number  = DEF_POINTS
-  private _lastMaskActive: boolean = false
-  private _forceDetect:    boolean = false
-
-  // Shape rendering state
-  private _colour:      Colour     = { r: 1, g: 1, b: 1, a: 1 }
-  private _opacity:     number     = 1
-  private _filled:      boolean    = true
-  private _strokeWidth: number     = 2
-  private _lastEventTime: EventValue = null
+  private _phase:           number  = 0
+  private _controlPoints:   Point[] = []
+  private _lastImageId:     object | null = null
+  private _lastNumRays:     number  = DEF_RAYS
+  private _lastWinSize:     number  = DEF_SMOOTH
+  private _lastWorkSize:    number  = DEF_SIZE
+  private _lastRadialBias:    number       = 0.5
+  private _lastCircBias:      number       = 0.5
+  private _lastGradMode:      number       = 0.5
+  private _lastStrokeId:      object|null  = null
+  private _lastStrokeActive:  boolean      = false
+  private _lastMaskActive:    boolean      = false
+  private _forceDetect:     boolean = false
 
   // Offscreen canvases for Mask and Image outputs
   private _maskCanvas:  OffscreenCanvas = new OffscreenCanvas(1, 1)
   private _imageCanvas: OffscreenCanvas = new OffscreenCanvas(1, 1)
 
   // UI state
-  private _toggleBounds:    BBox | null = null
-  private _strokeSliderDrag = false
   private _slotsBottom      = 0
   private _captureBtnBounds: BBox | null = null
+  private _onAddPath: (() => void) | null = null
 
   // Handle drag state
   private _angle:           number = 0
@@ -154,20 +165,20 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
 
   constructor() {
     super()
-    this.imageSlot       = new ParameterSlot(ValueType.Image,  this, 'image')
-    this.maskSlot        = new ParameterSlot(ValueType.Mask,   this, 'mask')
-    this.phaseSlot       = new ParameterSlot(ValueType.Amount, this, 'phase')
-    this.colourSlot      = new ParameterSlot(ValueType.Colour, this, 'colour')
-    this.opacitySlot     = new ParameterSlot(ValueType.Amount, this, 'opacity')
-    this.fillModeSlot    = new ParameterSlot(ValueType.Event,  this, 'outline mode')
-    this.strokeWidthSlot = new ParameterSlot(ValueType.Amount, this, 'stroke width')
-    const initV = (DEF_POINTS - MIN_POINTS) / (MAX_POINTS - MIN_POINTS)
-    this._numPtsSlider = new SliderRegion(this, initV)
-    this.slots.push(
-      this.imageSlot, this.maskSlot,
-      this.phaseSlot, this.colourSlot, this.opacitySlot,
-      this.fillModeSlot, this.strokeWidthSlot,
-    )
+    this.imageSlot  = new ParameterSlot(ValueType.Image,  this, 'image')
+    this.maskSlot   = new ParameterSlot(ValueType.Mask,   this, 'mask')
+    this.strokeSlot = new ParameterSlot(ValueType.Mask,   this, 'stroke')
+    this.phaseSlot  = new ParameterSlot(ValueType.Amount, this, 'phase')
+    const initRays   = (DEF_RAYS   - MIN_RAYS)   / (MAX_RAYS   - MIN_RAYS)
+    const initSmooth = (DEF_SMOOTH - MIN_SMOOTH) / (MAX_SMOOTH - MIN_SMOOTH)
+    const initSize   = (DEF_SIZE   - MIN_SIZE)   / (MAX_SIZE   - MIN_SIZE)
+    this._raysSlider     = new SliderRegion(this, initRays)
+    this._smoothSlider   = new SliderRegion(this, initSmooth)
+    this._sizeSlider     = new SliderRegion(this, initSize)
+    this._biasSlider     = new SliderRegion(this, 0.5)
+    this._circSlider     = new SliderRegion(this, 0.5)
+    this._gradModeSlider = new SliderRegion(this, 0.5)
+    this.slots.push(this.imageSlot, this.maskSlot, this.strokeSlot)
     this.debugName = 'Trace'
     graph.register(this)
   }
@@ -196,6 +207,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
 
   setValue(_v: Amount): void { this.markDirty() }
 
+  getControlPoints(): Point[] { return this._controlPoints.map(p => ({ ...p })) }
+
+  setOnAddPath(fn: () => void): void { this._onAddPath = fn }
+
   // ----------------------------------------------------------
   // Persistence
   // ----------------------------------------------------------
@@ -204,25 +219,42 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     return {
       phase:         this._phase,
       controlPoints: this._controlPoints,
-      numPtsValue:   this._numPtsSlider.value,
-      colour:        this._colour,
-      opacity:       this._opacity,
-      filled:        this._filled,
-      strokeWidth:   this._strokeWidth,
+      raysValue:     this._raysSlider.value,
+      smoothValue:   this._smoothSlider.value,
+      sizeValue:     this._sizeSlider.value,
+      biasValue:     this._biasSlider.value,
+      circValue:     this._circSlider.value,
+      gradModeValue: this._gradModeSlider.value,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.phase === 'number')        this._phase = state.phase
     if (Array.isArray(state.controlPoints))     this._controlPoints = state.controlPoints as Point[]
-    if (typeof state.numPtsValue === 'number') {
-      this._numPtsSlider.setValue(state.numPtsValue as Amount)
-      this._lastNumPts = this._numPoints()
+    if (typeof state.raysValue === 'number') {
+      this._raysSlider.setValue(state.raysValue as Amount)
+      this._lastNumRays = this._numRays()
     }
-    if (state.colour)                           this._colour = state.colour as Colour
-    if (typeof state.opacity === 'number')      this._opacity = state.opacity
-    if (typeof state.filled === 'boolean')      this._filled = state.filled
-    if (typeof state.strokeWidth === 'number')  this._strokeWidth = state.strokeWidth
+    if (typeof state.smoothValue === 'number') {
+      this._smoothSlider.setValue(state.smoothValue as Amount)
+      this._lastWinSize = this._winSize()
+    }
+    if (typeof state.sizeValue === 'number') {
+      this._sizeSlider.setValue(state.sizeValue as Amount)
+      this._lastWorkSize = this._workSize()
+    }
+    if (typeof state.biasValue === 'number') {
+      this._biasSlider.setValue(state.biasValue as Amount)
+      this._lastRadialBias = this._biasSlider.value
+    }
+    if (typeof state.circValue === 'number') {
+      this._circSlider.setValue(state.circValue as Amount)
+      this._lastCircBias = this._circSlider.value
+    }
+    if (typeof state.gradModeValue === 'number') {
+      this._gradModeSlider.setValue(state.gradModeValue as Amount)
+      this._lastGradMode = this._gradModeSlider.value
+    }
   }
 
   // ----------------------------------------------------------
@@ -230,42 +262,49 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    if (this.phaseSlot.isActive)
-      this._phase = (this.phaseSlot.source as AmountSource).getAmount() as Amount
-
-    if (this.colourSlot.isActive)
-      this._colour = (this.colourSlot.source as ColourSource).getColour()
-
-    if (this.opacitySlot.isActive)
-      this._opacity = (this.opacitySlot.source as AmountSource).getAmount() as Amount
-
-    if (this.fillModeSlot.isActive) {
-      const t = (this.fillModeSlot.source as EventSource).getEventTime()
-      if (t !== null && t !== this._lastEventTime) {
-        this._lastEventTime = t
-        this._filled = !this._filled
-      }
-    }
-
-    if (this.strokeWidthSlot.isActive)
-      this._strokeWidth = Math.max(0.5, (this.strokeWidthSlot.source as AmountSource).getAmount() * MAX_STROKE_WIDTH)
-
-    const numPts     = this._numPoints()
-    const maskActive = this.maskSlot.isActive
-    const imageVal   = this.imageSlot.isActive
+    const numRays      = this._numRays()
+    const winSize      = this._winSize()
+    const workSize     = this._workSize()
+    const radialBias   = this._biasSlider.value
+    const circBias     = this._circSlider.value
+    const gradMode     = this._gradModeSlider.value
+    const maskActive   = this.maskSlot.isActive
+    const strokeActive = this.strokeSlot.isActive
+    const imageVal     = this.imageSlot.isActive
       ? (this.imageSlot.source as ImageSource).getImage() : null
-    const maskVal    = maskActive
+    const maskVal      = maskActive
       ? (this.maskSlot.source as MaskSource).getMask() : null
-    const imageId    = imageVal as object | null
+    // getMask() used only for change-detection identity; actual stroke input is built below
+    const strokeMask   = strokeActive
+      ? (this.strokeSlot.source as MaskSource).getMask() : null
+    const imageId      = imageVal as object | null
+    const strokeId     = strokeMask as object | null
 
     if ((this._forceDetect || imageId !== this._lastImageId ||
-         numPts !== this._lastNumPts || maskActive !== this._lastMaskActive)
+         numRays !== this._lastNumRays || winSize !== this._lastWinSize ||
+         workSize !== this._lastWorkSize || radialBias !== this._lastRadialBias ||
+         circBias !== this._lastCircBias || gradMode !== this._lastGradMode ||
+         strokeId !== this._lastStrokeId || strokeActive !== this._lastStrokeActive ||
+         maskActive !== this._lastMaskActive)
         && imageVal !== null) {
-      this._lastImageId    = imageId
-      this._lastNumPts     = numPts
-      this._lastMaskActive = maskActive
-      this._forceDetect    = false
-      this._detectPath(imageVal, maskVal, numPts)
+      this._lastImageId      = imageId
+      this._lastNumRays      = numRays
+      this._lastWinSize      = winSize
+      this._lastWorkSize     = workSize
+      this._lastRadialBias   = radialBias
+      this._lastCircBias     = circBias
+      this._lastGradMode     = gradMode
+      this._lastStrokeId     = strokeId
+      this._lastStrokeActive = strokeActive
+      this._lastMaskActive   = maskActive
+      this._forceDetect      = false
+      // For path/stroke sources, rasterize the perimeter as a thin stroke so the
+      // centroid sits on the path boundary rather than inside a filled shape.
+      const strokeSrc: MaskValue = (strokeActive && this.strokeSlot.source !== null &&
+        typeof (this.strokeSlot.source as unknown as Record<string, unknown>)['samplePerimeter'] === 'function')
+        ? this._buildStrokeCanvas(this.strokeSlot.source as unknown as { samplePerimeter(t: number): Point })
+        : strokeMask
+      this._detectPath(imageVal, maskVal, strokeSrc, numRays, winSize, workSize, radialBias, circBias, gradMode)
     } else if (imageVal === null && this._controlPoints.length > 0) {
       this._lastImageId = null; this._controlPoints = []
     }
@@ -275,16 +314,55 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
 
   // ── Detection pipeline ───────────────────────────────────────────
 
-  private _numPoints(): number {
-    return Math.round(MIN_POINTS + this._numPtsSlider.value * (MAX_POINTS - MIN_POINTS))
+  private _buildStrokeCanvas(src: { samplePerimeter(t: number): Point }): OffscreenCanvas {
+    const W = Node.canvasWidth, H = Node.canvasHeight
+    const canvas = new OffscreenCanvas(W, H)
+    const ctx = canvas.getContext('2d')!
+    ctx.fillStyle = '#ffffff'
+    ctx.beginPath()
+    const N = 200
+    for (let i = 0; i <= N; i++) {
+      const p = src.samplePerimeter(i / N)
+      if (i === 0) ctx.moveTo(p.x, p.y)
+      else         ctx.lineTo(p.x, p.y)
+    }
+    ctx.closePath()
+    ctx.fill()
+    return canvas
+  }
+
+  private _numRays(): number {
+    return Math.round(MIN_RAYS + this._raysSlider.value * (MAX_RAYS - MIN_RAYS))
+  }
+
+  private _winSize(): number {
+    return Math.round(MIN_SMOOTH + this._smoothSlider.value * (MAX_SMOOTH - MIN_SMOOTH))
+  }
+
+  private _workSize(): number {
+    return Math.round(MIN_SIZE + this._sizeSlider.value * (MAX_SIZE - MIN_SIZE))
   }
 
   private _detectPath(
-    imageSrc: ImageBitmap | OffscreenCanvas,
-    maskSrc:  MaskValue,
-    numPts:   number,
+    imageSrc:   ImageBitmap | OffscreenCanvas,
+    maskSrc:    MaskValue,
+    strokeSrc:  MaskValue,
+    numRays:    number,
+    winSize:    number,
+    workSize:   number,
+    radialBias: number,
+    circBias:   number,
+    gradMode:   number,
   ): void {
+    /* OLD — Moore boundary-trace via contourTrace.detectContour:
     const pts = detectContour(imageSrc, maskSrc as OffscreenCanvas | null, numPts)
+    this._controlPoints = pts ?? []
+    */
+    const pts = detectByGradient(
+      imageSrc, maskSrc as OffscreenCanvas | null,
+      numRays, winSize, workSize, radialBias, circBias, gradMode,
+      strokeSrc as OffscreenCanvas | null,
+    )
     this._controlPoints = pts ?? []
   }
 
@@ -298,23 +376,17 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const mctx = this._maskCanvas.getContext('2d')!
     mctx.clearRect(0, 0, w, h)
     if (this._controlPoints.length >= 3)
-      this._drawSpline(mctx, { r: 1, g: 1, b: 1, a: 1 }, 1, true, 2)
+      this._drawSpline(mctx, { r: 1, g: 1, b: 1, a: 1 }, 1)
 
     if (this._imageCanvas.width !== w || this._imageCanvas.height !== h)
       this._imageCanvas = new OffscreenCanvas(w, h)
     const ictx = this._imageCanvas.getContext('2d')!
     ictx.clearRect(0, 0, w, h)
     if (this._controlPoints.length >= 3)
-      this._drawSpline(ictx, this._colour, this._opacity, this._filled, this._strokeWidth)
+      this._drawSpline(ictx, { r: 1, g: 1, b: 1, a: 1 }, 0.2)
   }
 
-  private _drawSpline(
-    ctx: Ctx2D,
-    colour: Colour,
-    opacity: number,
-    filled: boolean,
-    strokeWidth: number,
-  ): void {
+  private _drawSpline(ctx: Ctx2D, colour: Colour, opacity: number): void {
     if (this._controlPoints.length < 3) return
     const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
@@ -326,21 +398,15 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       else         ctx.lineTo(p.x, p.y)
     }
     ctx.closePath()
-    if (filled) {
-      ctx.fillStyle = css
-      ctx.fill()
-    } else {
-      ctx.strokeStyle = css
-      ctx.lineWidth   = strokeWidth
-      ctx.stroke()
-    }
+    ctx.fillStyle = css
+    ctx.fill()
     ctx.restore()
   }
 
   // ── Rendering ────────────────────────────────────────────────────
 
   renderSelf(ctx: Ctx2D): void {
-    this._drawSpline(ctx, this._colour, this._opacity, this._filled, this._strokeWidth)
+    this._drawSpline(ctx, { r: 1, g: 1, b: 1, a: 1 }, 0.2)
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -350,18 +416,18 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
-    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
-    this._drawStrokePill(ctx)
+    this.renderSlotGroup(ctx, this.slots, this.panelBottom)
     let bottom = this.panelBottom
     for (const b of this._slotBounds.values()) bottom = Math.max(bottom, b.y + b.height)
-    this._slotsBottom = bottom
+    const pillY = bottom + 8
+    this._drawControlPill(ctx, pillY)
+    this._slotsBottom = pillY + CPILL_H
   }
 
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
-    if (this.phaseSlot.isActive) this._drawPhaseIndicator(ctx)
     this._renderCaptureBtn(ctx)
+    this._renderPathBtn(ctx)
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
@@ -385,152 +451,35 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.restore()
   }
 
-  // ── Stroke-control pill (mirrors ShapeLayer pattern) ─────────────
-
-  private _strokePillBounds(): BBox {
-    const cb = this.canvasBounds
-    const standardSlots = this.slots.filter(s => s !== this.fillModeSlot && s !== this.strokeWidthSlot)
-    const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 3 * SLOT_H + 2 * SLOT_GAP }
+  private _pathBtnRect(): { x: number; y: number; w: number } {
+    const left = contentLeft(Node.canvasWidth)
+    const x = left + Math.max(0, (Node.viewportWidth - left - PATH_BTN_W) / 2)
+    const y = Node.viewportHeight - CONV_BTN_H - CONV_BTN_GAP
+    return { x, y, w: PATH_BTN_W }
   }
 
-  private _outlineRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
+  private _pathBtnVisible(): boolean {
+    return this._onAddPath !== null && this._controlPoints.length >= 3
   }
 
-  private _strokeRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
-  }
-
-  private _strokeBindRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y + 2 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
-  }
-
-  private _strokeSliderGeom() {
-    const b = this._strokeRowBounds()
-    const midY = b.y + b.height / 2
-    const labelX = b.x + 12
-    const indX = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0 = labelX + SW_LABEL_W
-    const sldR = valueRight - SW_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
-  }
-
-  private _drawStrokePill(ctx: Ctx2D): void {
-    this.renderSlotGroup(ctx, [this.fillModeSlot], this._outlineRowBounds().y)
-    this._drawOutlineToggle(ctx)
-    this._drawStrokeSlider(ctx)
-    this.renderSlotGroup(ctx, [this.strokeWidthSlot], this._strokeBindRowBounds().y)
-  }
-
-  private _drawOutlineToggle(ctx: Ctx2D): void {
-    const row  = this._outlineRowBounds()
-    const midY = row.y + row.height / 2
-    const btnX = row.x + row.width - CTRL_BTN_SZ - 3
-    const btnY = row.y + 3
-    this._toggleBounds = { x: btnX, y: btnY, width: CTRL_BTN_SZ, height: CTRL_BTN_SZ }
-
-    const state       = this.fillModeSlot.state
-    const isActive    = state === SlotState.Bound
-    const isSuspended = state === SlotState.SuspendedBound
-    const strokeMode = !this._filled
-
+  private _renderPathBtn(ctx: Ctx2D): void {
+    if (!this._pathBtnVisible()) return
+    const { x, y, w } = this._pathBtnRect()
+    const midY = y + CONV_BTN_H / 2
     ctx.save()
-    ctx.fillStyle = isActive ? ACCENT + '33' : isSuspended ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
-    ctx.beginPath()
-    ctx.roundRect(btnX, btnY, CTRL_BTN_SZ, CTRL_BTN_SZ, 3)
-    ctx.fill()
-
-    ctx.strokeStyle = isActive ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
-    ctx.lineWidth   = 1
-    if (isSuspended) ctx.setLineDash([2, 2])
-    ctx.beginPath()
-    ctx.roundRect(btnX + 0.5, btnY + 0.5, CTRL_BTN_SZ - 1, CTRL_BTN_SZ - 1, 3)
-    ctx.stroke()
-    ctx.setLineDash([])
-
-    const colour = isActive ? ACCENT : isSuspended ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.70)'
-    ctx.strokeStyle = colour
-    ctx.lineWidth   = 1.5
-    ctx.beginPath()
-    ctx.arc(btnX + CTRL_BTN_SZ / 2, midY, 4, 0, Math.PI * 2)
-    ctx.stroke()
-    if (strokeMode) {
-      ctx.fillStyle = colour
-      ctx.beginPath()
-      ctx.arc(btnX + CTRL_BTN_SZ / 2, midY, 2, 0, Math.PI * 2)
-      ctx.fill()
-    }
-    ctx.restore()
-  }
-
-  private _drawStrokeSlider(ctx: Ctx2D): void {
-    const g = this._strokeSliderGeom()
-    const { x, y, width, height } = g.b
-    const active = this.strokeWidthSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01 = Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_WIDTH))
-
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, w, CONV_BTN_H, 5); ctx.fill()
+    ctx.fillStyle = ACCENT + 'cc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, CONV_BTN_H, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, 6)
-    ctx.fill()
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.beginPath(); ctx.rect(x, y, w, CONV_BTN_H); ctx.clip()
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.font         = '11px monospace'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillText('stroke width', g.labelX, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, g.valueRight, g.midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
+    ctx.fillText('Path', x + 10, midY)
     ctx.restore()
-  }
-
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo = x0 + thumbR, hi = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-    ctx.lineCap     = 'round'
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(hi, midY); ctx.stroke()
-    ctx.strokeStyle = colour
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(thumbX, midY); ctx.stroke()
-    ctx.fillStyle = colour
-    ctx.beginPath(); ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
-  }
-
-  private _strokeSliderHit(point: Point): boolean {
-    return boundingBoxContains(this._strokeRowBounds(), point)
-  }
-
-  private _setStrokeWidthFromPointer(px: number): void {
-    if (this.strokeWidthSlot.state === SlotState.Bound) {
-      BindingLayer.findForSlot(this.strokeWidthSlot)?.toggle()
-    }
-    const g = this._strokeSliderGeom()
-    const thumbR = 5
-    const lo = g.sld0 + thumbR, hi = g.sldR - thumbR
-    const range = Math.max(1e-6, hi - lo)
-    const v = Math.max(0, Math.min(1, (px - lo) / range))
-    this._strokeWidth = Math.max(0.5, v * MAX_STROKE_WIDTH)
-    this.markDirty()
+    ctx.restore()
   }
 
   // ── Pill rendering ───────────────────────────────────────────────
@@ -540,12 +489,6 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     if (width <= 0 || height <= 0) return
     const midY    = y + height / 2
     const btnB    = this._detectBtnBounds(b)
-    const swatchX = x + 16
-    const sliderX = swatchX + 18   // start slider after colour swatch
-    const sliderW = Math.max(0, btnB.x - sliderX - LABEL_W - 8)
-    this._numPtsSlider.bounds = { x: sliderX, y: y + 6, width: sliderW, height: Math.max(0, height - 12) }
-    this._numPtsSlider.interactive = true
-    this._numPtsSlider.displayValue = this._numPtsSlider.value
 
     ctx.save()
 
@@ -561,29 +504,15 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // Colour swatch
-    const c = this._colour
-    ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
-    ctx.beginPath()
-    ctx.arc(swatchX, midY, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-    ctx.lineWidth   = 1
-    ctx.stroke()
-
-    // Num-points slider
-    this._numPtsSlider.renderSelf(ctx)
-
-    // Points count label
+    // Status text
     const hasPts = this._controlPoints.length > 0
-    ctx.font      = '11px monospace'
-    ctx.textAlign = 'left'
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = hasPts ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)'
+    ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
-    ctx.fillStyle = hasPts ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.35)'
     ctx.fillText(
-      hasPts ? `${this._controlPoints.length} pts`
-             : this.imageSlot.isActive ? '…' : '—',
-      sliderX + sliderW + 4, midY,
+      hasPts ? `${this._controlPoints.length} pts` : this.imageSlot.isActive ? '…' : '—',
+      x + 16, midY,
     )
 
     // DETECT button
@@ -600,59 +529,107 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.restore()
   }
 
+  private _drawControlPill(ctx: Ctx2D, y: number): void {
+    const cb = this.canvasBounds
+    const { x, width } = cb
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, CPILL_H, 6)
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, CPILL_H, [4, 0, 0, 4])
+    ctx.fill()
+    ctx.restore()
+
+    const trkX0 = x + CPILL_LBL_W + 12
+    const trkX1 = x + width - CPILL_VAL_W - 8
+    const trkW  = Math.max(0, trkX1 - trkX0)
+
+    const rows = [
+      { label: 'rays', slider: this._raysSlider,     text: `${this._numRays()}`  },
+      { label: 'smth', slider: this._smoothSlider,   text: `${this._winSize()}`  },
+      { label: 'size', slider: this._sizeSlider,     text: `${this._workSize()}` },
+      { label: 'bias', slider: this._biasSlider,     text: `${Math.round(this._biasSlider.value * 100)}` },
+      { label: 'circ', slider: this._circSlider,     text: `${Math.round(this._circSlider.value * 100)}` },
+      { label: 'grad', slider: this._gradModeSlider, text: `${Math.round(this._gradModeSlider.value * 100)}` },
+    ]
+
+    for (let i = 0; i < rows.length; i++) {
+      const { label, slider, text } = rows[i]!
+      const rowY = y + CPILL_PAD + i * (CPILL_ROW_H + CPILL_GAP)
+      const midY = rowY + CPILL_ROW_H / 2
+
+      slider.bounds       = { x: trkX0, y: rowY + 4, width: trkW, height: CPILL_ROW_H - 8 }
+      slider.interactive  = true
+      slider.displayValue = slider.value
+
+      ctx.save()
+      ctx.font         = '10px monospace'
+      ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(label, x + 12, midY)
+      slider.renderSelf(ctx)
+      ctx.fillStyle = 'rgba(255,255,255,0.85)'
+      ctx.textAlign = 'right'
+      ctx.fillText(text, x + width - 8, midY)
+      ctx.restore()
+    }
+  }
+
   // ── Interaction ──────────────────────────────────────────────────
 
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): Node | null {
-    // Return the slider region itself so it handles its own pointer events.
-    const sliderHit = this._numPtsSlider.hitTest(point)
-    if (sliderHit !== null) return sliderHit
+    // Handles take priority over controls so they remain reachable everywhere on canvas.
+    if (this._controlPoints.length >= 2) {
+      const r2 = HIT_R * HIT_R
+      const c  = this._centroid()
+      if ((point.x-c.x)**2 + (point.y-c.y)**2 <= r2) return this
+      const sh = this._sizeHandlePos()
+      if ((point.x-sh.x)**2 + (point.y-sh.y)**2 <= r2) return this
+      const rh = this._rotateHandlePos()
+      if ((point.x-rh.x)**2 + (point.y-rh.y)**2 <= r2) return this
+      if (this._nearest(point) >= 0) return this
+      if (this._curveHit(point) !== null) return this
+    }
 
-    // Toggle button (outline mode)
-    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
-
-    // Stroke-width slider row
-    if (this._strokeSliderHit(point)) return this
-
-    // DETECT button (canvas-space pill)
+    // UI controls (sliders, buttons)
+    if (this._pathBtnVisible()) {
+      const { x, y, w } = this._pathBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) return this
+    }
+    const raysHit = this._raysSlider.hitTest(point)
+    if (raysHit !== null) return raysHit
+    const smoothHit = this._smoothSlider.hitTest(point)
+    if (smoothHit !== null) return smoothHit
+    const sizeHit = this._sizeSlider.hitTest(point)
+    if (sizeHit !== null) return sizeHit
+    const biasHit = this._biasSlider.hitTest(point)
+    if (biasHit !== null) return biasHit
+    const circHit = this._circSlider.hitTest(point)
+    if (circHit !== null) return circHit
+    const gradModeHit = this._gradModeSlider.hitTest(point)
+    if (gradModeHit !== null) return gradModeHit
     if (boundingBoxContains(this._detectBtnBounds(this.canvasBounds), point)) return this
-
-    // Capture button (below slot rows)
     if (this._captureBtnBounds !== null && boundingBoxContains(this._captureBtnBounds, point)) return this
 
-    if (this._controlPoints.length < 2) return null
-    const r2 = HIT_R * HIT_R
-    const c  = this._centroid()
-    if ((point.x-c.x)**2 + (point.y-c.y)**2 <= r2) return this
-    const sh = this._sizeHandlePos()
-    if ((point.x-sh.x)**2 + (point.y-sh.y)**2 <= r2) return this
-    const rh = this._rotateHandlePos()
-    if ((point.x-rh.x)**2 + (point.y-rh.y)**2 <= r2) return this
-    if (this._nearest(point) >= 0) return this
-    return this._curveHit(point) !== null ? this : null
+    return null
   }
 
   handlePointerDown(point: Point): boolean {
-    // Outline mode toggle
-    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
-      if (this.fillModeSlot.state === SlotState.Bound) {
-        this.fillModeSlot.suspend()
-      } else if (this.fillModeSlot.state === SlotState.SuspendedBound) {
-        this.fillModeSlot.resume()
-      } else {
-        this._filled = !this._filled
+    // Path convenience button
+    if (this._pathBtnVisible()) {
+      const { x, y, w } = this._pathBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + CONV_BTN_H) {
+        this._onAddPath?.()
+        this.markDirty()
+        return true
       }
-      this.markDirty()
-      return true
-    }
-
-    // Stroke-width slider
-    if (this._strokeSliderHit(point)) {
-      this._strokeSliderDrag = true
-      this._setStrokeWidthFromPointer(point.x)
-      this.markDirty()
-      return true
     }
 
     // DETECT button (in pill header)
@@ -712,7 +689,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   }
 
   handleContextMenu(point: Point): boolean {
-    if (this._controlPoints.length <= MIN_POINTS) return false
+    if (this._controlPoints.length <= MIN_RAYS) return false
     const idx = this._nearest(point)
     if (idx < 0) return false
     this._controlPoints.splice(idx, 1)
@@ -722,10 +699,6 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   }
 
   override handlePointerMove(point: Point): void {
-    if (this._strokeSliderDrag) {
-      this._setStrokeWidthFromPointer(point.x)
-      return
-    }
     if (this._specialDrag === 'center') {
       const dx = point.x - this._dragStartPtr.x
       const dy = point.y - this._dragStartPtr.y
@@ -758,9 +731,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   }
 
   override handlePointerUp(): void {
-    this._specialDrag      = null
-    this._dragIndex        = -1
-    this._strokeSliderDrag = false
+    this._specialDrag = null
+    this._dragIndex   = -1
     this.markDirty()
   }
 
