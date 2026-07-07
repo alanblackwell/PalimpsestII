@@ -52,8 +52,8 @@ const BTN_M = 6
 const CTRL_H   = 28
 const CTRL_GAP = 4    // gap between pill bottom and controls row
 
-// Paragraph-pill line-spacing slider label width (px)
-const SPC_LABEL_W = 26
+// Maximum border-pad between mask edge and text (slider range 0–BORDER_PAD_MAX px)
+const BORDER_PAD_MAX = 100
 
 // Curated typeface list.  System fonts work offline; Google fonts need internet.
 type FontEntry = { name: string; category: string; google: boolean }
@@ -187,11 +187,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _justify:           'left' | 'center' | 'right' | 'justify' = Node.defaultJustify
   private _vJustify:          'top' | 'center' | 'bottom' | 'justify' = Node.defaultVJustify
   private _manualLineSpacing: number                   = Node.defaultLineSpacing
+  private _maskBorderPad:    number                   = 15
+  // Local rectangle mask — set on first paste into a fresh layer, bypasses the mask slot.
+  private _localMaskRect: { x: number; y: number; w: number; h: number } | null = null
+  // Auto-fit size computed at paste time; separate from _manualSize so MenuLayer doesn't
+  // inherit the reduced value as the default for subsequent layers.
+  private _localMaskFittedSize: number | null = null
 
   // Resolved each recompute (from slot or manual)
   private _lineSpacing: number = Node.defaultLineSpacing
 
   private _lineSpacingSliderDrag = false
+  private _borderPadSliderDrag   = false
   private readonly _lineSpacingSlot: ParameterSlot
 
   // Resolved values (overwritten each recompute)
@@ -333,7 +340,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (slot === this._colourSlot)   return this._colour
     if (slot === this._positionSlot) return this._manualPosition ?? this._position
     if (slot === this._sizeSlot) {
-      const size = this._manualSize
+      const size = this._localMaskFittedSize ?? this._manualSize
       return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
     }
     if (slot === this._rotationSlot)    return { angle: this._rotation, magnitude: 1 }
@@ -354,7 +361,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // (masked) or from the text half-extents about _position (unmasked). Rotation-aware.
   getRefPoints(): Point[] {
     let raw: Point[]
-    const bb = this._textContentBBox
+    const bb = this._maskBBox
     if (bb !== null) {
       const mx = (bb.minX + bb.maxX) / 2, my = (bb.minY + bb.maxY) / 2
       raw = [
@@ -385,7 +392,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   override getSnapBounds() {
-    const bb = this._textContentBBox
+    const bb = this._maskBBox
     if (bb !== null) {
       if (this._rotation === 0) return { minX: bb.minX, maxX: bb.maxX, minY: bb.minY, maxY: bb.maxY }
       let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
@@ -524,6 +531,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (this._maskSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._maskSlot)?.toggle()
       this._manualSize = Math.round(this._size)  // seed from auto-fitted size
+    } else if (this._localMaskFittedSize !== null) {
+      this._manualSize = Math.round(this._localMaskFittedSize)
+      this._localMaskFittedSize = null  // user takes over from here
     }
     this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, this._manualSize + delta))
     this.markDirty()
@@ -684,7 +694,46 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // pasted text replaces it rather than being inserted.
   pasteTextAtCursor(text: string): void {
     if (!text) return
+    const needsMask = this._isDefaultText && this._localMaskRect === null && !this._maskSlot.isActive
+    if (needsMask) this._initLocalMask()
     this._insertText(text)
+    if (needsMask) this._fitSizeToLocalMask()
+  }
+
+  private _fitSizeToLocalMask(): void {
+    if (this._cachedMaskRows === null) return
+    const ctx = this._imageCanvas.getContext('2d')!
+    const fitted = this._autoFitSize(this._cachedMaskRows, ctx)
+    // Store in _localMaskFittedSize, NOT _manualSize, so MenuLayer doesn't inherit it.
+    this._localMaskFittedSize = Math.min(this._manualSize, fitted)
+  }
+
+  private _initLocalMask(): void {
+    const vw = Node.viewportWidth
+    const vh = Node.viewportHeight
+    const mw = Math.round(vw * 0.5)
+    const mh = Math.round(vh * 0.5)
+    this._localMaskRect = {
+      x: Math.round((vw - mw) / 2),
+      y: Math.round((vh - mh) / 2),
+      w: mw,
+      h: mh,
+    }
+    this._applyLocalMask()
+    this._justify  = 'center'
+    this._vJustify = 'center'
+    Node.defaultJustify  = 'center'
+    Node.defaultVJustify = 'center'
+  }
+
+  private _applyLocalMask(): void {
+    if (this._localMaskRect === null) return
+    const { x, y, w, h: rectH } = this._localMaskRect
+    const ch = Node.canvasHeight
+    this._cachedMaskRows = Array.from({ length: ch }, (_, row) =>
+      (row >= y && row < y + rectH) ? { x, w } : null
+    )
+    this._cachedMaskBBox = { minX: x, maxX: x + w, minY: y, maxY: y + rectH }
   }
 
   private _insertText(s: string): void {
@@ -788,6 +837,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       justify:           this._justify,
       vJustify:          this._vJustify,
       manualLineSpacing: this._manualLineSpacing,
+      maskBorderPad:     this._maskBorderPad,
+      localMaskRect:        this._localMaskRect,
+      localMaskFittedSize:  this._localMaskFittedSize,
     }
   }
 
@@ -819,6 +871,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._vJustify = state.vJustify
     }
     if (typeof state.manualLineSpacing === 'number') this._manualLineSpacing = state.manualLineSpacing
+    if (typeof state.maskBorderPad     === 'number') this._maskBorderPad     = state.maskBorderPad
+    if (state.localMaskRect && typeof state.localMaskRect === 'object') {
+      const r = state.localMaskRect as Record<string, unknown>
+      if (typeof r.x === 'number' && typeof r.y === 'number' &&
+          typeof r.w === 'number' && typeof r.h === 'number') {
+        this._localMaskRect = { x: r.x, y: r.y, w: r.w, h: r.h }
+      }
+    }
+    if (typeof state.localMaskFittedSize === 'number') this._localMaskFittedSize = state.localMaskFittedSize
   }
 
   protected recompute(): void {
@@ -870,6 +931,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       // cached scanlines so text continues to flow within the shape.
       this._maskRows = this._cachedMaskRows
       this._maskBBox = this._cachedMaskBBox
+    } else if (this._localMaskRect !== null) {
+      // Local rectangle mask (no slot needed); regenerate if canvas has been resized.
+      if (this._cachedMaskRows === null || this._cachedMaskRows.length !== Node.canvasHeight) {
+        this._applyLocalMask()
+      }
+      this._maskRows = this._cachedMaskRows
+      this._maskBBox = this._cachedMaskBBox
+      // Use the auto-fit size when active; _manualSize is kept at the original value
+      // so MenuLayer does not inherit the reduced size as a default.
+      if (!this._sizeSlot.isActive && this._localMaskFittedSize !== null) {
+        this._size = this._localMaskFittedSize
+      }
     } else {
       this._maskRows = null
       this._maskBBox = null
@@ -1007,7 +1080,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _textFitsInMask(size: number, rows: Scanline[], ctx: OffscreenCanvasRenderingContext2D): boolean {
     const lineH = Math.max(1, Math.ceil(this._lineSpacing * size))
     const h     = rows.length
-    const pad   = 6
+    const pad   = this._maskBorderPad
 
     ctx.font = this._fontString(size)
 
@@ -1015,12 +1088,16 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     while (startY < h && !rows[startY]) startY++
     if (startY >= h) return true   // empty mask — trivially fits
 
+    let endY = h - 1
+    while (endY > startY && !rows[endY]) endY--
+    const innerBottom = Math.max(startY, endY - pad)
+
     const queue = this._buildWordQueue()
 
-    let y = startY + size
+    let y = startY + pad + size
     let qi = 0
 
-    while (qi < queue.length && y < h) {
+    while (qi < queue.length && y < innerBottom) {
       const rowY     = Math.min(h - 1, Math.floor(y))
       const scanline = rows[rowY]
       if (!scanline || scanline.w <= pad * 2) { y += lineH; continue }
@@ -1045,16 +1122,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Panel layout
   // ----------------------------------------------------------
 
-  private get _ctrlY():          number  { return 50 + this.bounds.height + CTRL_GAP }
-  private get _paraY():          number  { return this._ctrlY + CTRL_H + CTRL_GAP }
-  private get _vJustY():         number  { return this._paraY + CTRL_H + CTRL_GAP }
-  private get _hasMaskLayout():  boolean { return this._maskRows !== null || this._cachedMaskRows !== null }
+  private get _ctrlY():         number  { return 50 + this.bounds.height + CTRL_GAP }
+  private get _alignY():        number  { return this._ctrlY + CTRL_H + CTRL_GAP }
+  private get _spacingY():      number  { return this._alignY + CTRL_H + CTRL_GAP }
+  private get _hasMaskLayout(): boolean { return this._maskRows !== null || this._cachedMaskRows !== null }
 
-  override get panelBottom(): number {
-    return this._hasMaskLayout
-      ? this._vJustY + CTRL_H + CTRL_GAP
-      : this._paraY  + CTRL_H + CTRL_GAP
-  }
+  override get panelBottom(): number { return this._spacingY + CTRL_H + CTRL_GAP }
 
   // ----------------------------------------------------------
   // Interaction
@@ -1104,6 +1177,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       if (this._maskSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._maskSlot)?.toggle()
         this._manualSize = Math.round(this._size)
+      } else if (this._localMaskFittedSize !== null) {
+        this._manualSize = Math.round(this._localMaskFittedSize)
+        this._localMaskFittedSize = null  // user takes over from here
       }
       this._drag = {
         type:       'scale',
@@ -1155,23 +1231,29 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return false
     }
 
-    if (this._hasMaskLayout && boundingBoxContains(this._vJustPillBounds(), point)) {
-      if (boundingBoxContains(this._vJustifyT(), point)) { this.setVJustify('top');     return true }
-      if (boundingBoxContains(this._vJustifyC(), point)) { this.setVJustify('center');  return true }
-      if (boundingBoxContains(this._vJustifyB(), point)) { this.setVJustify('bottom');  return true }
-      if (boundingBoxContains(this._vJustifyJ(), point)) { this.setVJustify('justify'); return true }
-      return false
-    }
-
-    if (boundingBoxContains(this._paraPillBounds(), point)) {
-      // Justification buttons
+    if (boundingBoxContains(this._alignPillBounds(), point)) {
       if (boundingBoxContains(this._paraJustifyL(), point)) { this.setJustify('left');    return true }
       if (boundingBoxContains(this._paraJustifyC(), point)) { this.setJustify('center');  return true }
       if (boundingBoxContains(this._paraJustifyR(), point)) { this.setJustify('right');   return true }
       if (boundingBoxContains(this._paraJustifyJ(), point)) { this.setJustify('justify'); return true }
-      // Spacing slider — anywhere else in the pill
-      this._lineSpacingSliderDrag = true
-      this._setLineSpacingFromPointer(point.x)
+      if (this._hasMaskLayout) {
+        if (boundingBoxContains(this._vJustifyT(), point)) { this.setVJustify('top');     return true }
+        if (boundingBoxContains(this._vJustifyC(), point)) { this.setVJustify('center');  return true }
+        if (boundingBoxContains(this._vJustifyB(), point)) { this.setVJustify('bottom');  return true }
+        if (boundingBoxContains(this._vJustifyJ(), point)) { this.setVJustify('justify'); return true }
+      }
+      return false
+    }
+
+    if (boundingBoxContains(this._spacingPillBounds(), point)) {
+      const divX = contentLeft(Node.canvasWidth) + 132
+      if (point.x < divX) {
+        this._lineSpacingSliderDrag = true
+        this._setLineSpacingFromPointer(point.x)
+      } else {
+        this._borderPadSliderDrag = true
+        this._setBorderPadFromPointer(point.x)
+      }
       return true
     }
 
@@ -1182,13 +1264,23 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (this._lineSpacingSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._lineSpacingSlot)?.toggle()
     }
-    const g      = this._spcSliderGeom()
+    const g      = this._lineSliderGeom()
     const thumbR = 5
     const lo     = g.sld0 + thumbR
     const hi     = Math.max(lo + 1, g.sldR - thumbR)
     const v      = Math.max(0, Math.min(1, (px - lo) / (hi - lo)))
     this._manualLineSpacing = -1 + v * 4
     Node.defaultLineSpacing = this._manualLineSpacing
+    this.markDirty()
+  }
+
+  private _setBorderPadFromPointer(px: number): void {
+    const g      = this._padSliderGeom()
+    const thumbR = 5
+    const lo     = g.sld0 + thumbR
+    const hi     = Math.max(lo + 1, g.sldR - thumbR)
+    const v      = Math.max(0, Math.min(1, (px - lo) / (hi - lo)))
+    this._maskBorderPad = Math.round(v * BORDER_PAD_MAX)
     this.markDirty()
   }
 
@@ -1209,6 +1301,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   handlePointerMove(point: Point): void {
     if (this._lineSpacingSliderDrag) {
       this._setLineSpacingFromPointer(point.x)
+      return
+    }
+    if (this._borderPadSliderDrag) {
+      this._setBorderPadFromPointer(point.x)
       return
     }
     if (this._drag === null) return
@@ -1245,6 +1341,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   handlePointerUp(): void {
     this._lineSpacingSliderDrag = false
+    this._borderPadSliderDrag   = false
     this._drag = null
     this._clearRotDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null
@@ -1295,8 +1392,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         && ptDist(point, hp.move) <= HANDLE_HIT) return this
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
-    if (boundingBoxContains(this._paraPillBounds(), point)) return this
-    if (this._hasMaskLayout && boundingBoxContains(this._vJustPillBounds(), point)) return this
+    if (boundingBoxContains(this._alignPillBounds(), point)) return this
+    if (boundingBoxContains(this._spacingPillBounds(), point)) return this
     return null
   }
 
@@ -1315,8 +1412,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._updateEditHover()
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
-    this._renderParaControls(ctx)
-    if (this._hasMaskLayout) this._renderVJustControls(ctx)
+    this._renderAlignControls(ctx)
+    this._renderSpacingControls(ctx)
   }
 
   // The _lineSpacingSlot is excluded from the standard slot group and rendered
@@ -1325,8 +1422,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._slotBounds.clear()
     const standard = this.slots.filter(s => s !== this._lineSpacingSlot)
     this.renderSlotGroup(ctx, standard, this.panelBottom)
-    // Register the para pill as the drop-target for the line-spacing slot.
-    const pb = this._paraPillBounds()
+    // Register the spacing pill as the drop-target for the line-spacing slot.
+    const pb = this._spacingPillBounds()
     this._slotBounds.set(this._lineSpacingSlot, pb)
     // If a compatible drag is in progress, highlight the pill as a drop target.
     const drag = Node.bindDrag
@@ -1532,12 +1629,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.restore()
   }
 
-  // ── Paragraph-style pill ─────────────────────────────────────
+  // ── Combined alignment pill (H-justify + V-justify) ──────────
 
-  private _renderParaControls(ctx: Ctx2D): void {
-    const { x, y, width, height } = this._paraPillBounds()
+  private _renderAlignControls(ctx: Ctx2D): void {
+    const { x, y, width, height } = this._alignPillBounds()
     if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
+    const midY      = y + height / 2
+    const maskActive = this._hasMaskLayout
 
     ctx.save()
 
@@ -1553,17 +1651,17 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // Justification buttons
+    // H-justify buttons (always active)
     type JBtn = { b: { x: number; y: number; width: number; height: number }; val: 'left' | 'center' | 'right' | 'justify' }
-    const jBtns: JBtn[] = [
+    const hBtns: JBtn[] = [
       { b: this._paraJustifyL(), val: 'left'    },
       { b: this._paraJustifyC(), val: 'center'  },
       { b: this._paraJustifyR(), val: 'right'   },
       { b: this._paraJustifyJ(), val: 'justify' },
     ]
-    const iconNames = ['text-align-left', 'text-align-center', 'text-align-right', 'text-align-justify'] as const
+    const hIconNames = ['text-align-left', 'text-align-center', 'text-align-right', 'text-align-justify'] as const
     for (let i = 0; i < 4; i++) {
-      const { b, val } = jBtns[i]!
+      const { b, val } = hBtns[i]!
       const active = this._justify === val
       if (active) {
         ctx.fillStyle = ACCENT + '33'
@@ -1572,11 +1670,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         ctx.fill()
       }
       ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
-      drawIcon(ctx, iconNames[i]!, b.x + b.width / 2, midY, 14)
+      drawIcon(ctx, hIconNames[i]!, b.x + b.width / 2, midY, 14)
     }
 
-    // Divider after justify buttons
-    const divX = x + 98
+    // Divider between H and V
+    const divX = x + 96
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'
     ctx.lineWidth   = 1
     ctx.beginPath()
@@ -1584,75 +1682,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.lineTo(divX, y + height - 4)
     ctx.stroke()
 
-    // Line-spacing slider
-    const g      = this._spcSliderGeom()
-    const active = this._lineSpacingSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01    = Math.max(0, Math.min(1, (this._lineSpacing + 1) / 4))
-    const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = Math.max(lo + 1, g.sldR - thumbR)
-    const thumbX = lo + v01 * (hi - lo)
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('line', g.labelX, midY)
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(hi, midY)
-    ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.lineWidth   = 3
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(thumbX, midY)
-    ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
-    ctx.fill()
-
-    // Value readout
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(this._lineSpacing.toFixed(2), g.valueRight, midY)
-
-    // Slot indicator dot
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, midY)
-
-    ctx.restore()
-  }
-
-  // ── Vertical-justify pill (mask only) ────────────────────────
-
-  private _renderVJustControls(ctx: Ctx2D): void {
-    const { x, y, width, height } = this._vJustPillBounds()
-    if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
-
-    ctx.save()
-
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 6))
-    ctx.fill()
-
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
+    // V-justify buttons (dimmed when no mask is active)
     type VBtn = { b: { x: number; y: number; width: number; height: number }; val: 'top' | 'center' | 'bottom' | 'justify' }
     const vBtns: VBtn[] = [
       { b: this._vJustifyT(), val: 'top'     },
@@ -1660,19 +1690,119 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       { b: this._vJustifyB(), val: 'bottom'  },
       { b: this._vJustifyJ(), val: 'justify' },
     ]
-    const iconNames = ['text-valign-top', 'text-valign-center', 'text-valign-bottom', 'text-valign-justify'] as const
+    const vIconNames = ['text-valign-top', 'text-valign-center', 'text-valign-bottom', 'text-valign-justify'] as const
     for (let i = 0; i < 4; i++) {
       const { b, val } = vBtns[i]!
-      const active = this._vJustify === val
+      const active = maskActive && this._vJustify === val
       if (active) {
         ctx.fillStyle = ACCENT + '33'
         ctx.beginPath()
         ctx.roundRect(b.x, b.y, b.width, b.height, 3)
         ctx.fill()
       }
-      ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
-      drawIcon(ctx, iconNames[i]!, b.x + b.width / 2, midY, 14)
+      ctx.globalAlpha = maskActive ? 1.0 : 0.30
+      ctx.fillStyle   = active ? ACCENT : 'rgba(255,255,255,0.55)'
+      drawIcon(ctx, vIconNames[i]!, b.x + b.width / 2, midY, 14)
+      ctx.globalAlpha = 1.0
     }
+
+    ctx.restore()
+  }
+
+  // ── Spacing pill (line-spacing + border-pad) ──────────────────
+
+  private _renderSpacingControls(ctx: Ctx2D): void {
+    const { x, y, width, height } = this._spacingPillBounds()
+    if (width <= 0 || height <= 0) return
+    const midY  = y + height / 2
+    const thumbR = 5
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 6))
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // ── Line-spacing slider (left half) ─────────────────────────
+    const lg      = this._lineSliderGeom()
+    const lActive = this._lineSpacingSlot.isActive
+    const lColour = lActive ? AM_COL : ACCENT
+    const lv01    = Math.max(0, Math.min(1, (this._lineSpacing + 1) / 4))
+    const lo_l    = lg.sld0 + thumbR
+    const hi_l    = Math.max(lo_l + 1, lg.sldR - thumbR)
+    const thumbX_l = lo_l + lv01 * (hi_l - lo_l)
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('line', lg.labelX, midY)
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth   = 3
+    ctx.beginPath(); ctx.moveTo(lo_l, midY); ctx.lineTo(hi_l, midY); ctx.stroke()
+
+    ctx.strokeStyle = lColour
+    ctx.lineWidth   = 3
+    ctx.beginPath(); ctx.moveTo(lo_l, midY); ctx.lineTo(thumbX_l, midY); ctx.stroke()
+
+    ctx.fillStyle = lColour
+    ctx.beginPath(); ctx.arc(thumbX_l, midY, thumbR, 0, Math.PI * 2); ctx.fill()
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(this._lineSpacing.toFixed(2), lg.valueRight, midY)
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = lActive ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(lActive ? '●' : '○', lg.indX, midY)
+
+    // Divider between line spacing and border pad
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.moveTo(x + 132, y + 4)
+    ctx.lineTo(x + 132, y + height - 4)
+    ctx.stroke()
+
+    // ── Border-pad slider (right half) ──────────────────────────
+    const pg    = this._padSliderGeom()
+    const pv01  = Math.max(0, Math.min(1, this._maskBorderPad / BORDER_PAD_MAX))
+    const lo_p  = pg.sld0 + thumbR
+    const hi_p  = Math.max(lo_p + 1, pg.sldR - thumbR)
+    const thumbX_p = lo_p + pv01 * (hi_p - lo_p)
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('pad', pg.labelX, midY)
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth   = 3
+    ctx.beginPath(); ctx.moveTo(lo_p, midY); ctx.lineTo(hi_p, midY); ctx.stroke()
+
+    ctx.strokeStyle = ACCENT
+    ctx.lineWidth   = 3
+    ctx.beginPath(); ctx.moveTo(lo_p, midY); ctx.lineTo(thumbX_p, midY); ctx.stroke()
+
+    ctx.fillStyle = ACCENT
+    ctx.beginPath(); ctx.arc(thumbX_p, midY, thumbR, 0, Math.PI * 2); ctx.fill()
+
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${this._maskBorderPad}`, pg.valueRight, midY)
 
     ctx.restore()
   }
@@ -1790,7 +1920,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const rows    = this._maskRows!
     const lineH   = Math.max(1, Math.ceil(this._lineSpacing * this._size))
     const h       = rows.length
-    const pad     = 6
+    const pad     = this._maskBorderPad
 
     let startY = 0
     while (startY < h && !rows[startY]) startY++
@@ -1799,17 +1929,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     let endY = h - 1
     while (endY > startY && !rows[endY]) endY--
 
+    const innerTop    = startY + pad
+    const innerBottom = Math.max(innerTop, endY - pad)
+
     const ctx = this._maskCanvas.getContext('2d')!
     ctx.font = this._fontString()
 
-    let y0 = startY + this._size
+    let y0 = innerTop + this._size
     let effectiveLineH = lineH
 
     if (this._vJustify !== 'top') {
-      const count = this._countMaskedLines(rows, y0, lineH, ctx)
+      const count = this._countMaskedLines(rows, y0, lineH, ctx, innerBottom)
       if (count > 0) {
         const textSpan  = (count - 1) * lineH
-        const available = endY - y0
+        const available = innerBottom - y0
         if      (this._vJustify === 'center') y0 += Math.max(0, (available - textSpan) / 2)
         else if (this._vJustify === 'bottom') y0 += Math.max(0, available - textSpan)
         else if (this._vJustify === 'justify' && count > 1)
@@ -1822,7 +1955,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     let firstBaseline: number | null = null, lastBaseline = y0
     let minX = Infinity, maxX = -Infinity
 
-    while (qi < queue.length && y < h) {
+    while (qi < queue.length && y < innerBottom) {
       const rowY = Math.min(h - 1, Math.floor(y))
       const sl   = rows[rowY]
       if (!sl || sl.w <= pad * 2) { y += effectiveLineH; continue }
@@ -1881,11 +2014,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Dry-run of the masked greedy word-wrap starting at baseline y0 with the
   // given lineH.  Returns the number of visual lines placed (for vertical
   // alignment offset and vertical-justify line-spacing computation).
-  private _countMaskedLines(rows: Scanline[], y0: number, lineH: number, ctx: Ctx2D): number {
-    const h = rows.length, pad = 6
+  private _countMaskedLines(rows: Scanline[], y0: number, lineH: number, ctx: Ctx2D, innerBottom: number): number {
+    const h = rows.length, pad = this._maskBorderPad
     const queue = this._buildWordQueue()
     let y = y0, qi = 0, count = 0
-    while (qi < queue.length && y < h) {
+    while (qi < queue.length && y < innerBottom) {
       const rowY = Math.min(h - 1, Math.floor(y))
       const sl   = rows[rowY]
       if (!sl || sl.w <= pad * 2) { y += lineH; continue }
@@ -1920,7 +2053,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const rows  = this._maskRows!
     const lineH = Math.max(1, Math.ceil(this._lineSpacing * this._size))
     const h     = rows.length
-    const pad   = 6
+    const pad   = this._maskBorderPad
 
     let startY = 0
     while (startY < h && !rows[startY]) startY++
@@ -1929,15 +2062,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     let endY = h - 1
     while (endY > startY && !rows[endY]) endY--
 
-    // First baseline (top-aligned origin)
-    let y0 = startY + this._size
+    const innerTop    = startY + pad
+    const innerBottom = Math.max(innerTop, endY - pad)
+
+    // First baseline (top-aligned origin, inset by pad from the mask edge)
+    let y0 = innerTop + this._size
     let effectiveLineH = lineH
 
     if (this._vJustify !== 'top') {
-      const count = this._countMaskedLines(rows, y0, lineH, ctx)
+      const count = this._countMaskedLines(rows, y0, lineH, ctx, innerBottom)
       if (count > 0) {
-        const textSpan = (count - 1) * lineH   // first → last baseline distance
-        const available = endY - y0            // max space for that span
+        const textSpan  = (count - 1) * lineH   // first → last baseline distance
+        const available = innerBottom - y0       // padded space below first baseline
         if (this._vJustify === 'center') {
           y0 += Math.max(0, (available - textSpan) / 2)
         } else if (this._vJustify === 'bottom') {
@@ -1962,7 +2098,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const queue = this._buildWordQueue()
     let y = y0, qi = 0
 
-    while (qi < queue.length && y < h) {
+    while (qi < queue.length && y < innerBottom) {
       const rowY     = Math.min(h - 1, Math.floor(y))
       const scanline = rows[rowY]
 
@@ -2032,47 +2168,51 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _sizeMinusBounds() { return this._ctrlBtn(146, 20) }
   private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
 
-  // Paragraph-row helpers — sub-bounds centred vertically in the paragraph pill.
-  //  8   [L]  30  [C]  52  [R]  74  [J]  | 98  "line" spc-slider  [○] value
-  private _paraBtn(offsetX: number, w: number) {
+  // Alignment pill helpers — H+V justify buttons in one row.
+  //  H:  8 [L]  30 [C]  52 [R]  74 [J]  | 96 divider |  V: 100 [T]  122 [C]  144 [B]  166 [J]
+  private _alignBtn(offsetX: number, w: number) {
     const bh = CTRL_H - 8
-    return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._paraY + 4, width: w, height: bh }
+    return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._alignY + 4, width: w, height: bh }
   }
-  private _paraJustifyL()  { return this._paraBtn(8,   20) }
-  private _paraJustifyC()  { return this._paraBtn(30,  20) }
-  private _paraJustifyR()  { return this._paraBtn(52,  20) }
-  private _paraJustifyJ()  { return this._paraBtn(74,  20) }
-  private _paraPillBounds() {
-    return { x: contentLeft(Node.canvasWidth), y: this._paraY,
+  private _paraJustifyL()  { return this._alignBtn(8,   20) }
+  private _paraJustifyC()  { return this._alignBtn(30,  20) }
+  private _paraJustifyR()  { return this._alignBtn(52,  20) }
+  private _paraJustifyJ()  { return this._alignBtn(74,  20) }
+  private _vJustifyT()     { return this._alignBtn(100, 20) }
+  private _vJustifyC()     { return this._alignBtn(122, 20) }
+  private _vJustifyB()     { return this._alignBtn(144, 20) }
+  private _vJustifyJ()     { return this._alignBtn(166, 20) }
+  private _alignPillBounds() {
+    return { x: contentLeft(Node.canvasWidth), y: this._alignY,
              width: panelWidth(Node.canvasWidth), height: CTRL_H }
   }
 
-  // Vertical-justify pill — only rendered/hit-tested when _hasMaskLayout
-  private _vJustPillBounds() {
-    return { x: contentLeft(Node.canvasWidth), y: this._vJustY,
+  // Spacing pill helpers — line-spacing slider (left) + border-pad slider (right).
+  //  "line" sld0..sldR [●] value [○] | 132 divider | "pad" sld0..sldR [●] value
+  private _spacingPillBounds() {
+    return { x: contentLeft(Node.canvasWidth), y: this._spacingY,
              width: panelWidth(Node.canvasWidth), height: CTRL_H }
   }
-  private _vJustBtn(offsetX: number, w: number) {
-    const bh = CTRL_H - 8
-    return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._vJustY + 4, width: w, height: bh }
+  private _lineSliderGeom() {
+    const x = contentLeft(Node.canvasWidth)
+    return {
+      midY:       this._spacingY + CTRL_H / 2,
+      labelX:     x + 6,
+      sld0:       x + 36,
+      sldR:       x + 100,
+      valueRight: x + 126,
+      indX:       x + 130,
+    }
   }
-  //  8   [⊤]  30  [⊡]  52  [⊥]  74  [⇕]
-  private _vJustifyT() { return this._vJustBtn(8,  20) }
-  private _vJustifyC() { return this._vJustBtn(30, 20) }
-  private _vJustifyB() { return this._vJustBtn(52, 20) }
-  private _vJustifyJ() { return this._vJustBtn(74, 20) }
-
-  // Spacing-slider geometry (mirrors _strokeSliderGeom in ShapeLayer).
-  private _spcSliderGeom() {
-    const x      = contentLeft(Node.canvasWidth)
-    const pw     = panelWidth(Node.canvasWidth)
-    const midY   = this._paraY + CTRL_H / 2
-    const labelX = x + 100
-    const indX   = x + pw - 8
-    const valueRight = indX - 14
-    const sld0   = labelX + SPC_LABEL_W
-    const sldR   = valueRight - 38   // leave room for "−1.00" value
-    return { midY, labelX, sld0, sldR, valueRight, indX }
+  private _padSliderGeom() {
+    const x = contentLeft(Node.canvasWidth)
+    return {
+      midY:       this._spacingY + CTRL_H / 2,
+      labelX:     x + 136,
+      sld0:       x + 160,
+      sldR:       x + 228,
+      valueRight: x + 252,
+    }
   }
 
   // ----------------------------------------------------------
