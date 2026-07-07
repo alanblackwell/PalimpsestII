@@ -13,7 +13,7 @@ import { StartupLayer }    from '../layers/StartupLayer.js'
 import { AmountLayer }      from '../layers/AmountLayer.js'
 import { ColourLayer }       from '../layers/ColourLayer.js'
 import { PointLayer }        from '../layers/PointLayer.js'
-import { RateLayer }         from '../layers/RateLayer.js'
+import { TempoLayer }        from '../layers/TempoLayer.js'
 import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { SelectLayer }       from '../layers/SelectLayer.js'
 import { CountLayer }        from '../layers/CountLayer.js'
@@ -131,7 +131,8 @@ export const LAYER_CLASSES: Record<string, () => Layer> = {
   AmountLayer:      () => new AmountLayer(),
   ColourLayer:      () => new ColourLayer(),
   PointLayer:       () => new PointLayer(),
-  RateLayer:        () => new RateLayer(),
+  TempoLayer:       () => new TempoLayer(),
+  RateLayer:        () => new TempoLayer(),   // backward compat for old saves
   AnimPathLayer:    () => new AnimPathLayer(Node.canvasWidth / 2, Node.canvasHeight / 2),
   SelectLayer:      () => new SelectLayer(),
   CountLayer:       () => new CountLayer(),

@@ -13,7 +13,7 @@ import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
 import { VideoLayer }        from '../layers/VideoLayer.js'
-import { RateLayer }         from '../layers/RateLayer.js'
+import { TempoLayer }        from '../layers/TempoLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer, rndShape } from '../layers/MenuLayer.js'
 import { DeletionLayer }     from '../layers/DeletionLayer.js'
@@ -58,17 +58,17 @@ import * as Persistence      from '../persistence/Persistence.js'
 import * as MobileStore      from '../persistence/MobileStore.js'
 import { openGallery }       from '../ui/MobileGallery.js'
 
-// Bind a RateLayer's timeSlot to the shared singleton Clock, if not already
+// Bind a TempoLayer's timeSlot to the shared singleton Clock, if not already
 // bound, so its phase starts advancing immediately.
-function bindRateClock(rate: RateLayer): void {
+function bindRateClock(rate: TempoLayer): void {
   if (!rate.timeSlot.isActive) BindingLayer.create(clock, rate.timeSlot)
 }
 
-// Create a hidden helper RateLayer directly above `host`, bind it to
+// Create a hidden helper TempoLayer directly above `host`, bind it to
 // `phaseSlot`, and wire its timeSlot to the singleton Clock.
 // `rateHz` is the initial rate; pass `1.0` for the default.
 function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number): void {
-  const rate = new RateLayer(rateHz)
+  const rate = new TempoLayer(rateHz)
   Layer.assignDebugName(rate)
   rate.bounds = { ...host.bounds }
   rate.insertAbove(host)
@@ -80,18 +80,18 @@ function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number)
 }
 
 // Auto-bind a phase slot to a Rate or Clock layer, creating a hidden helper
-// RateLayer above `host` (fed by the shared singleton Clock) if neither is
+// TempoLayer above `host` (fed by the shared singleton Clock) if neither is
 // found nearby. Used by RotateLayer.
 function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   if (phaseSlot.isActive) return
 
-  let phaseSource: RateLayer | ClockLayer | null = null
+  let phaseSource: TempoLayer | ClockLayer | null = null
   for (let l: Layer | null = host.layerBelow; l !== null; l = l.layerBelow) {
-    if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+    if (l instanceof TempoLayer || l instanceof ClockLayer) { phaseSource = l; break }
   }
   if (phaseSource === null) {
     for (let l: Layer | null = host.layerAbove; l !== null; l = l.layerAbove) {
-      if (l instanceof RateLayer || l instanceof ClockLayer) { phaseSource = l; break }
+      if (l instanceof TempoLayer || l instanceof ClockLayer) { phaseSource = l; break }
     }
   }
 
@@ -114,7 +114,7 @@ function randomAnimRate(): number {
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
 // that every creation path (menu, tutorial buttons) gets identical behaviour.
 function postInsertLayer(newLayer: Layer): void {
-  if (newLayer instanceof RateLayer) {
+  if (newLayer instanceof TempoLayer) {
     // Bind to the shared singleton Clock immediately, so the rate's phase
     // starts advancing as soon as the layer appears.
     bindRateClock(newLayer)
@@ -641,7 +641,7 @@ const DEFAULT_VALUE_LAYER: Partial<Record<ValueType, (w: number, h: number) => L
   [ValueType.Colour]:    ()     => new ColourLayer(rndColour()),
   [ValueType.Point]:     (w, h) => new PointLayer({ x: w / 2, y: h / 2 }),
   [ValueType.Direction]: ()     => new DirectionLayer(0, 1),
-  [ValueType.Rate]:      ()     => new RateLayer(1.0),
+  [ValueType.Rate]:      ()     => new TempoLayer(1.0),
   [ValueType.Count]:     ()     => new CountLayer(0),
   [ValueType.Event]:     ()     => new EventLayer(),
   [ValueType.Image]:     ()     => new ImageLayer(),
@@ -723,7 +723,7 @@ const W = 100
 const root = new RootLayer(canvas.width, canvas.height)
 
 // Singleton Clock — created once at startup, hidden (outsideStack) until
-// the user clicks Root's clockSlot to expose it. Every RateLayer shares
+// the user clicks Root's clockSlot to expose it. Every TempoLayer shares
 // this same instance via ensurePhaseSource; Evaluator ticks it directly
 // every frame regardless of stack membership.
 const clock = new ClockLayer()
@@ -1262,7 +1262,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
     newLayer.insertAbove(consumer)
     BindingLayer.create(newLayer, slot)
-    if (newLayer instanceof RateLayer) bindRateClock(newLayer)
+    if (newLayer instanceof TempoLayer) bindRateClock(newLayer)
     refreshStack(newLayer)
     return
   }

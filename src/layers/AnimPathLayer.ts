@@ -10,7 +10,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
-import { RateLayer, sliderToHz, hzToSlider } from './RateLayer.js'
+import { TempoLayer, sliderToHz, hzToSlider } from './TempoLayer.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
@@ -65,7 +65,7 @@ export class AnimPathLayer extends Layer implements PointSource {
   private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
   private _cwBounds:      { x: number; y: number; width: number; height: number } | null = null
 
-  private _hiddenRate:  RateLayer | null = null
+  private _hiddenRate:  TempoLayer | null = null  // bound TempoLayer, if any
   private _rateSlider:  SliderRegion
 
   // Set by main.ts after insertion (and after load) — invoked when the
@@ -79,7 +79,7 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._currentPoint = { x: cx, y: cy }
 
     this.shapeSlot   = new ParameterSlot(ValueType.Point,  this, 'shape')
-    this.phaseSlot   = new ParameterSlot(ValueType.Amount, this, 'phase')
+    this.phaseSlot   = new ParameterSlot(ValueType.Amount, this, 'tempo')
     this.runModeSlot = new ParameterSlot(ValueType.Event,  this, 'run mode')
     this.cwSlot      = new ParameterSlot(ValueType.Event,  this, 'clockwise')
     this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot, this.cwSlot)
@@ -194,11 +194,13 @@ export class AnimPathLayer extends Layer implements PointSource {
       }
     }
 
-    // Dynamically track which RateLayer is bound to phaseSlot.
+    // Dynamically track which TempoLayer is bound to phaseSlot.
     // This handles both the hidden-helper Rate and any manually bound Rate.
-    const boundRate = (this.phaseSlot.isActive && this.phaseSlot.source instanceof RateLayer)
-      ? (this.phaseSlot.source as RateLayer) : null
+    const boundRate = (this.phaseSlot.isActive && this.phaseSlot.source instanceof TempoLayer)
+      ? (this.phaseSlot.source as TempoLayer) : null
     if (boundRate !== this._hiddenRate) {
+      this._hiddenRate?.removeController(this)
+      boundRate?.addController(this)
       this._hiddenRate = boundRate
       this._rateSlider.interactive = boundRate !== null
     }
@@ -299,7 +301,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
         ctx.fillStyle = 'rgba(255,255,255,0.75)'
         ctx.textAlign = 'right'
-        ctx.fillText(this._hiddenRate.getRate().toFixed(2) + ' Hz',
+        ctx.fillText(Math.round(this._hiddenRate.getRate() * 60) + ' BPM',
           PANEL_X + PANEL_W - 6, y + SLIDER_H / 2)
       }
 

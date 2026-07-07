@@ -2,7 +2,7 @@ import { Layer } from '../core/Layer.js'
 import { Node }  from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   boundingBoxContains,
   type Amount, type AmountSource,
   type EventValue, type EventSource,
@@ -12,6 +12,9 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import { TempoLayer, sliderToHz, hzToSlider } from './TempoLayer.js'
+import { SliderRegion } from '../regions/SliderRegion.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // EventLayer — discrete event source (pulse generator)
@@ -22,7 +25,7 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 //
 //   Manual       — [▶ FIRE] button triggers a pulse on click.
 //
-//   Rate-driven  — an AmountSource (typically a RateLayer phase)
+//   Rate-driven  — an AmountSource (typically a TempoLayer phase)
 //                  is bound to rateSlot.  Fires each time the
 //                  phase wraps around (robust zero-crossing).
 //
@@ -70,6 +73,13 @@ const SEPARATION_THRESHOLD = 3
 const BTN_M = 6
 const BTN   = 24
 
+// Slot-row constants (must match Layer.ts renderSlots)
+const SLIDER_H = 26
+const SLOT_H   = 30
+const SLOT_GAP = 4
+const LABEL_W  = 78
+const RATE_TC   = '#e87e7e'
+
 export class EventLayer extends Layer implements EventSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Event])
 
@@ -86,6 +96,13 @@ export class EventLayer extends Layer implements EventSource {
   private _eventTime: EventValue = null
   private _prevPhase: number     = 0
   private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
+
+  // ── Rate-slider / play-pause state ─────────────────────
+  private _hiddenRate:    TempoLayer | null = null
+  private readonly _rateSlider: SliderRegion
+  private _running:       boolean = false
+  private _lastAutoFire:  number | null = null
+  private _playBtnBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // ── Proximity detection state ───────────────────────────
   private _threshold:      number | null = null   // calibrated minimum distance
@@ -104,7 +121,7 @@ export class EventLayer extends Layer implements EventSource {
 
   constructor() {
     super()
-    this._rateSlot     = new ParameterSlot(ValueType.Amount, this, 'rate')
+    this._rateSlot     = new ParameterSlot(ValueType.Rate, this, 'tempo')
     this._animPathSlot = new ParameterSlot(ValueType.Point,  this, 'anim path')
     this._targetSlot   = new ParameterSlot(ValueType.Point,  this, 'target')
     this._imageASlot   = new ParameterSlot(ValueType.Image,  this, 'image A', true)
@@ -116,6 +133,7 @@ export class EventLayer extends Layer implements EventSource {
 
     this._probe    = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE)
     this._probeCtx = this._probe.getContext('2d')!
+    this._rateSlider = new SliderRegion(this, hzToSlider(1.0))
 
     this.debugName = 'EventLayer'
     graph.register(this)
@@ -136,6 +154,31 @@ export class EventLayer extends Layer implements EventSource {
   get targetSlot():   ParameterSlot { return this._targetSlot }
   get imageASlot():   ParameterSlot { return this._imageASlot }
   get imageBSlot():   ParameterSlot { return this._imageBSlot }
+
+  // ----------------------------------------------------------
+  // SliderRegion callback — called when user drags the rate slider
+  // ----------------------------------------------------------
+
+  setValue(v: Amount): void {
+    if (this._hiddenRate !== null) this._hiddenRate.setRateHz(sliderToHz(v))
+    this.markDirty()
+  }
+
+  // ----------------------------------------------------------
+  // Persistence
+  // ----------------------------------------------------------
+
+  override serializeState(): Record<string, unknown> {
+    return {
+      running:         this._running,
+      rateSliderValue: this._rateSlider.value,
+    }
+  }
+
+  override deserializeState(state: Record<string, unknown>): void {
+    if (typeof state.running === 'boolean')         this._running = state.running
+    if (typeof state.rateSliderValue === 'number')  this._rateSlider.setValue(state.rateSliderValue)
+  }
 
   // ----------------------------------------------------------
   // Controls
@@ -165,11 +208,35 @@ export class EventLayer extends Layer implements EventSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    // ── Mode 1: rate wrap detection ────────────────────────
+    // ── Track bound TempoLayer for the slider ───────────────
+    const boundRate = (this._rateSlot.isActive && this._rateSlot.source instanceof TempoLayer)
+      ? (this._rateSlot.source as TempoLayer) : null
+    if (boundRate !== this._hiddenRate) {
+      this._hiddenRate?.removeController(this)
+      boundRate?.addController(this)
+      this._hiddenRate = boundRate
+    }
+    if (boundRate !== null) this._rateSlider.setValue(hzToSlider(boundRate.getRate()))
+
+    // ── Mode 1: rate slot wrap detection (gated by play) ───
     if (this._rateSlot.isActive) {
       const phase = (this._rateSlot.source as AmountSource).getAmount() as Amount
-      if (phase < this._prevPhase - 0.5) this._eventTime = performance.now()
+      if (this._running && phase < this._prevPhase - 0.5) this._eventTime = performance.now()
       this._prevPhase = phase
+    }
+
+    // ── Mode 1b: internal timer when no rate slot bound ────
+    if (this._running && !this._rateSlot.isActive) {
+      const now = performance.now()
+      const intervalMs = 1000 / sliderToHz(this._rateSlider.value)
+      if (this._lastAutoFire === null) this._lastAutoFire = now - intervalMs
+      if (now - this._lastAutoFire >= intervalMs) {
+        this._eventTime    = now
+        this._lastAutoFire = now
+      }
+      queueMicrotask(() => this.forceDirty())
+    } else if (!this._running) {
+      this._lastAutoFire = null
     }
 
     // ── Mode 2: proximity detection ────────────────────────
@@ -478,18 +545,200 @@ export class EventLayer extends Layer implements EventSource {
   }
 
   // ----------------------------------------------------------
-  // Rendering — slot rows (two pills: event triggers + collision)
+  // Rendering — slot rows (three pills: rate+slider, proximity, collision)
   // ----------------------------------------------------------
 
   override renderSlots(ctx: Ctx2D): void {
     if (this.slots.length === 0) return
     this._slotBounds.clear()
-    const y1 = this.renderSlotGroup(
-      ctx,
-      [this._rateSlot, this._animPathSlot, this._targetSlot],
-      this.panelBottom,
-    )
-    this.renderSlotGroup(ctx, [this._imageASlot, this._imageBSlot], y1 + 8)
+
+    const PANEL_X = contentLeft(Node.canvasWidth)
+    const PANEL_W = panelWidth(Node.canvasWidth)
+    const drag    = Node.bindDrag
+
+    let y = this.panelBottom
+
+    // ── Pill 1: rate slider + play/pause + rate slot row ────
+    {
+      const combinedH = SLIDER_H + SLOT_H
+      const rateSlotY = y + SLIDER_H
+
+      ctx.save()
+      ctx.font         = '10px monospace'
+      ctx.textBaseline = 'middle'
+
+      // Backdrop
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(PANEL_X, y, PANEL_W, combinedH, 6)
+      ctx.fill()
+
+      // Rate slider
+      const btnAreaW = BTN_M + BTN + BTN_M
+      const hzTextW  = 56
+      this._rateSlider.bounds = {
+        x:      PANEL_X + 10,
+        y:      y + 4,
+        width:  Math.max(0, PANEL_W - 10 - hzTextW - btnAreaW - 4),
+        height: SLIDER_H - 8,
+      }
+      this._rateSlider.renderSelf(ctx)
+
+      // Hz readout
+      const hz = this._hiddenRate !== null
+        ? this._hiddenRate.getRate()
+        : sliderToHz(this._rateSlider.value)
+      ctx.fillStyle = 'rgba(255,255,255,0.75)'
+      ctx.textAlign = 'right'
+      ctx.fillText(Math.round(hz * 60) + ' BPM', PANEL_X + PANEL_W - btnAreaW - 4, y + SLIDER_H / 2)
+
+      // Play/pause button
+      const pbtnX = PANEL_X + PANEL_W - BTN_M - BTN
+      const pbtnY = y + (SLIDER_H - BTN) / 2
+      this._playBtnBounds = { x: pbtnX, y: pbtnY, width: BTN, height: BTN }
+      ctx.fillStyle = this._running ? ACCENT + '33' : 'rgba(255,255,255,0.08)'
+      ctx.beginPath()
+      ctx.roundRect(pbtnX, pbtnY, BTN, BTN, 4)
+      ctx.fill()
+      ctx.fillStyle = this._running ? ACCENT : 'rgba(255,255,255,0.50)'
+      drawIcon(ctx, this._running ? 'pause' : 'play',
+        pbtnX + BTN / 2, y + SLIDER_H / 2, BTN - 8)
+
+      // Rate slot row (manual render — inside shared backdrop)
+      const slot     = this._rateSlot
+      const isCompat = drag.active && drag.source !== null && slot.type !== null
+                    && drag.source.types.has(slot.type)
+
+      this._slotBounds.set(slot, { x: PANEL_X, y: rateSlotY, width: PANEL_W, height: SLOT_H })
+
+      ctx.fillStyle = 'rgba(255,255,255,0.62)'
+      ctx.textAlign = 'left'
+      ctx.fillText(slot.label, PANEL_X + 6, rateSlotY + SLOT_H / 2)
+
+      const vx  = PANEL_X + LABEL_W
+      const vw  = PANEL_W - LABEL_W - 2
+      const bby = rateSlotY + 3
+      const bh  = SLOT_H - 6
+
+      if (slot.isActive && !isCompat) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = RATE_TC + '22'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = RATE_TC + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+        ctx.fillText(srcName, vx + 6, rateSlotY + SLOT_H / 2)
+      } else if (isCompat) {
+        ctx.fillStyle = 'rgba(50,200,70,0.18)'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+        ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, rateSlotY + SLOT_H / 2)
+      } else if (slot.state === SlotState.SuspendedBound) {
+        const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+        ctx.fillStyle = RATE_TC + '11'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+        ctx.fillText('⏸ ' + srcName, vx + 6, rateSlotY + SLOT_H / 2)
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+        ctx.setLineDash([3, 3])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.setLineDash([])
+        ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+        ctx.fillText('unbound', vx + 6, rateSlotY + SLOT_H / 2)
+      }
+
+      ctx.restore()
+      y += combinedH + SLOT_GAP
+    }
+
+    // ── Pill 2: anim path + target ───────────────────────────
+    const y2 = this.renderSlotGroup(ctx, [this._animPathSlot, this._targetSlot], y) + SLOT_GAP
+
+    // ── Pill 3: collision (image A + B) with heading ─────────
+    {
+      const HEAD_H = 18
+      const cSlots = [this._imageASlot, this._imageBSlot]
+      const totalH = HEAD_H + cSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
+      const IMAGE_TC = '#7ecf7e'
+
+      ctx.save()
+      ctx.textBaseline = 'middle'
+
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(PANEL_X, y2, PANEL_W, totalH, 6)
+      ctx.fill()
+
+      ctx.font      = '9px monospace'
+      ctx.fillStyle = 'rgba(255,255,255,0.38)'
+      ctx.textAlign = 'left'
+      ctx.fillText('collision', PANEL_X + 8, y2 + HEAD_H / 2)
+
+      let rowY = y2 + HEAD_H
+      for (const slot of cSlots) {
+        const isCompat = (drag.active && drag.source !== null && slot.type !== null
+                       && drag.source.types.has(slot.type))
+                      || (Node.fileDragActive && slot.type === ValueType.Image
+                       && slot.state === SlotState.Unbound)
+
+        this._slotBounds.set(slot, { x: PANEL_X, y: rowY, width: PANEL_W, height: SLOT_H })
+
+        ctx.font      = '10px monospace'
+        ctx.fillStyle = 'rgba(255,255,255,0.62)'
+        ctx.textAlign = 'left'
+        ctx.fillText(slot.label, PANEL_X + 6, rowY + SLOT_H / 2)
+
+        const vx  = PANEL_X + LABEL_W
+        const vw  = PANEL_W - LABEL_W - 2
+        const bby = rowY + 3
+        const bh  = SLOT_H - 6
+
+        if (slot.isActive && !isCompat) {
+          const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+          ctx.fillStyle = IMAGE_TC + '22'
+          ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+          ctx.strokeStyle = IMAGE_TC + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+          ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+          ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+          ctx.fillText(srcName, vx + 6, rowY + SLOT_H / 2)
+        } else if (isCompat) {
+          ctx.fillStyle = 'rgba(50,200,70,0.18)'
+          ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+          ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+          ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+          ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+          ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, rowY + SLOT_H / 2)
+        } else if (slot.state === SlotState.SuspendedBound) {
+          const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+          ctx.fillStyle = IMAGE_TC + '11'
+          ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+          ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+          ctx.setLineDash([3, 3])
+          ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+          ctx.setLineDash([])
+          ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+          ctx.fillText('⏸ ' + srcName, vx + 6, rowY + SLOT_H / 2)
+        } else {
+          ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+          ctx.setLineDash([3, 3])
+          ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+          ctx.setLineDash([])
+          ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+          ctx.fillText('unbound', vx + 6, rowY + SLOT_H / 2)
+        }
+
+        rowY += SLOT_H + SLOT_GAP
+      }
+
+      ctx.restore()
+    }
   }
 
   // ----------------------------------------------------------
@@ -506,12 +755,21 @@ export class EventLayer extends Layer implements EventSource {
       this.clearEvent()
       return true
     }
+    if (this._playBtnBounds && boundingBoxContains(this._playBtnBounds, point)) {
+      this._running = !this._running
+      if (!this._running) this._lastAutoFire = null
+      this.markDirty()
+      return true
+    }
     return false
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
-      ? this : null
+    if (this._cpBounds && boundingBoxContains(this._cpBounds, point)) return this
+    if (this._playBtnBounds && boundingBoxContains(this._playBtnBounds, point)) return this
+    const sliderHit = this._rateSlider.hitTest(point)
+    if (sliderHit !== null) return sliderHit
+    return null
   }
 
   // ----------------------------------------------------------

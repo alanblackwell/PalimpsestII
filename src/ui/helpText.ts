@@ -38,7 +38,7 @@ const HELP: Record<string, HelpEntry> = {
     paragraphs: [
       'Drives a Point around the perimeter of any shape (Rect, Ellipse, Path) over time, producing a Point value that other layers can bind to.',
       'The path shape comes from the shape slot; speed comes from the rate slot. Both are created automatically when you add this layer.',
-      'The phase slider sets the starting position around the path (0 = beginning, 1 = full cycle). Bind a Rate layer to the rate slot to control speed.',
+      'The tempo slider sets the starting position around the path (0 = beginning, 1 = full cycle). Bind a Tempo layer to the tempo slot to control speed.',
     ],
   },
   Capture: {
@@ -94,7 +94,7 @@ const HELP: Record<string, HelpEntry> = {
     paragraphs: [
       'The global time source. Produces a steadily increasing Amount value (seconds elapsed) that drives animation throughout the stack.',
       'Press P to pause or resume the clock. There is only one Clock and it cannot be deleted — it is always evaluating.',
-      'Bind the Clock to a Rate layer\'s time slot to produce a cyclical phase value for animations.',
+      'Bind the Clock to a Tempo layer\'s time slot to produce a cyclical phase value for animations.',
     ],
   },
   Collection: {
@@ -156,9 +156,11 @@ const HELP: Record<string, HelpEntry> = {
   Event: {
     title: 'Event layer',
     paragraphs: [
-      'Generates a discrete event pulse. Click the ● button to fire a single pulse; any layer with an Event slot can receive it.',
-      'Bind to shutter slots (CaptureLayer), reset slots (CountLayer), toggle slots, or any other Event-typed input.',
-      'The event timestamp advances each time the button is pressed, so bound consumers see a new rising edge.',
+      'Generates a discrete event pulse. Use the ⚡ button to fire a single pulse manually, or press ▶ to fire repeatedly at the interval set by the rate slider.',
+      'Bind a Tempo layer to the tempo slot to drive the interval from a shared clock — the slider on the Event layer will then also control that Tempo\'s speed.',
+      'Bind an AnimPath and a target Point to the proximity slots to fire once per cycle when the path makes its closest approach to the target.',
+      'Bind two image-producing layers to the collision slots to fire whenever their visible pixels overlap. The event fires on the rising edge only — once per contact.',
+      'Connect to shutter slots (Capture), reset slots (Count), toggle slots (AnimPath run mode), or any other Event-typed input.',
     ],
   },
   Fill: {
@@ -221,7 +223,7 @@ const HELP: Record<string, HelpEntry> = {
     title: 'Media layer',
     paragraphs: [
       'Plays back a video file loaded from disk. Use the file button to load a video; playback controls appear in the panel.',
-      'Scrub, loop, and play/pause the video. Bind a Rate or Clock to the position slot for synchronised playback.',
+      'Scrub, loop, and play/pause the video. Bind a Tempo or Clock to the position slot for synchronised playback.',
       'Exposes the current video frame as an Image, so it can feed into Composite, Filter, Clip, or Motion Blur layers.',
     ],
   },
@@ -265,12 +267,12 @@ const HELP: Record<string, HelpEntry> = {
       'Bind to any Point-typed slot — shape centres, animation path origins, transformation pivots, etc.',
     ],
   },
-  Rate: {
-    title: 'Rate layer',
+  Tempo: {
+    title: 'Tempo layer',
     paragraphs: [
-      'Converts the global Clock value into a cyclical 0–1 phase value, driving animations. The rate slider controls cycles per second.',
-      'The time slot is auto-bound to the Clock at creation. The phase output drives Animation Path, Noise, and other time-dependent layers.',
-      'Adjust the rate slider to speed up or slow down any animation connected to this layer\'s output.',
+      'Converts the global Clock into a cyclical 0–1 phase value at a musical tempo. The slider controls speed in BPM, with conventional metronome markings from Larghissimo to Prestissimo.',
+      'The time slot is auto-bound to the Clock at creation. The phase output drives Animate, Event, Noise, and any other layer with a tempo slot.',
+      'When a Tempo layer is bound to an Animate or Event layer, the slider on that layer also controls this Tempo\'s BPM — the "responds to" pill lists all such controllers.',
     ],
   },
   Rect: {
