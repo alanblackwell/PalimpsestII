@@ -336,6 +336,27 @@ export class MenuLayer extends Layer {
       }
     }
 
+    // Inherit typography from the nearest TextLayer below the menu, subject to
+    // the same most-recently-created guard as stroke width above.
+    {
+      let candidate:  TextLayer | null = null
+      let newest:     TextLayer | null = null
+      let scan: Layer | null = below
+      while (scan !== null) {
+        if (scan instanceof TextLayer) {
+          if (candidate === null) candidate = scan
+          if (newest === null || scan.creationIndex > newest.creationIndex) newest = scan
+        }
+        scan = scan.layerBelow
+      }
+      if (candidate !== null && candidate === newest) {
+        Node.defaultFontFamily = candidate.fontFamily
+        Node.defaultTextSize   = candidate.manualSize
+        Node.defaultBold       = candidate.bold
+        Node.defaultItalic     = candidate.italic
+      }
+    }
+
     const newLayer = btn.factory!(vw / 2, vh / 2, vw, vh)
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { ...this.bounds, height: btn.height ?? this.bounds.height }

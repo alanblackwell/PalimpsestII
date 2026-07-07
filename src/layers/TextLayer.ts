@@ -176,10 +176,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _text: string = ''
 
   // Typography (manual, persisted across recomputes)
-  private _fontFamily: string = 'sans-serif'
-  private _bold:       boolean    = false
-  private _italic:     boolean    = false
-  private _manualSize: number     = DEFAULT_SIZE
+  private _fontFamily: string  = Node.defaultFontFamily
+  private _bold:       boolean = Node.defaultBold
+  private _italic:     boolean = Node.defaultItalic
+  private _manualSize: number  = Node.defaultTextSize
 
   // Resolved values (overwritten each recompute)
   private _position: Point  = { x: 400, y: 300 }
@@ -260,6 +260,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get maskSlot():     ParameterSlot { return this._maskSlot     }
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
   get opacitySlot():  ParameterSlot { return this._opacitySlot  }
+
+  get fontFamily(): string  { return this._fontFamily }
+  get bold():       boolean { return this._bold       }
+  get italic():     boolean { return this._italic     }
+  get manualSize(): number  { return this._manualSize }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding

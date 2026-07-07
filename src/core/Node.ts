@@ -169,6 +169,10 @@ export abstract class Node {
   static outlineDefault    = false
   static greyDefault       = false
   static defaultStrokeWidth = 2
+  static defaultFontFamily  = 'sans-serif'
+  static defaultTextSize    = 48
+  static defaultBold        = false
+  static defaultItalic      = false
 
   // Monotonically increasing counter — incremented on every Node construction.
   // Used to distinguish "most recently created" from "topmost in stack" after
