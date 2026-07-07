@@ -203,9 +203,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _maskRows: Scanline[] | null = null
   // Bounding box of the sampled mask (unrotated frame), updated alongside _maskRows.
   private _maskBBox: { minX: number; maxX: number; minY: number; maxY: number } | null = null
+  // Tight bbox of the actual rendered text content within the mask (unrotated frame).
+  // Updated every recompute() when _maskRows is set.
+  private _textContentBBox: typeof this._maskBBox = null
   // Cached copies retained when the mask slot is suspended.
   private _cachedMaskRows: Scanline[] | null = null
-  private _cachedMaskBBox: typeof this._maskBBox     = null
+  private _cachedMaskBBox: typeof this._maskBBox = null
 
   // White-on-transparent silhouette of the rendered text, rebuilt every
   // recompute() — used as this layer's own MaskSource output (getMask()),
@@ -218,9 +221,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _imageCanvas: OffscreenCanvas
 
   // Mask convenience button
-  private _addMaskDone = false
+  private _addMaskDone  = false
   private _onAddMask: (() => void) | null = null
   setOnAddMask(fn: () => void): void { this._onAddMask = fn }
+
+  private _addPointDone = false
+  private _onAddPoint: (() => void) | null = null
+  setOnAddPoint(fn: () => void): void { this._onAddPoint = fn }
 
   // Direct-manipulation state (persist across recompute when slots unbound)
   private _rotation:       number       = 0
@@ -341,10 +348,57 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   getMask(): MaskValue { return this._maskCanvas }
 
+  // ── Reference points (for PointLayer shape binding and endpoint snap) ──
+
+  // 9-point grid (TL, T, TR, R, BR, B, BL, L, C) from the text content bbox
+  // (masked) or from the text half-extents about _position (unmasked). Rotation-aware.
+  getRefPoints(): Point[] {
+    let raw: Point[]
+    const bb = this._textContentBBox
+    if (bb !== null) {
+      const mx = (bb.minX + bb.maxX) / 2, my = (bb.minY + bb.maxY) / 2
+      raw = [
+        { x: bb.minX, y: bb.minY }, { x: mx, y: bb.minY }, { x: bb.maxX, y: bb.minY },
+        { x: bb.maxX, y: my      },
+        { x: bb.maxX, y: bb.maxY }, { x: mx, y: bb.maxY }, { x: bb.minX, y: bb.maxY },
+        { x: bb.minX, y: my      },
+        { x: mx,      y: my      },
+      ]
+    } else {
+      const { x, y } = this._position
+      const hw = this._textHalfW, hh = this._textHalfH
+      raw = [
+        { x: x - hw, y: y - hh }, { x,     y: y - hh }, { x: x + hw, y: y - hh },
+        { x: x + hw, y          },
+        { x: x + hw, y: y + hh }, { x,     y: y + hh }, { x: x - hw, y: y + hh },
+        { x: x - hw, y          },
+        { x,         y          },
+      ]
+    }
+    if (this._rotation === 0) return raw
+    const cx = Node.canvasWidth / 2, cy = Node.canvasHeight / 2
+    const cos = Math.cos(this._rotation), sin = Math.sin(this._rotation)
+    return raw.map(({ x, y }) => {
+      const dx = x - cx, dy = y - cy
+      return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+    })
+  }
+
   override getSnapBounds() {
+    const bb = this._textContentBBox
+    if (bb !== null) {
+      if (this._rotation === 0) return { minX: bb.minX, maxX: bb.maxX, minY: bb.minY, maxY: bb.maxY }
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+      for (const p of this.getRefPoints()) {
+        if (p.x < minX) minX = p.x;  if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y;  if (p.y > maxY) maxY = p.y
+      }
+      return { minX, maxX, minY, maxY }
+    }
+    // Unmasked: AABB derived from text half-extents
     const { x, y } = this._position
     const cosA = Math.cos(this._rotation), sinA = Math.sin(this._rotation)
-    const hw   = this._textHalfW,          hh   = this._textHalfH
+    const hw = this._textHalfW, hh = this._textHalfH
     const extX = Math.abs(hw * cosA) + Math.abs(hh * sinA)
     const extY = Math.abs(hw * sinA) + Math.abs(hh * cosA)
     return { minX: x - extX, maxX: x + extX, minY: y - extY, maxY: y + extY }
@@ -730,6 +784,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       rotation:          this._rotation,
       colour:            this._colour,
       addMaskDone:       this._addMaskDone,
+      addPointDone:      this._addPointDone,
       justify:           this._justify,
       vJustify:          this._vJustify,
       manualLineSpacing: this._manualLineSpacing,
@@ -755,7 +810,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._isDefaultText = typeof state.isDefaultText === 'boolean'
       ? state.isDefaultText
       : (this._text === 'Hello')
-    if (typeof state.addMaskDone === 'boolean') this._addMaskDone = state.addMaskDone
+    if (typeof state.addMaskDone  === 'boolean') this._addMaskDone  = state.addMaskDone
+    if (typeof state.addPointDone === 'boolean') this._addPointDone = state.addPointDone
     if (state.justify === 'left' || state.justify === 'center' || state.justify === 'right' || state.justify === 'justify') {
       this._justify = state.justify
     }
@@ -823,6 +879,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     this._updateMaskCanvas()
     this._updateImageCanvas()
+
+    // Tight bbox of placed text lines (unrotated frame); used for ref points.
+    this._textContentBBox = this._maskRows !== null ? this._computeTextBBoxInMask() : null
 
     // Update text half-extents used for getSnapBounds and position-handle snap.
     // Use the actual word-wrapped lines (not raw paragraphs) so long text that
@@ -1007,6 +1066,14 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
         this._addMaskDone = true
         this._onAddMask()
+        return true
+      }
+    }
+    if (!this._addPointDone && this._onAddPoint !== null) {
+      const { x, y, w, h } = this._ptBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addPointDone = true
+        this._onAddPoint()
         return true
       }
     }
@@ -1216,6 +1283,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       const { x, y, w, h } = this._maskBtnRect()
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
     }
+    if (!this._addPointDone && this._onAddPoint !== null) {
+      const { x, y, w, h } = this._ptBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
@@ -1276,32 +1347,51 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._renderEditOverlay(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
     this._renderMaskBtn(ctx)
+    this._renderPtBtn(ctx)
   }
 
-  private _maskBtnRect() {
-    const BTN_W = 60, BTN_H = 30, GAP = 14
-    const left  = contentLeft(Node.canvasWidth)
-    const x     = left + Math.max(0, (Node.viewportWidth - left - BTN_W) / 2)
-    return { x, y: Node.viewportHeight - BTN_H - GAP, w: BTN_W, h: BTN_H }
+  private _textBtnRect(which: 'mask' | 'point') {
+    const POINT_W = 55, MASK_W = 60, BTN_H = 30, GAP = 14, SEP = 8
+    const left = contentLeft(Node.canvasWidth)
+    const y    = Node.viewportHeight - BTN_H - GAP
+    const showP = !this._addPointDone && this._onAddPoint !== null
+    const showM = !this._addMaskDone  && this._onAddMask  !== null
+    if (showP && showM) {
+      const total  = POINT_W + SEP + MASK_W
+      const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+      return which === 'point'
+        ? { x: startX,                 y, w: POINT_W, h: BTN_H }
+        : { x: startX + POINT_W + SEP, y, w: MASK_W,  h: BTN_H }
+    }
+    const w = which === 'point' ? POINT_W : MASK_W
+    return { x: left + Math.max(0, (Node.viewportWidth - left - w) / 2), y, w, h: BTN_H }
   }
+  private _maskBtnRect()  { return this._textBtnRect('mask') }
+  private _ptBtnRect()    { return this._textBtnRect('point') }
 
-  private _renderMaskBtn(ctx: Ctx2D): void {
-    if (this._addMaskDone || this._onAddMask === null) return
-    const { x, y, w, h } = this._maskBtnRect()
-    const midY = y + h / 2
+  private _renderConvBtn(ctx: Ctx2D, which: 'mask' | 'point'): void {
+    const done     = which === 'mask' ? this._addMaskDone  : this._addPointDone
+    const callback = which === 'mask' ? this._onAddMask    : this._onAddPoint
+    if (done || callback === null) return
+    const { x, y, w, h } = this._textBtnRect(which)
+    const midY  = y + h / 2
+    const col   = which === 'mask'  ? '#cfcf7ecc' : '#cf7ecfcc'
+    const label = which === 'mask'  ? 'Mask'       : 'Point'
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
-    ctx.fillStyle = '#cfcf7ecc'
+    ctx.fillStyle = col
     ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
     ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
     ctx.fillStyle = 'rgba(255,255,255,0.85)'
     ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.fillText('Mask', x + 10, midY)
+    ctx.fillText(label, x + 10, midY)
     ctx.restore()
     ctx.restore()
   }
+  private _renderMaskBtn(ctx: Ctx2D)  { this._renderConvBtn(ctx, 'mask')  }
+  private _renderPtBtn(ctx: Ctx2D)    { this._renderConvBtn(ctx, 'point') }
 
   // ── Main pill ─────────────────────────────────────────────────
 
@@ -1692,6 +1782,92 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     return lines
   }
 
+  // Compute the tight bounding box of the actual text lines placed within the mask
+  // (unrotated frame — same coordinate space as _maskBBox / _maskRows).
+  // Mirrors _renderMasked's layout without drawing; uses _maskCanvas context
+  // for measureText (font has been set by the just-completed _updateMaskCanvas call).
+  private _computeTextBBoxInMask(): typeof this._maskBBox {
+    const rows    = this._maskRows!
+    const lineH   = Math.max(1, Math.ceil(this._lineSpacing * this._size))
+    const h       = rows.length
+    const pad     = 6
+
+    let startY = 0
+    while (startY < h && !rows[startY]) startY++
+    if (startY >= h) return null
+
+    let endY = h - 1
+    while (endY > startY && !rows[endY]) endY--
+
+    const ctx = this._maskCanvas.getContext('2d')!
+    ctx.font = this._fontString()
+
+    let y0 = startY + this._size
+    let effectiveLineH = lineH
+
+    if (this._vJustify !== 'top') {
+      const count = this._countMaskedLines(rows, y0, lineH, ctx)
+      if (count > 0) {
+        const textSpan  = (count - 1) * lineH
+        const available = endY - y0
+        if      (this._vJustify === 'center') y0 += Math.max(0, (available - textSpan) / 2)
+        else if (this._vJustify === 'bottom') y0 += Math.max(0, available - textSpan)
+        else if (this._vJustify === 'justify' && count > 1)
+          effectiveLineH = Math.max(lineH, available / (count - 1))
+      }
+    }
+
+    const queue = this._buildWordQueue()
+    let y = y0, qi = 0
+    let firstBaseline: number | null = null, lastBaseline = y0
+    let minX = Infinity, maxX = -Infinity
+
+    while (qi < queue.length && y < h) {
+      const rowY = Math.min(h - 1, Math.floor(y))
+      const sl   = rows[rowY]
+      if (!sl || sl.w <= pad * 2) { y += effectiveLineH; continue }
+
+      const xStart = sl.x + pad, xEnd = sl.x + sl.w - pad, avail = sl.w - pad * 2
+
+      let line = ''
+      while (qi < queue.length) {
+        const word = queue[qi]!
+        if (word === null) { qi++; break }
+        const test = line ? `${line} ${word}` : word
+        if (ctx.measureText(test).width <= avail) { line = test; qi++ }
+        else { if (!line) qi++; break }
+      }
+
+      if (line) {
+        if (firstBaseline === null) firstBaseline = y
+        lastBaseline = y
+        const lineW      = ctx.measureText(line).width
+        const isParaEnd  = qi >= queue.length || queue[qi] === null
+        let lx: number, rx: number
+        if (this._justify === 'center') {
+          lx = (xStart + xEnd) / 2 - lineW / 2;  rx = lx + lineW
+        } else if (this._justify === 'right') {
+          rx = xEnd;  lx = rx - lineW
+        } else if (this._justify === 'justify' && !isParaEnd) {
+          lx = xStart;  rx = xEnd        // full-justify spans the whole scanline
+        } else {
+          lx = xStart;  rx = lx + lineW
+        }
+        if (lx < minX) minX = lx
+        if (rx > maxX) maxX = rx
+      }
+      y += effectiveLineH
+    }
+
+    if (firstBaseline === null) return null
+    return {
+      minX,
+      maxX,
+      minY: Math.round(firstBaseline  - this._size * 0.80),  // approx cap-height top
+      maxY: Math.round(lastBaseline   + this._size * 0.25),  // approx descender bottom
+    }
+  }
+
   // Build the flat word queue used by masked layout; null marks a paragraph break.
   private _buildWordQueue(): (string | null)[] {
     const queue: (string | null)[] = []
@@ -1918,8 +2094,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     // Move handle: when masked, shows the alignment anchor (h-justify × v-justify
     // corner/edge/centre of the mask bounding box), rotated into canvas space.
     let move: Point
-    if (masked && this._maskBBox !== null) {
-      const bb  = this._maskBBox
+    if (masked && this._textContentBBox !== null) {
+      const bb  = this._textContentBBox
       const ax  = this._justify === 'left'   ? bb.minX
                 : this._justify === 'right'  ? bb.maxX
                 : (bb.minX + bb.maxX) / 2          // centre or full-justify
@@ -2012,7 +2188,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.moveTo(hp.move.x, hp.move.y - cr)
       ctx.lineTo(hp.move.x, hp.move.y + cr)
       ctx.stroke()
-    } else if (this._maskBBox !== null) {
+    } else if (this._textContentBBox !== null) {
       // Alignment anchor indicator — crosshair only (not draggable)
       const cr = HANDLE_R + 2
       ctx.save()

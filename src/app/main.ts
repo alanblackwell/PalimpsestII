@@ -165,6 +165,7 @@ function postInsertLayer(newLayer: Layer): void {
     wireMaskButton(newLayer)
   }
   if (newLayer instanceof TextLayer)  wireTextMaskButton(newLayer)
+  if (newLayer instanceof TextLayer)  wirePointButton(newLayer)
   if (newLayer instanceof LineLayer)  wireLineMaskButton(newLayer)
   if (newLayer instanceof TraceLayer) wireTraceButtons(newLayer)
   if (newLayer instanceof ShapeLayer &&
@@ -395,7 +396,7 @@ function wireTraceButtons(layer: TraceLayer): void {
   })
 }
 
-function wirePointButton(layer: ShapeLayer | LineLayer): void {
+function wirePointButton(layer: ShapeLayer | LineLayer | TextLayer): void {
   layer.setOnAddPoint(() => {
     // Use the layer's first reference point as initial position so the binding
     // starts as a no-op (the PointLayer is already at the ref point it will drive).
@@ -866,6 +867,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (isClipShapeMovable(scanL))         wireClipShapeLayer(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wireMaskButton(scanL)
     if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
+    if (scanL instanceof TextLayer)       wirePointButton(scanL)
     if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
     if (scanL instanceof TraceLayer)      wireTraceButtons(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wirePointButton(scanL)
@@ -886,6 +888,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (isClipShapeMovable(archived))          wireClipShapeLayer(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wireMaskButton(archived)
     if (archived instanceof TextLayer)       wireTextMaskButton(archived)
+    if (archived instanceof TextLayer)       wirePointButton(archived)
     if (archived instanceof LineLayer)       wireLineMaskButton(archived)
     if (archived instanceof TraceLayer)      wireTraceButtons(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wirePointButton(archived)
