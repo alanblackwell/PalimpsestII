@@ -91,8 +91,8 @@ function bezier2(
   return out
 }
 
-export class LineLayer extends Layer implements ImageSource, MaskSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask])
+export class LineLayer extends Layer implements ImageSource, MaskSource, DirectionSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask, ValueType.Direction])
 
   readonly startSlot:     ParameterSlot
   readonly endSlot:       ParameterSlot
@@ -213,6 +213,14 @@ export class LineLayer extends Layer implements ImageSource, MaskSource {
 
   getImage(): ImageValue { return this._canvas     }
   getMask():  MaskValue  { return this._maskCanvas }
+
+  getDirection(): Direction {
+    const dx = this._renderedEnd.x - this._renderedStart.x
+    const dy = this._renderedEnd.y - this._renderedStart.y
+    const len = Math.hypot(dx, dy)
+    if (len < 0.5) return { angle: 0, magnitude: 1 }
+    return { angle: Math.atan2(dy, dx), magnitude: 1 }
+  }
 
   /** Start and end endpoints in canvas space. */
   getRefPoints(): Point[] { return [{ ...this._renderedStart }, { ...this._renderedEnd }] }

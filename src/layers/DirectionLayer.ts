@@ -85,6 +85,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // ── Dial slots ──────────────────────────────────────────────
   private readonly _positionSlot:  ParameterSlot
   private readonly _handleSlot:    ParameterSlot
+  private readonly _lineSlot:      ParameterSlot
   private readonly _magnitudeSlot: ParameterSlot
 
   // ── Rotation animation slots ─────────────────────────────────
@@ -120,14 +121,15 @@ export class DirectionLayer extends Layer implements DirectionSource {
     super()
     this._angle          = angle
     this._magnitude      = Math.max(0, Math.min(1, magnitude))
-    this._positionSlot     = new ParameterSlot(ValueType.Point,  this, 'position')
-    this._handleSlot       = new ParameterSlot(ValueType.Point,  this, 'handle')
-    this._magnitudeSlot    = new ParameterSlot(ValueType.Amount, this, 'magnitude')
-    this._rotateToggleSlot = new ParameterSlot(ValueType.Event,  this, 'rotate')
-    this._speedSlot        = new ParameterSlot(ValueType.Amount, this, 'speed')
-    this._cwSlot           = new ParameterSlot(ValueType.Event,  this, 'clockwise')
+    this._positionSlot     = new ParameterSlot(ValueType.Point,     this, 'position')
+    this._handleSlot       = new ParameterSlot(ValueType.Point,     this, 'handle')
+    this._lineSlot         = new ParameterSlot(ValueType.Direction,  this, 'line')
+    this._magnitudeSlot    = new ParameterSlot(ValueType.Amount,     this, 'magnitude')
+    this._rotateToggleSlot = new ParameterSlot(ValueType.Event,      this, 'rotate')
+    this._speedSlot        = new ParameterSlot(ValueType.Amount,     this, 'speed')
+    this._cwSlot           = new ParameterSlot(ValueType.Event,      this, 'clockwise')
     this.slots.push(
-      this._positionSlot, this._handleSlot, this._magnitudeSlot,
+      this._positionSlot, this._handleSlot, this._lineSlot, this._magnitudeSlot,
       this._rotateToggleSlot, this._speedSlot, this._cwSlot,
     )
     this.displayBaseName = 'Angle'
@@ -149,6 +151,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
   get positionSlot():      ParameterSlot { return this._positionSlot      }
   get handleSlot():        ParameterSlot { return this._handleSlot        }
+  get lineSlot():          ParameterSlot { return this._lineSlot          }
   get magnitudeSlot():     ParameterSlot { return this._magnitudeSlot     }
   get rotateToggleSlot():  ParameterSlot { return this._rotateToggleSlot  }
   get speedSlot():         ParameterSlot { return this._speedSlot         }
@@ -216,6 +219,11 @@ export class DirectionLayer extends Layer implements DirectionSource {
     if (this._handleSlot.isActive) {
       const hp = (this._handleSlot.source as PointSource).getPoint()
       this._angle = Math.atan2(hp.y - this._position.y, hp.x - this._position.x)
+    }
+    // lineSlot overrides the angle from a Direction source (e.g. a LineLayer).
+    if (this._lineSlot.isActive) {
+      const dir = (this._lineSlot.source as DirectionSource).getDirection()
+      this._angle = dir.angle
     }
     if (this._magnitudeSlot.isActive) {
       this._magnitude = (this._magnitudeSlot.source as AmountSource).getAmount() as Amount
@@ -378,11 +386,11 @@ export class DirectionLayer extends Layer implements DirectionSource {
     this._renderDial(ctx)
   }
 
-  // Standard slot rows (positionSlot, handleSlot, magnitudeSlot), then the
+  // Standard slot rows (positionSlot, handleSlot, lineSlot, magnitudeSlot), then the
   // rotation-animation pill below them.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const stdSlots = [this._positionSlot, this._handleSlot, this._magnitudeSlot]
+    const stdSlots = [this._positionSlot, this._handleSlot, this._lineSlot, this._magnitudeSlot]
     this.renderSlotGroup(ctx, stdSlots, this.panelBottom)
     this._drawRotatePill(ctx)
   }
@@ -393,7 +401,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
   private _rotatePillBounds(): BBox {
     const cb   = this.canvasBounds
-    const stdH = 3 * (ROT_ROW_H + ROT_ROW_GAP) - ROT_ROW_GAP
+    const stdH = 4 * (ROT_ROW_H + ROT_ROW_GAP) - ROT_ROW_GAP
     return { x: cb.x, y: this.panelBottom + stdH + 8, width: cb.width, height: ROT_PILL_H }
   }
 
@@ -661,6 +669,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
       { slot: this._speedSlot,        label: 'spd', accent: AM_ACCENT    },
       { slot: this._rotateToggleSlot, label: 'rot', accent: EV_ACCENT    },
       { slot: this._magnitudeSlot,    label: 'mag', accent: ACCENT       },
+      { slot: this._lineSlot,         label: 'ln',  accent: ACCENT       },
       { slot: this._handleSlot,       label: 'hdl', accent: POINT_ACCENT },
       { slot: this._positionSlot,     label: 'pos', accent: POINT_ACCENT },
     ]

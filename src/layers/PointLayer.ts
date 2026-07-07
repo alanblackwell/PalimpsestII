@@ -10,6 +10,7 @@ import {
   type RateSource,
   type EventSource,
   type MaskSource, type MaskValue,
+  type CountSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -118,6 +119,7 @@ const AM_ACCENT   = '#4a8fe8'   // Amount type accent (amount slot)
 const RATE_ACCENT = '#e87e7e'   // Rate type accent (speed slot)
 const MASK_ACCENT = '#cfcf7e'   // Mask type accent (mask slot)
 const SHAPE_ACCENT = '#cfcf7e'  // Mask type accent (shape slot — Mask-typed)
+const CNT_ACCENT  = '#a0a0a0'   // Count type accent (index slot)
 const REF_COL     = '#7ecfcf'   // Teal — reference point indicator colour
 
 // Per-type value-box colour for the slot rows drawn by this layer's
@@ -128,6 +130,7 @@ const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
   [ValueType.Amount]: AM_ACCENT,
   [ValueType.Rate]:   RATE_ACCENT,
   [ValueType.Mask]:   MASK_ACCENT,
+  [ValueType.Count]:  CNT_ACCENT,
 }
 
 const SHAPE_HANDLE_HIT   = 18   // px hit radius for main handle drag when shape slot is active
@@ -186,7 +189,8 @@ export class PointLayer extends Layer implements PointSource {
   private _point: Point
 
   // Shape reference mode
-  private readonly _shapeSlot:   ParameterSlot
+  private readonly _shapeSlot:      ParameterSlot
+  private readonly _shapeIndexSlot: ParameterSlot
   private _shapeRefIndex:  number  = 0
   private _shapeEnabled:   boolean = false
   private _cachedRefPoints: Point[] = []
@@ -234,13 +238,14 @@ export class PointLayer extends Layer implements PointSource {
     this._wavePhase = Math.random() * Math.PI * 2
 
     this._shapeSlot        = new ParameterSlot(ValueType.Mask,   this, 'shape')
+    this._shapeIndexSlot   = new ParameterSlot(ValueType.Count,  this, 'index')
     this._wanderToggleSlot = new ParameterSlot(ValueType.Event,  this, 'wander')
     this._amountSlot       = new ParameterSlot(ValueType.Amount, this, 'amount')
     this._speedSlot        = new ParameterSlot(ValueType.Rate,   this, 'speed')
     this._maskSlot         = new ParameterSlot(ValueType.Mask,   this, 'mask')
 
     this.slots.push(
-      this._slot, this._shapeSlot,
+      this._slot, this._shapeSlot, this._shapeIndexSlot,
       this._wanderToggleSlot, this._amountSlot, this._speedSlot, this._maskSlot,
     )
     this.debugName = 'PointLayer'
@@ -336,9 +341,15 @@ export class PointLayer extends Layer implements PointSource {
       const src = this._shapeSlot.source as unknown
       if (typeof (src as Record<string, unknown>)['getRefPoints'] === 'function') {
         this._cachedRefPoints = ((src as Record<string, unknown>)['getRefPoints'] as () => Point[])()
-        // Clamp index in case ref count changed
-        if (this._shapeRefIndex >= this._cachedRefPoints.length) {
-          this._shapeRefIndex = Math.max(0, this._cachedRefPoints.length - 1)
+        const n = this._cachedRefPoints.length
+        if (n > 0) {
+          if (this._shapeIndexSlot.isActive) {
+            // Index slot drives the ref selection; spinner becomes read-only display.
+            const count = (this._shapeIndexSlot.source as CountSource).getCount()
+            this._shapeRefIndex = count % n
+          } else if (this._shapeRefIndex >= n) {
+            this._shapeRefIndex = n - 1
+          }
         }
       } else {
         this._cachedRefPoints = []
@@ -1215,9 +1226,17 @@ export class PointLayer extends Layer implements PointSource {
     // Row 0 — shape slot binding row
     this._renderSlotRow(ctx, this._shapeSlot, this._shapeRow(0))
 
-    // Row 1 — index spinner (only when slot is bound and source has ref points)
-    if (this._shapeSlot.isActive && this._cachedRefPoints.length > 0) {
-      this._renderShapeSpinnerRow(ctx, this._shapeRow(1))
+    if (this._shapeSlot.isActive) {
+      // Row 1 — index spinner (only when source has ref points)
+      if (this._cachedRefPoints.length > 0) {
+        this._renderShapeSpinnerRow(ctx, this._shapeRow(1))
+      } else {
+        this._shapeSpinnerPrev = null
+        this._shapeSpinnerNext = null
+      }
+
+      // Row 2 — index slot (Count binding to drive ref selection programmatically)
+      this._renderSlotRow(ctx, this._shapeIndexSlot, this._shapeRow(2))
     } else {
       this._shapeSpinnerPrev = null
       this._shapeSpinnerNext = null
@@ -1353,10 +1372,10 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   // Shape binding pill — directly below the Point-binding row.
-  // Height: 1 row (unbound) or 2 rows (bound, adds spinner).
+  // Height: 1 row (unbound) or 3 rows (bound: shape slot + spinner + index slot).
   private _shapePillBounds(): BBox {
     const pb = this._pointSlotPillBounds()
-    const nRows = this._shapeSlot.isActive ? 2 : 1
+    const nRows = this._shapeSlot.isActive ? 3 : 1
     const h = PILL_PAD * 2 + nRows * ROW_H + (nRows - 1) * ROW_GAP
     return { x: pb.x, y: pb.y + pb.height + 8, width: pb.width, height: h }
   }
