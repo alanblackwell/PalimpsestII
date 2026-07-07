@@ -184,7 +184,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _bold:              boolean                  = Node.defaultBold
   private _italic:            boolean                  = Node.defaultItalic
   private _manualSize:        number                   = Node.defaultTextSize
-  private _justify:           'left' | 'center' | 'right' = Node.defaultJustify
+  private _justify:           'left' | 'center' | 'right' | 'justify' = Node.defaultJustify
+  private _vJustify:          'top' | 'center' | 'bottom' | 'justify' = Node.defaultVJustify
   private _manualLineSpacing: number                   = Node.defaultLineSpacing
 
   // Resolved each recompute (from slot or manual)
@@ -200,6 +201,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   // Scanline data sampled from the mask (null = no mask / not yet sampled)
   private _maskRows: Scanline[] | null = null
+  // Bounding box of the sampled mask (unrotated frame), updated alongside _maskRows.
+  private _maskBBox: { minX: number; maxX: number; minY: number; maxY: number } | null = null
+  // Cached copies retained when the mask slot is suspended.
+  private _cachedMaskRows: Scanline[] | null = null
+  private _cachedMaskBBox: typeof this._maskBBox     = null
 
   // White-on-transparent silhouette of the rendered text, rebuilt every
   // recompute() — used as this layer's own MaskSource output (getMask()),
@@ -278,26 +284,38 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get bold():              boolean                      { return this._bold              }
   get italic():            boolean                      { return this._italic            }
   get manualSize():        number                       { return this._manualSize        }
-  get justify():           'left' | 'center' | 'right' { return this._justify           }
+  get justify():  'left' | 'center' | 'right' | 'justify'  { return this._justify  }
+  get vJustify(): 'top'  | 'center' | 'bottom' | 'justify' { return this._vJustify }
   get manualLineSpacing(): number                       { return this._manualLineSpacing }
   get lineSpacingSlot():   ParameterSlot                { return this._lineSpacingSlot   }
 
-  setJustify(newJustify: 'left' | 'center' | 'right'): void {
+  setJustify(newJustify: 'left' | 'center' | 'right' | 'justify'): void {
     const old = this._justify
     if (old === newJustify) return
 
-    // Without a binding, shift _manualPosition so text stays in place visually:
-    // the anchor moves from the old edge to the new edge of the text bounding box.
+    // Without a binding, shift _manualPosition so text stays in place visually.
+    // 'justify' shares 'left' semantics: anchor is the left edge of the text block.
     if (!this._positionSlot.isActive && this._manualPosition !== null) {
       const ax = this._manualPosition.x
       const hw = this._textHalfW
-      const cx = old === 'center' ? ax : old === 'left' ? ax + hw : ax - hw
-      const newAx = newJustify === 'center' ? cx : newJustify === 'left' ? cx - hw : cx + hw
+      const cx = old === 'center' ? ax
+               : (old === 'left' || old === 'justify') ? ax + hw
+               : ax - hw   // 'right'
+      const newAx = newJustify === 'center' ? cx
+                  : (newJustify === 'left' || newJustify === 'justify') ? cx - hw
+                  : cx + hw   // 'right'
       this._manualPosition = { x: newAx, y: this._manualPosition.y }
     }
 
     this._justify = newJustify
     Node.defaultJustify = newJustify
+    this.markDirty()
+  }
+
+  setVJustify(v: 'top' | 'center' | 'bottom' | 'justify'): void {
+    if (this._vJustify === v) return
+    this._vJustify = v
+    Node.defaultVJustify = v
     this.markDirty()
   }
 
@@ -449,6 +467,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   toggleItalic(): void { this._italic = !this._italic; this.markDirty() }
 
   adjustSize(delta: number): void {
+    if (this._maskSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this._maskSlot)?.toggle()
+      this._manualSize = Math.round(this._size)  // seed from auto-fitted size
+    }
     this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, this._manualSize + delta))
     this.markDirty()
   }
@@ -709,6 +731,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       colour:            this._colour,
       addMaskDone:       this._addMaskDone,
       justify:           this._justify,
+      vJustify:          this._vJustify,
       manualLineSpacing: this._manualLineSpacing,
     }
   }
@@ -733,8 +756,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ? state.isDefaultText
       : (this._text === 'Hello')
     if (typeof state.addMaskDone === 'boolean') this._addMaskDone = state.addMaskDone
-    if (state.justify === 'left' || state.justify === 'center' || state.justify === 'right') {
+    if (state.justify === 'left' || state.justify === 'center' || state.justify === 'right' || state.justify === 'justify') {
       this._justify = state.justify
+    }
+    if (state.vJustify === 'top' || state.vJustify === 'center' || state.vJustify === 'bottom' || state.vJustify === 'justify') {
+      this._vJustify = state.vJustify
     }
     if (typeof state.manualLineSpacing === 'number') this._manualLineSpacing = state.manualLineSpacing
   }
@@ -774,11 +800,25 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       const mask = (this._maskSlot.source as MaskSource).getMask()
       if (mask !== null) {
         this._sampleMask(mask as OffscreenCanvas)
+        this._cachedMaskRows = this._maskRows
+        this._cachedMaskBBox = this._maskBBox
+        // Auto-fit: find the largest font size where all text fits the mask.
+        const mctx = this._maskCanvas.getContext('2d')!
+        this._size = this._autoFitSize(this._maskRows!, mctx)
       } else {
         this._maskRows = null
+        this._maskBBox = null
       }
+    } else if (this._maskSlot.state === SlotState.SuspendedBound && this._cachedMaskRows !== null) {
+      // Mask binding suspended by the user (manual size override); keep the
+      // cached scanlines so text continues to flow within the shape.
+      this._maskRows = this._cachedMaskRows
+      this._maskBBox = this._cachedMaskBBox
     } else {
       this._maskRows = null
+      this._maskBBox = null
+      this._cachedMaskRows = null
+      this._cachedMaskBBox = null
     }
 
     this._updateMaskCanvas()
@@ -856,7 +896,6 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // by _rotation.
   private _sampleMask(mask: OffscreenCanvas): void {
     const w = mask.width, h = mask.height
-    // Copy mask to a temp canvas to avoid touching its rendering context state.
     const tmp  = new OffscreenCanvas(w, h)
     const tctx = tmp.getContext('2d')!
     if (this._rotation !== 0) {
@@ -866,6 +905,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     }
     tctx.drawImage(mask as CanvasImageSource, 0, 0)
     const { data } = tctx.getImageData(0, 0, w, h)
+
+    let bMinX = w, bMaxX = -1, bMinY = h, bMaxY = -1
     this._maskRows = Array.from({ length: h }, (_, y) => {
       let minX = w, maxX = -1
       const base = y * w * 4
@@ -875,19 +916,85 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
           if (x > maxX) maxX = x
         }
       }
+      if (maxX >= 0) {
+        if (y   < bMinY) bMinY = y
+        if (y   > bMaxY) bMaxY = y
+        if (minX < bMinX) bMinX = minX
+        if (maxX > bMaxX) bMaxX = maxX
+      }
       return maxX >= 0 ? { x: minX, w: maxX - minX + 1 } : null
     })
+    this._maskBBox = bMaxY >= 0
+      ? { minX: bMinX, maxX: bMaxX + 1, minY: bMinY, maxY: bMaxY }
+      : null
+  }
+
+  // Binary-search for the largest integer font size [MIN_SIZE, MAX_SIZE] at
+  // which all of _text fits within the mask scanlines.  Returns MIN_SIZE if
+  // even the smallest size overflows (text is not hidden, just not auto-fit).
+  private _autoFitSize(rows: Scanline[], ctx: OffscreenCanvasRenderingContext2D): number {
+    let lo = MIN_SIZE, hi = MAX_SIZE, best = MIN_SIZE
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      if (this._textFitsInMask(mid, rows, ctx)) { best = mid; lo = mid + 1 }
+      else hi = mid - 1
+    }
+    return best
+  }
+
+  // Returns true if all words in _text can be placed by the masked greedy
+  // word-wrap algorithm at the given font size.  Mirrors _renderMasked without
+  // drawing — used by _autoFitSize to evaluate candidate sizes.
+  private _textFitsInMask(size: number, rows: Scanline[], ctx: OffscreenCanvasRenderingContext2D): boolean {
+    const lineH = Math.max(1, Math.ceil(this._lineSpacing * size))
+    const h     = rows.length
+    const pad   = 6
+
+    ctx.font = this._fontString(size)
+
+    let startY = 0
+    while (startY < h && !rows[startY]) startY++
+    if (startY >= h) return true   // empty mask — trivially fits
+
+    const queue = this._buildWordQueue()
+
+    let y = startY + size
+    let qi = 0
+
+    while (qi < queue.length && y < h) {
+      const rowY     = Math.min(h - 1, Math.floor(y))
+      const scanline = rows[rowY]
+      if (!scanline || scanline.w <= pad * 2) { y += lineH; continue }
+
+      const avail = scanline.w - pad * 2
+      let line = ''
+      while (qi < queue.length) {
+        const word = queue[qi]!
+        if (word === null) { qi++; break }
+        const test = line ? `${line} ${word}` : word
+        if (ctx.measureText(test).width <= avail) { line = test; qi++ }
+        else { if (!line) qi++; break }   // force-place oversized single word
+      }
+      y += lineH
+    }
+
+    while (qi < queue.length && queue[qi] === null) qi++
+    return qi >= queue.length
   }
 
   // ----------------------------------------------------------
   // Panel layout
   // ----------------------------------------------------------
 
-  private get _ctrlY(): number { return 50 + this.bounds.height + CTRL_GAP }
-  private get _paraY(): number { return this._ctrlY + CTRL_H + CTRL_GAP }
+  private get _ctrlY():          number  { return 50 + this.bounds.height + CTRL_GAP }
+  private get _paraY():          number  { return this._ctrlY + CTRL_H + CTRL_GAP }
+  private get _vJustY():         number  { return this._paraY + CTRL_H + CTRL_GAP }
+  private get _hasMaskLayout():  boolean { return this._maskRows !== null || this._cachedMaskRows !== null }
 
   override get panelBottom(): number {
-    return this._paraY + CTRL_H + CTRL_GAP
+    return this._hasMaskLayout
+      ? this._vJustY + CTRL_H + CTRL_GAP
+      : this._paraY  + CTRL_H + CTRL_GAP
   }
 
   // ----------------------------------------------------------
@@ -917,27 +1024,32 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._rotSnapper.reset()
       this._drag = {
         type:       'rotate',
-        center:     { ...hp.center },
-        startAngle: Math.atan2(point.y - hp.center.y, point.x - hp.center.x),
+        center:     { ...hp.move },
+        startAngle: Math.atan2(point.y - hp.move.y, point.x - hp.move.x),
         startRot:   this._rotation,
       }
       return true
     }
 
     // Scale handle — only when sizeSlot is unbound; adjusts the manual font size.
+    // If the mask is currently auto-fitting, suspend it and seed from auto-fitted size.
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) {
+      if (this._maskSlot.state === SlotState.Bound) {
+        BindingLayer.findForSlot(this._maskSlot)?.toggle()
+        this._manualSize = Math.round(this._size)
+      }
       this._drag = {
         type:       'scale',
-        center:     { ...hp.center },
-        startDist:  Math.max(1, ptDist(point, hp.center)),
+        center:     { ...hp.move },
+        startDist:  Math.max(1, ptDist(point, hp.move)),
         startSize:  this._manualSize,
       }
       return true
     }
 
-    // Move handle — only when positionSlot is unbound and no mask is applied
-    // (masked text ignores _position entirely, so manual move has no effect).
-    if (!this._positionSlot.isActive && !this._maskSlot.isActive
+    // Move handle — only when positionSlot is unbound and no mask layout is active
+    // (_maskRows set means text is flowing within the shape; move has no effect).
+    if (!this._positionSlot.isActive && this._maskRows === null
         && ptDist(point, hp.move) <= HANDLE_HIT) {
       this._drag = {
         type:       'move',
@@ -976,11 +1088,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return false
     }
 
+    if (this._hasMaskLayout && boundingBoxContains(this._vJustPillBounds(), point)) {
+      if (boundingBoxContains(this._vJustifyT(), point)) { this.setVJustify('top');     return true }
+      if (boundingBoxContains(this._vJustifyC(), point)) { this.setVJustify('center');  return true }
+      if (boundingBoxContains(this._vJustifyB(), point)) { this.setVJustify('bottom');  return true }
+      if (boundingBoxContains(this._vJustifyJ(), point)) { this.setVJustify('justify'); return true }
+      return false
+    }
+
     if (boundingBoxContains(this._paraPillBounds(), point)) {
       // Justification buttons
-      if (boundingBoxContains(this._paraJustifyL(), point)) { this.setJustify('left');   return true }
-      if (boundingBoxContains(this._paraJustifyC(), point)) { this.setJustify('center'); return true }
-      if (boundingBoxContains(this._paraJustifyR(), point)) { this.setJustify('right');  return true }
+      if (boundingBoxContains(this._paraJustifyL(), point)) { this.setJustify('left');    return true }
+      if (boundingBoxContains(this._paraJustifyC(), point)) { this.setJustify('center');  return true }
+      if (boundingBoxContains(this._paraJustifyR(), point)) { this.setJustify('right');   return true }
+      if (boundingBoxContains(this._paraJustifyJ(), point)) { this.setJustify('justify'); return true }
       // Spacing slider — anywhere else in the pill
       this._lineSpacingSliderDrag = true
       this._setLineSpacingFromPointer(point.x)
@@ -1099,11 +1220,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const hp = this._handlePos()
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) return this
-    if (!this._positionSlot.isActive && !this._maskSlot.isActive
+    if (!this._positionSlot.isActive && this._maskRows === null
         && ptDist(point, hp.move) <= HANDLE_HIT) return this
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     if (boundingBoxContains(this._paraPillBounds(), point)) return this
+    if (this._hasMaskLayout && boundingBoxContains(this._vJustPillBounds(), point)) return this
     return null
   }
 
@@ -1123,6 +1245,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
     this._renderParaControls(ctx)
+    if (this._hasMaskLayout) this._renderVJustControls(ctx)
   }
 
   // The _lineSpacingSlot is excluded from the standard slot group and rendered
@@ -1341,14 +1464,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.fill()
 
     // Justification buttons
-    type JBtn = { b: { x: number; y: number; width: number; height: number }; val: 'left' | 'center' | 'right' }
+    type JBtn = { b: { x: number; y: number; width: number; height: number }; val: 'left' | 'center' | 'right' | 'justify' }
     const jBtns: JBtn[] = [
-      { b: this._paraJustifyL(), val: 'left'   },
-      { b: this._paraJustifyC(), val: 'center' },
-      { b: this._paraJustifyR(), val: 'right'  },
+      { b: this._paraJustifyL(), val: 'left'    },
+      { b: this._paraJustifyC(), val: 'center'  },
+      { b: this._paraJustifyR(), val: 'right'   },
+      { b: this._paraJustifyJ(), val: 'justify' },
     ]
-    const iconNames = ['text-align-left', 'text-align-center', 'text-align-right'] as const
-    for (let i = 0; i < 3; i++) {
+    const iconNames = ['text-align-left', 'text-align-center', 'text-align-right', 'text-align-justify'] as const
+    for (let i = 0; i < 4; i++) {
       const { b, val } = jBtns[i]!
       const active = this._justify === val
       if (active) {
@@ -1362,7 +1486,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     }
 
     // Divider after justify buttons
-    const divX = x + 76
+    const divX = x + 98
     ctx.strokeStyle = 'rgba(255,255,255,0.15)'
     ctx.lineWidth   = 1
     ctx.beginPath()
@@ -1420,6 +1544,49 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.restore()
   }
 
+  // ── Vertical-justify pill (mask only) ────────────────────────
+
+  private _renderVJustControls(ctx: Ctx2D): void {
+    const { x, y, width, height } = this._vJustPillBounds()
+    if (width <= 0 || height <= 0) return
+    const midY = y + height / 2
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 6))
+    ctx.fill()
+
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    type VBtn = { b: { x: number; y: number; width: number; height: number }; val: 'top' | 'center' | 'bottom' | 'justify' }
+    const vBtns: VBtn[] = [
+      { b: this._vJustifyT(), val: 'top'     },
+      { b: this._vJustifyC(), val: 'center'  },
+      { b: this._vJustifyB(), val: 'bottom'  },
+      { b: this._vJustifyJ(), val: 'justify' },
+    ]
+    const iconNames = ['text-valign-top', 'text-valign-center', 'text-valign-bottom', 'text-valign-justify'] as const
+    for (let i = 0; i < 4; i++) {
+      const { b, val } = vBtns[i]!
+      const active = this._vJustify === val
+      if (active) {
+        ctx.fillStyle = ACCENT + '33'
+        ctx.beginPath()
+        ctx.roundRect(b.x, b.y, b.width, b.height, 3)
+        ctx.fill()
+      }
+      ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
+      drawIcon(ctx, iconNames[i]!, b.x + b.width / 2, midY, 14)
+    }
+
+    ctx.restore()
+  }
+
   // ── Canvas rendering ─────────────────────────────────────────
 
   private _renderCanvas(ctx: Ctx2D, withShadow = true): void {
@@ -1449,23 +1616,39 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   // Unmasked: word-wrap to fit the canvas width (the default boundary when
   // no mask is set), render lines anchored at _position, rotated about it.
-  // The _position point is the left edge, centre, or right edge depending on _justify.
+  // For 'left'/'center'/'right', _position is the respective edge/centre anchor.
+  // For 'justify', _position is the left edge; non-last-paragraph lines are
+  // stretched to fill maxWidth by distributing space between words.
   private _renderUnmasked(ctx: Ctx2D): void {
     const { x: px, y: py } = this._position
-    const lines  = this._wrapLines(ctx)
-    const lineH  = Math.max(0, this._lineSpacing) * this._size
-    const totalH = (lines.length - 1) * lineH
+    const lines    = this._wrapLines(ctx)
+    const lineH    = Math.max(0, this._lineSpacing) * this._size
+    const totalH   = (lines.length - 1) * lineH
+    const maxWidth = Math.max(1, Node.canvasWidth - WRAP_PAD * 2)
 
     ctx.save()
     ctx.translate(px, py)
     ctx.rotate(this._rotation)
-
-    ctx.textAlign    = this._justify
     ctx.textBaseline = 'middle'
-    let y = -totalH / 2
-    for (const line of lines) {
-      ctx.fillText(line.text, 0, y)
-      y += lineH
+
+    if (this._justify === 'justify') {
+      ctx.textAlign = 'left'
+      let y = -totalH / 2
+      for (const line of lines) {
+        if (line.isParaEnd) {
+          ctx.fillText(line.text, 0, y)
+        } else {
+          _fillJustified(ctx, line.text, 0, y, maxWidth)
+        }
+        y += lineH
+      }
+    } else {
+      ctx.textAlign = this._justify
+      let y = -totalH / 2
+      for (const line of lines) {
+        ctx.fillText(line.text, 0, y)
+        y += lineH
+      }
     }
     ctx.restore()
   }
@@ -1474,9 +1657,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // side), preserving '\n' as hard breaks. Each returned line carries the
   // index into _text where its text begins, so the cursor (an index into
   // _text) can be mapped back to a wrapped line + column for rendering.
-  private _wrapLines(ctx: Ctx2D): { text: string; start: number }[] {
+  // isParaEnd marks the last wrapped line of each paragraph — used by full
+  // justification to leave the final line ragged rather than stretched.
+  private _wrapLines(ctx: Ctx2D): { text: string; start: number; isParaEnd: boolean }[] {
     const maxWidth = Math.max(1, Node.canvasWidth - WRAP_PAD * 2)
-    const lines: { text: string; start: number }[] = []
+    const lines: { text: string; start: number; isParaEnd: boolean }[] = []
 
     let paraOffset = 0
     for (const para of this._text.split('\n')) {
@@ -1491,7 +1676,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         if (/^\s+$/.test(tok)) { pendingWs += tok; consumed += tok.length; continue }
 
         if (line.length > 0 && ctx.measureText(line + pendingWs + tok).width > maxWidth) {
-          lines.push({ text: line, start: lineStart })
+          lines.push({ text: line, start: lineStart, isParaEnd: false })
           line      = tok
           lineStart = paraOffset + consumed
         } else {
@@ -1500,11 +1685,47 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         consumed += tok.length
         pendingWs = ''
       }
-      lines.push({ text: line, start: lineStart })
+      lines.push({ text: line, start: lineStart, isParaEnd: true })
 
       paraOffset += para.length + 1   // +1 for the '\n'
     }
     return lines
+  }
+
+  // Build the flat word queue used by masked layout; null marks a paragraph break.
+  private _buildWordQueue(): (string | null)[] {
+    const queue: (string | null)[] = []
+    for (const para of this._text.split('\n')) {
+      for (const w of para.split(/\s+/).filter(Boolean)) queue.push(w)
+      queue.push(null)
+    }
+    return queue
+  }
+
+  // Dry-run of the masked greedy word-wrap starting at baseline y0 with the
+  // given lineH.  Returns the number of visual lines placed (for vertical
+  // alignment offset and vertical-justify line-spacing computation).
+  private _countMaskedLines(rows: Scanline[], y0: number, lineH: number, ctx: Ctx2D): number {
+    const h = rows.length, pad = 6
+    const queue = this._buildWordQueue()
+    let y = y0, qi = 0, count = 0
+    while (qi < queue.length && y < h) {
+      const rowY = Math.min(h - 1, Math.floor(y))
+      const sl   = rows[rowY]
+      if (!sl || sl.w <= pad * 2) { y += lineH; continue }
+      const avail = sl.w - pad * 2
+      let line = ''
+      while (qi < queue.length) {
+        const word = queue[qi]!
+        if (word === null) { qi++; break }
+        const test = line ? `${line} ${word}` : word
+        if (ctx.measureText(test).width <= avail) { line = test; qi++ }
+        else { if (!line) qi++; break }
+      }
+      if (line) count++
+      y += lineH
+    }
+    return count
   }
 
   // Masked: flow text into the mask shape using per-scanline word-wrap.
@@ -1513,16 +1734,43 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // the canvas centre (see _sampleMask). Rendering at those row coordinates
   // under a forward rotation by _rotation (about the same centre) places the
   // wrapped text back inside the true mask outline, rotated as a whole.
+  //
+  // _vJustify controls vertical placement:
+  //   'top'     — baseline of first line just inside the top of the mask (current default)
+  //   'center'  — text block centred in the mask's vertical extent
+  //   'bottom'  — last line's baseline near the bottom of the mask
+  //   'justify' — line spacing adjusted so first→last baseline span fills the mask height
   private _renderMasked(ctx: Ctx2D): void {
     const rows  = this._maskRows!
     const lineH = Math.max(1, Math.ceil(this._lineSpacing * this._size))
     const h     = rows.length
-    const pad   = 6   // horizontal padding inside the mask boundary
+    const pad   = 6
 
-    // Find the first row with mask coverage.
     let startY = 0
     while (startY < h && !rows[startY]) startY++
     if (startY >= h) return
+
+    let endY = h - 1
+    while (endY > startY && !rows[endY]) endY--
+
+    // First baseline (top-aligned origin)
+    let y0 = startY + this._size
+    let effectiveLineH = lineH
+
+    if (this._vJustify !== 'top') {
+      const count = this._countMaskedLines(rows, y0, lineH, ctx)
+      if (count > 0) {
+        const textSpan = (count - 1) * lineH   // first → last baseline distance
+        const available = endY - y0            // max space for that span
+        if (this._vJustify === 'center') {
+          y0 += Math.max(0, (available - textSpan) / 2)
+        } else if (this._vJustify === 'bottom') {
+          y0 += Math.max(0, available - textSpan)
+        } else if (this._vJustify === 'justify' && count > 1) {
+          effectiveLineH = Math.max(lineH, available / (count - 1))
+        }
+      }
+    }
 
     ctx.save()
     if (this._rotation !== 0) {
@@ -1532,54 +1780,44 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.translate(-cx, -cy)
     }
 
-    ctx.textAlign    = this._justify
+    ctx.textAlign    = this._justify === 'justify' ? 'left' : this._justify
     ctx.textBaseline = 'alphabetic'
 
-    // Build a flat word queue; null marks a paragraph break.
-    const queue: (string | null)[] = []
-    for (const para of this._text.split('\n')) {
-      for (const w of para.split(/\s+/).filter(Boolean)) queue.push(w)
-      queue.push(null)
-    }
-
-    let y  = startY + this._size  // first baseline
-    let qi = 0
+    const queue = this._buildWordQueue()
+    let y = y0, qi = 0
 
     while (qi < queue.length && y < h) {
       const rowY     = Math.min(h - 1, Math.floor(y))
       const scanline = rows[rowY]
 
-      if (!scanline || scanline.w <= pad * 2) {
-        y += lineH
-        continue
-      }
+      if (!scanline || scanline.w <= pad * 2) { y += effectiveLineH; continue }
 
       const xStart = scanline.x + pad
       const xEnd   = scanline.x + scanline.w - pad
       const avail  = scanline.w - pad * 2
 
-      // Greedy word-wrap for this line.
       let line = ''
       while (qi < queue.length) {
-        const word = queue[qi]!  // bounds-checked by while condition
-        if (word === null) { qi++; break }          // paragraph break
+        const word = queue[qi]!
+        if (word === null) { qi++; break }
         const test = line ? `${line} ${word}` : word
-        if (ctx.measureText(test).width <= avail) {
-          line = test
-          qi++
-        } else {
-          if (!line) { line = word; qi++ }           // force oversized word
-          break
-        }
+        if (ctx.measureText(test).width <= avail) { line = test; qi++ }
+        else { if (!line) qi++; break }
       }
 
       if (line) {
-        const xDraw = this._justify === 'center' ? (xStart + xEnd) / 2
-                    : this._justify === 'right'  ? xEnd
-                    :                              xStart
-        ctx.fillText(line, xDraw, y)
+        if (this._justify === 'justify') {
+          const isParaEnd = qi >= queue.length || queue[qi] === null
+          if (isParaEnd) ctx.fillText(line, xStart, y)
+          else _fillJustified(ctx, line, xStart, y, avail)
+        } else {
+          const xDraw = this._justify === 'center' ? (xStart + xEnd) / 2
+                      : this._justify === 'right'  ? xEnd
+                      :                              xStart
+          ctx.fillText(line, xDraw, y)
+        }
       }
-      y += lineH
+      y += effectiveLineH
     }
 
     ctx.restore()
@@ -1619,7 +1857,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
 
   // Paragraph-row helpers — sub-bounds centred vertically in the paragraph pill.
-  //  8   [L]  30  [C]  52  [R]  | 78  "line" spc-slider  [○] value
+  //  8   [L]  30  [C]  52  [R]  74  [J]  | 98  "line" spc-slider  [○] value
   private _paraBtn(offsetX: number, w: number) {
     const bh = CTRL_H - 8
     return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._paraY + 4, width: w, height: bh }
@@ -1627,17 +1865,33 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _paraJustifyL()  { return this._paraBtn(8,   20) }
   private _paraJustifyC()  { return this._paraBtn(30,  20) }
   private _paraJustifyR()  { return this._paraBtn(52,  20) }
+  private _paraJustifyJ()  { return this._paraBtn(74,  20) }
   private _paraPillBounds() {
     return { x: contentLeft(Node.canvasWidth), y: this._paraY,
              width: panelWidth(Node.canvasWidth), height: CTRL_H }
   }
+
+  // Vertical-justify pill — only rendered/hit-tested when _hasMaskLayout
+  private _vJustPillBounds() {
+    return { x: contentLeft(Node.canvasWidth), y: this._vJustY,
+             width: panelWidth(Node.canvasWidth), height: CTRL_H }
+  }
+  private _vJustBtn(offsetX: number, w: number) {
+    const bh = CTRL_H - 8
+    return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._vJustY + 4, width: w, height: bh }
+  }
+  //  8   [⊤]  30  [⊡]  52  [⊥]  74  [⇕]
+  private _vJustifyT() { return this._vJustBtn(8,  20) }
+  private _vJustifyC() { return this._vJustBtn(30, 20) }
+  private _vJustifyB() { return this._vJustBtn(52, 20) }
+  private _vJustifyJ() { return this._vJustBtn(74, 20) }
 
   // Spacing-slider geometry (mirrors _strokeSliderGeom in ShapeLayer).
   private _spcSliderGeom() {
     const x      = contentLeft(Node.canvasWidth)
     const pw     = panelWidth(Node.canvasWidth)
     const midY   = this._paraY + CTRL_H / 2
-    const labelX = x + 78
+    const labelX = x + 100
     const indX   = x + pw - 8
     const valueRight = indX - 14
     const sld0   = labelX + SPC_LABEL_W
@@ -1661,18 +1915,40 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const sin = Math.sin(this._rotation)
     const so  = this._size * SCALE_OFFSET_FACTOR
 
+    // Move handle: when masked, shows the alignment anchor (h-justify × v-justify
+    // corner/edge/centre of the mask bounding box), rotated into canvas space.
+    let move: Point
+    if (masked && this._maskBBox !== null) {
+      const bb  = this._maskBBox
+      const ax  = this._justify === 'left'   ? bb.minX
+                : this._justify === 'right'  ? bb.maxX
+                : (bb.minX + bb.maxX) / 2          // centre or full-justify
+      const ay  = this._vJustify === 'top'    ? bb.minY
+                : this._vJustify === 'bottom' ? bb.maxY
+                : (bb.minY + bb.maxY) / 2          // centre or full-justify
+      if (this._rotation !== 0) {
+        const cx = Node.canvasWidth / 2, cy = Node.canvasHeight / 2
+        const dx = ax - cx, dy = ay - cy
+        move = { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos }
+      } else {
+        move = { x: ax, y: ay }
+      }
+    } else {
+      move = { x: this._position.x, y: this._position.y }
+    }
+
     return {
       center,
-      move: { x: this._position.x, y: this._position.y },
-      // Scale handle: (so, so) rotated into world space → lower-right
+      move,
+      // Scale and rotate handles are always relative to `move` (the alignment
+      // anchor when masked, equal to _position when unmasked).
       scale: {
-        x: center.x + so * cos - so * sin,
-        y: center.y + so * sin + so * cos,
+        x: move.x + so * cos - so * sin,
+        y: move.y + so * sin + so * cos,
       },
-      // Rotate handle: (0, -ROT_ARM) rotated into world space → directly above when rot=0
       rotate: {
-        x: center.x + ROT_ARM * sin,
-        y: center.y - ROT_ARM * cos,
+        x: move.x + ROT_ARM * sin,
+        y: move.y - ROT_ARM * cos,
       },
     }
   }
@@ -1689,19 +1965,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.lineWidth   = 1
     ctx.setLineDash([3, 3])
     ctx.beginPath()
-    ctx.moveTo(hp.center.x, hp.center.y)
+    ctx.moveTo(hp.move.x, hp.move.y)
     ctx.lineTo(hp.rotate.x, hp.rotate.y)
     ctx.stroke()
     ctx.beginPath()
-    ctx.moveTo(hp.center.x, hp.center.y)
+    ctx.moveTo(hp.move.x, hp.move.y)
     ctx.lineTo(hp.scale.x, hp.scale.y)
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Scale handle — square, cyan glow (dimmed when sizeSlot bound).
+    // Scale handle — square, cyan glow (dimmed when size is auto-controlled).
     // Scaling adjusts the manual font size directly.
+    const sizeAutoControlled = this._sizeSlot.isActive || this._maskSlot.isActive
     this._drawGlowSquare(ctx, hp.scale, HANDLE_SZ,
-      this._sizeSlot.isActive ? '#666688' : '#81d4fa')
+      sizeAutoControlled ? '#666688' : '#81d4fa')
 
     // Rotate handle — orange normally; cyan when snapping; dimmed when slot bound
     const rotCol = this._rotationSlot.isActive ? '#666688'
@@ -1722,9 +1999,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.restore()
     }
 
-    // Move handle — circle + crosshair, white glow. Hidden entirely when a
-    // mask is applied, since masked text ignores _position.
     if (!masked) {
+      // Draggable move handle — circle + crosshair
       this._drawGlowCircle(ctx, hp.move, HANDLE_R,
         this._positionSlot.isActive ? '#666688' : '#ffffff')
       const cr = HANDLE_R - 2
@@ -1736,6 +2012,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.moveTo(hp.move.x, hp.move.y - cr)
       ctx.lineTo(hp.move.x, hp.move.y + cr)
       ctx.stroke()
+    } else if (this._maskBBox !== null) {
+      // Alignment anchor indicator — crosshair only (not draggable)
+      const cr = HANDLE_R + 2
+      ctx.save()
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1.5
+      ctx.globalAlpha = 0.70
+      ctx.beginPath()
+      ctx.moveTo(hp.move.x - cr, hp.move.y)
+      ctx.lineTo(hp.move.x + cr, hp.move.y)
+      ctx.moveTo(hp.move.x, hp.move.y - cr)
+      ctx.lineTo(hp.move.x, hp.move.y + cr)
+      ctx.stroke()
+      ctx.restore()
     }
 
     ctx.restore()
@@ -1850,11 +2140,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Drawing helpers
   // ----------------------------------------------------------
 
-  private _fontString(): string {
+  private _fontString(size?: number): string {
     const parts = []
     if (this._italic) parts.push('italic')
     if (this._bold)   parts.push('bold')
-    parts.push(`${Math.round(this._size)}px`, this._fontFamily)
+    parts.push(`${Math.round(size ?? this._size)}px`, this._fontFamily)
     return parts.join(' ')
   }
 
@@ -1936,6 +2226,25 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 // ---------------------------------------------------------------------------
 // Module-level helpers
 // ---------------------------------------------------------------------------
+
+// Stretch `text` to fill `width` by distributing extra space between words.
+// Falls back to left-aligned fillText when there is only one word.
+type AnyCtx = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
+function _fillJustified(ctx: AnyCtx, text: string, x: number, y: number, width: number): void {
+  const words = text.split(' ')
+  if (words.length <= 1) {
+    ctx.fillText(text, x, y)
+    return
+  }
+  const wordWidths = words.map(w => ctx.measureText(w).width)
+  const totalWordWidth = wordWidths.reduce((s, w) => s + w, 0)
+  const gap = (width - totalWordWidth) / (words.length - 1)
+  let xPos = x
+  for (let i = 0; i < words.length; i++) {
+    ctx.fillText(words[i]!, xPos, y)
+    xPos += wordWidths[i]! + gap
+  }
+}
 
 function makeDialogBtn(label: string, bg: string): HTMLButtonElement {
   const btn = document.createElement('button')

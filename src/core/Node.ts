@@ -173,7 +173,8 @@ export abstract class Node {
   static defaultTextSize    = 48
   static defaultBold        = false
   static defaultItalic      = false
-  static defaultJustify: 'left' | 'center' | 'right' = 'center'
+  static defaultJustify:  'left' | 'center' | 'right' | 'justify'          = 'center'
+  static defaultVJustify: 'top'  | 'center' | 'bottom' | 'justify'          = 'top'
   static defaultLineSpacing = 1.35
 
   // Monotonically increasing counter — incremented on every Node construction.

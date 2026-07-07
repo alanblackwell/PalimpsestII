@@ -16,7 +16,8 @@ export type IconName =
   | 'toggle-right' | 'toggle-left'
   | 'question'
   | 'dots-nine' | 'shapes' | 'palette' | 'paint-brush' | 'pen-nib'
-  | 'text-align-left' | 'text-align-center' | 'text-align-right'
+  | 'text-align-left' | 'text-align-center' | 'text-align-right' | 'text-align-justify'
+  | 'text-valign-top' | 'text-valign-center' | 'text-valign-bottom' | 'text-valign-justify'
 
 const PATH_DATA: Record<IconName, string> = {
   'play':
@@ -98,6 +99,18 @@ const PATH_DATA: Record<IconName, string> = {
     'M32,52h192v20H32ZM64,96h128v20H64ZM32,140h192v20H32ZM64,184h128v20H64Z',
   'text-align-right':
     'M32,52h192v20H32ZM96,96h128v20H96ZM32,140h192v20H32ZM96,184h128v20H96Z',
+  // 3 full-width lines + 1 short last line (paragraph-end left-aligned)
+  'text-align-justify':
+    'M32,52h192v20H32ZM32,96h192v20H32ZM32,140h192v20H32ZM32,184h96v20H32Z',
+  // Vertical alignment — 3 bars at top / centre / bottom / evenly spread
+  'text-valign-top':
+    'M32,28h192v24H32ZM32,60h192v24H32ZM32,92h192v24H32Z',
+  'text-valign-center':
+    'M32,80h192v24H32ZM32,116h192v24H32ZM32,152h192v24H32Z',
+  'text-valign-bottom':
+    'M32,140h192v24H32ZM32,172h192v24H32ZM32,204h192v24H32Z',
+  'text-valign-justify':
+    'M32,28h192v24H32ZM32,116h192v24H32ZM32,204h192v24H32Z',
 }
 
 const _cache: Partial<Record<IconName, Path2D>> = {}
