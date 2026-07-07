@@ -173,6 +173,8 @@ export abstract class Node {
   static defaultTextSize    = 48
   static defaultBold        = false
   static defaultItalic      = false
+  static defaultJustify: 'left' | 'center' | 'right' = 'center'
+  static defaultLineSpacing = 1.35
 
   // Monotonically increasing counter — incremented on every Node construction.
   // Used to distinguish "most recently created" from "topmost in stack" after

@@ -16,6 +16,7 @@ export type IconName =
   | 'toggle-right' | 'toggle-left'
   | 'question'
   | 'dots-nine' | 'shapes' | 'palette' | 'paint-brush' | 'pen-nib'
+  | 'text-align-left' | 'text-align-center' | 'text-align-right'
 
 const PATH_DATA: Record<IconName, string> = {
   'play':
@@ -90,6 +91,13 @@ const PATH_DATA: Record<IconName, string> = {
   // Phosphor Bold "Question" — question mark in a circle (MIT licence)
   'question':
     'M144,180a16,16,0,1,1-16-16A16,16,0,0,1,144,180Zm92-52A108,108,0,1,1,128,20,108.12,108.12,0,0,1,236,128Zm-24,0a84,84,0,1,0-84,84A84.09,84.09,0,0,0,212,128ZM128,64c-24.26,0-44,17.94-44,40v4a12,12,0,0,0,24,0v-4c0-8.82,9-16,20-16s20,7.18,20,16-9,16-20,16a12,12,0,0,0-12,12v8a12,12,0,0,0,23.73,2.56C158.31,137.88,172,122.37,172,104,172,81.94,152.26,64,128,64Z',
+  // Text alignment icons — four horizontal bars, varying widths, flush left/centre/right
+  'text-align-left':
+    'M32,52h192v20H32ZM32,96h128v20H32ZM32,140h192v20H32ZM32,184h128v20H32Z',
+  'text-align-center':
+    'M32,52h192v20H32ZM64,96h128v20H64ZM32,140h192v20H32ZM64,184h128v20H64Z',
+  'text-align-right':
+    'M32,52h192v20H32ZM96,96h128v20H96ZM32,140h192v20H32ZM96,184h128v20H96Z',
 }
 
 const _cache: Partial<Record<IconName, Path2D>> = {}

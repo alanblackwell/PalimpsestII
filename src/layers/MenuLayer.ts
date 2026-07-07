@@ -350,10 +350,12 @@ export class MenuLayer extends Layer {
         scan = scan.layerBelow
       }
       if (candidate !== null && candidate === newest) {
-        Node.defaultFontFamily = candidate.fontFamily
-        Node.defaultTextSize   = candidate.manualSize
-        Node.defaultBold       = candidate.bold
-        Node.defaultItalic     = candidate.italic
+        Node.defaultFontFamily  = candidate.fontFamily
+        Node.defaultTextSize    = candidate.manualSize
+        Node.defaultBold        = candidate.bold
+        Node.defaultItalic      = candidate.italic
+        Node.defaultJustify     = candidate.justify
+        Node.defaultLineSpacing = candidate.manualLineSpacing
       }
     }
 

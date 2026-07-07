@@ -18,6 +18,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // TextLayer — renders a string onto the canvas
@@ -50,6 +51,9 @@ const BTN_M = 6
 // Controls-row geometry (below the main pill)
 const CTRL_H   = 28
 const CTRL_GAP = 4    // gap between pill bottom and controls row
+
+// Paragraph-pill line-spacing slider label width (px)
+const SPC_LABEL_W = 26
 
 // Curated typeface list.  System fonts work offline; Google fonts need internet.
 type FontEntry = { name: string; category: string; google: boolean }
@@ -176,10 +180,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _text: string = ''
 
   // Typography (manual, persisted across recomputes)
-  private _fontFamily: string  = Node.defaultFontFamily
-  private _bold:       boolean = Node.defaultBold
-  private _italic:     boolean = Node.defaultItalic
-  private _manualSize: number  = Node.defaultTextSize
+  private _fontFamily:        string                   = Node.defaultFontFamily
+  private _bold:              boolean                  = Node.defaultBold
+  private _italic:            boolean                  = Node.defaultItalic
+  private _manualSize:        number                   = Node.defaultTextSize
+  private _justify:           'left' | 'center' | 'right' = Node.defaultJustify
+  private _manualLineSpacing: number                   = Node.defaultLineSpacing
+
+  // Resolved each recompute (from slot or manual)
+  private _lineSpacing: number = Node.defaultLineSpacing
+
+  private _lineSpacingSliderDrag = false
+  private readonly _lineSpacingSlot: ParameterSlot
 
   // Resolved values (overwritten each recompute)
   private _position: Point  = { x: 400, y: 300 }
@@ -239,13 +251,14 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._text         = text ?? randomDefaultText()
     this._cursorPos    = this._text.length
     this._manualPosition = this._randomPosition()
-    this._positionSlot = new ParameterSlot(ValueType.Point,     this)
-    this._colourSlot   = new ParameterSlot(ValueType.Colour,    this)
-    this._sizeSlot     = new ParameterSlot(ValueType.Amount,    this, 'scale')
-    this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
-    this._rotationSlot = new ParameterSlot(ValueType.Direction, this, 'rotation')
-    this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
-    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot)
+    this._positionSlot    = new ParameterSlot(ValueType.Point,     this)
+    this._colourSlot      = new ParameterSlot(ValueType.Colour,    this)
+    this._sizeSlot        = new ParameterSlot(ValueType.Amount,    this, 'scale')
+    this._maskSlot        = new ParameterSlot(ValueType.Mask,      this, 'mask')
+    this._rotationSlot    = new ParameterSlot(ValueType.Direction, this, 'rotation')
+    this._opacitySlot     = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this._lineSpacingSlot = new ParameterSlot(ValueType.Amount,    this, 'line spacing')
+    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot, this._lineSpacingSlot)
     this.debugName = 'TextLayer'
     graph.register(this)
   }
@@ -261,10 +274,32 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
   get opacitySlot():  ParameterSlot { return this._opacitySlot  }
 
-  get fontFamily(): string  { return this._fontFamily }
-  get bold():       boolean { return this._bold       }
-  get italic():     boolean { return this._italic     }
-  get manualSize(): number  { return this._manualSize }
+  get fontFamily():        string                       { return this._fontFamily        }
+  get bold():              boolean                      { return this._bold              }
+  get italic():            boolean                      { return this._italic            }
+  get manualSize():        number                       { return this._manualSize        }
+  get justify():           'left' | 'center' | 'right' { return this._justify           }
+  get manualLineSpacing(): number                       { return this._manualLineSpacing }
+  get lineSpacingSlot():   ParameterSlot                { return this._lineSpacingSlot   }
+
+  setJustify(newJustify: 'left' | 'center' | 'right'): void {
+    const old = this._justify
+    if (old === newJustify) return
+
+    // Without a binding, shift _manualPosition so text stays in place visually:
+    // the anchor moves from the old edge to the new edge of the text bounding box.
+    if (!this._positionSlot.isActive && this._manualPosition !== null) {
+      const ax = this._manualPosition.x
+      const hw = this._textHalfW
+      const cx = old === 'center' ? ax : old === 'left' ? ax + hw : ax - hw
+      const newAx = newJustify === 'center' ? cx : newJustify === 'left' ? cx - hw : cx + hw
+      this._manualPosition = { x: newAx, y: this._manualPosition.y }
+    }
+
+    this._justify = newJustify
+    Node.defaultJustify = newJustify
+    this.markDirty()
+  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
@@ -276,8 +311,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       const size = this._manualSize
       return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
     }
-    if (slot === this._rotationSlot) return { angle: this._rotation, magnitude: 1 }
-    if (slot === this._opacitySlot)  return this._opacity
+    if (slot === this._rotationSlot)    return { angle: this._rotation, magnitude: 1 }
+    if (slot === this._opacitySlot)     return this._opacity
+    if (slot === this._lineSpacingSlot) return (this._manualLineSpacing + 1) / 4
     return null
   }
 
@@ -662,16 +698,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      text:           this._text,
-      isDefaultText:  this._isDefaultText,
-      fontFamily:     this._fontFamily,
-      bold:           this._bold,
-      italic:         this._italic,
-      manualSize:     this._manualSize,
-      manualPosition: this._manualPosition,
-      rotation:       this._rotation,
-      colour:         this._colour,
-      addMaskDone:    this._addMaskDone,
+      text:              this._text,
+      isDefaultText:     this._isDefaultText,
+      fontFamily:        this._fontFamily,
+      bold:              this._bold,
+      italic:            this._italic,
+      manualSize:        this._manualSize,
+      manualPosition:    this._manualPosition,
+      rotation:          this._rotation,
+      colour:            this._colour,
+      addMaskDone:       this._addMaskDone,
+      justify:           this._justify,
+      manualLineSpacing: this._manualLineSpacing,
     }
   }
 
@@ -695,6 +733,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ? state.isDefaultText
       : (this._text === 'Hello')
     if (typeof state.addMaskDone === 'boolean') this._addMaskDone = state.addMaskDone
+    if (state.justify === 'left' || state.justify === 'center' || state.justify === 'right') {
+      this._justify = state.justify
+    }
+    if (typeof state.manualLineSpacing === 'number') this._manualLineSpacing = state.manualLineSpacing
   }
 
   protected recompute(): void {
@@ -721,6 +763,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._rotation = (this._rotationSlot.source as DirectionSource).getDirection().angle
     }
 
+    if (this._lineSpacingSlot.isActive) {
+      const t = (this._lineSpacingSlot.source as AmountSource).getAmount() as Amount
+      this._lineSpacing = -1 + t * 4
+    } else {
+      this._lineSpacing = this._manualLineSpacing
+    }
+
     if (this._maskSlot.isActive) {
       const mask = (this._maskSlot.source as MaskSource).getMask()
       if (mask !== null) {
@@ -738,7 +787,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     // Update text half-extents used for getSnapBounds and position-handle snap.
     if (this._maskRows === null) {
       const lines = this._text.split('\n')
-      this._textHalfH = lines.length * this._size * 1.35 / 2
+      const spc = Math.max(0, this._lineSpacing)
+      this._textHalfH = (this._size + spc * (lines.length - 1) * this._size) / 2
       const mc = this._maskCanvas.getContext('2d')
       if (mc) {
         mc.font = this._fontString()
@@ -832,9 +882,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ----------------------------------------------------------
 
   private get _ctrlY(): number { return 50 + this.bounds.height + CTRL_GAP }
+  private get _paraY(): number { return this._ctrlY + CTRL_H + CTRL_GAP }
 
   override get panelBottom(): number {
-    return this._ctrlY + CTRL_H + CTRL_GAP
+    return this._paraY + CTRL_H + CTRL_GAP
   }
 
   // ----------------------------------------------------------
@@ -923,7 +974,32 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return false
     }
 
+    if (boundingBoxContains(this._paraPillBounds(), point)) {
+      // Justification buttons
+      if (boundingBoxContains(this._paraJustifyL(), point)) { this.setJustify('left');   return true }
+      if (boundingBoxContains(this._paraJustifyC(), point)) { this.setJustify('center'); return true }
+      if (boundingBoxContains(this._paraJustifyR(), point)) { this.setJustify('right');  return true }
+      // Spacing slider — anywhere else in the pill
+      this._lineSpacingSliderDrag = true
+      this._setLineSpacingFromPointer(point.x)
+      return true
+    }
+
     return false
+  }
+
+  private _setLineSpacingFromPointer(px: number): void {
+    if (this._lineSpacingSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this._lineSpacingSlot)?.toggle()
+    }
+    const g      = this._spcSliderGeom()
+    const thumbR = 5
+    const lo     = g.sld0 + thumbR
+    const hi     = Math.max(lo + 1, g.sldR - thumbR)
+    const v      = Math.max(0, Math.min(1, (px - lo) / (hi - lo)))
+    this._manualLineSpacing = -1 + v * 4
+    Node.defaultLineSpacing = this._manualLineSpacing
+    this.markDirty()
   }
 
   startCenterDrag(point: Point): boolean {
@@ -941,6 +1017,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   handlePointerMove(point: Point): void {
+    if (this._lineSpacingSliderDrag) {
+      this._setLineSpacingFromPointer(point.x)
+      return
+    }
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
@@ -974,6 +1054,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   handlePointerUp(): void {
+    this._lineSpacingSliderDrag = false
     this._drag = null
     this._clearRotDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null
@@ -1020,6 +1101,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         && ptDist(point, hp.move) <= HANDLE_HIT) return this
     if (boundingBoxContains(this.canvasBounds, point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
+    if (boundingBoxContains(this._paraPillBounds(), point)) return this
     return null
   }
 
@@ -1038,6 +1120,30 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._updateEditHover()
     this._renderPanelImpl(ctx)
     this._renderControls(ctx)
+    this._renderParaControls(ctx)
+  }
+
+  // The _lineSpacingSlot is excluded from the standard slot group and rendered
+  // inline inside the paragraph pill (via _slotBounds registration below).
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const standard = this.slots.filter(s => s !== this._lineSpacingSlot)
+    this.renderSlotGroup(ctx, standard, this.panelBottom)
+    // Register the para pill as the drop-target for the line-spacing slot.
+    const pb = this._paraPillBounds()
+    this._slotBounds.set(this._lineSpacingSlot, pb)
+    // If a compatible drag is in progress, highlight the pill as a drop target.
+    const drag = Node.bindDrag
+    if (drag.active && drag.source !== null && drag.source.types.has(ValueType.Amount)) {
+      ctx.save()
+      ctx.strokeStyle = 'rgba(50,200,70,0.85)'
+      ctx.lineWidth   = 1.5
+      ctx.setLineDash([])
+      ctx.beginPath()
+      ctx.roundRect(pb.x + 0.5, pb.y + 0.5, pb.width - 1, pb.height - 1, Math.min(pb.height / 2, 6))
+      ctx.stroke()
+      ctx.restore()
+    }
   }
 
   override renderOverlay(ctx: Ctx2D): void {
@@ -1211,6 +1317,107 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.restore()
   }
 
+  // ── Paragraph-style pill ─────────────────────────────────────
+
+  private _renderParaControls(ctx: Ctx2D): void {
+    const { x, y, width, height } = this._paraPillBounds()
+    if (width <= 0 || height <= 0) return
+    const midY = y + height / 2
+
+    ctx.save()
+
+    // Background pill
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 6))
+    ctx.fill()
+
+    // Accent stripe
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    // Justification buttons
+    type JBtn = { b: { x: number; y: number; width: number; height: number }; val: 'left' | 'center' | 'right' }
+    const jBtns: JBtn[] = [
+      { b: this._paraJustifyL(), val: 'left'   },
+      { b: this._paraJustifyC(), val: 'center' },
+      { b: this._paraJustifyR(), val: 'right'  },
+    ]
+    const iconNames = ['text-align-left', 'text-align-center', 'text-align-right'] as const
+    for (let i = 0; i < 3; i++) {
+      const { b, val } = jBtns[i]!
+      const active = this._justify === val
+      if (active) {
+        ctx.fillStyle = ACCENT + '33'
+        ctx.beginPath()
+        ctx.roundRect(b.x, b.y, b.width, b.height, 3)
+        ctx.fill()
+      }
+      ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
+      drawIcon(ctx, iconNames[i]!, b.x + b.width / 2, midY, 14)
+    }
+
+    // Divider after justify buttons
+    const divX = x + 76
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.moveTo(divX, y + 4)
+    ctx.lineTo(divX, y + height - 4)
+    ctx.stroke()
+
+    // Line-spacing slider
+    const g      = this._spcSliderGeom()
+    const active = this._lineSpacingSlot.isActive
+    const colour = active ? AM_COL : ACCENT
+    const v01    = Math.max(0, Math.min(1, (this._lineSpacing + 1) / 4))
+    const thumbR = 5
+    const lo     = g.sld0 + thumbR
+    const hi     = Math.max(lo + 1, g.sldR - thumbR)
+    const thumbX = lo + v01 * (hi - lo)
+
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('line', g.labelX, midY)
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+    ctx.lineWidth   = 3
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(hi, midY)
+    ctx.stroke()
+
+    ctx.strokeStyle = colour
+    ctx.lineWidth   = 3
+    ctx.beginPath()
+    ctx.moveTo(lo, midY)
+    ctx.lineTo(thumbX, midY)
+    ctx.stroke()
+
+    ctx.fillStyle = colour
+    ctx.beginPath()
+    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
+    ctx.fill()
+
+    // Value readout
+    ctx.font      = '10px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.90)'
+    ctx.textAlign = 'right'
+    ctx.fillText(this._lineSpacing.toFixed(2), g.valueRight, midY)
+
+    // Slot indicator dot
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
+    ctx.textAlign = 'right'
+    ctx.fillText(active ? '●' : '○', g.indX, midY)
+
+    ctx.restore()
+  }
+
   // ── Canvas rendering ─────────────────────────────────────────
 
   private _renderCanvas(ctx: Ctx2D, withShadow = true): void {
@@ -1239,18 +1446,19 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   // Unmasked: word-wrap to fit the canvas width (the default boundary when
-  // no mask is set), render lines centred on _position, rotated about it.
+  // no mask is set), render lines anchored at _position, rotated about it.
+  // The _position point is the left edge, centre, or right edge depending on _justify.
   private _renderUnmasked(ctx: Ctx2D): void {
     const { x: px, y: py } = this._position
     const lines  = this._wrapLines(ctx)
-    const lineH  = Math.ceil(this._size * 1.35)
+    const lineH  = Math.max(0, this._lineSpacing) * this._size
     const totalH = (lines.length - 1) * lineH
 
     ctx.save()
     ctx.translate(px, py)
     ctx.rotate(this._rotation)
 
-    ctx.textAlign    = 'center'
+    ctx.textAlign    = this._justify
     ctx.textBaseline = 'middle'
     let y = -totalH / 2
     for (const line of lines) {
@@ -1305,7 +1513,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // wrapped text back inside the true mask outline, rotated as a whole.
   private _renderMasked(ctx: Ctx2D): void {
     const rows  = this._maskRows!
-    const lineH = Math.ceil(this._size * 1.35)
+    const lineH = Math.max(1, Math.ceil(this._lineSpacing * this._size))
     const h     = rows.length
     const pad   = 6   // horizontal padding inside the mask boundary
 
@@ -1401,6 +1609,33 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _italicBtnBounds() { return this._ctrlBtn(118, 20) }
   private _sizeMinusBounds() { return this._ctrlBtn(146, 20) }
   private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
+
+  // Paragraph-row helpers — sub-bounds centred vertically in the paragraph pill.
+  //  8   [L]  30  [C]  52  [R]  | 78  "line" spc-slider  [○] value
+  private _paraBtn(offsetX: number, w: number) {
+    const bh = CTRL_H - 8
+    return { x: contentLeft(Node.canvasWidth) + offsetX, y: this._paraY + 4, width: w, height: bh }
+  }
+  private _paraJustifyL()  { return this._paraBtn(8,   20) }
+  private _paraJustifyC()  { return this._paraBtn(30,  20) }
+  private _paraJustifyR()  { return this._paraBtn(52,  20) }
+  private _paraPillBounds() {
+    return { x: contentLeft(Node.canvasWidth), y: this._paraY,
+             width: panelWidth(Node.canvasWidth), height: CTRL_H }
+  }
+
+  // Spacing-slider geometry (mirrors _strokeSliderGeom in ShapeLayer).
+  private _spcSliderGeom() {
+    const x      = contentLeft(Node.canvasWidth)
+    const pw     = panelWidth(Node.canvasWidth)
+    const midY   = this._paraY + CTRL_H / 2
+    const labelX = x + 78
+    const indX   = x + pw - 8
+    const valueRight = indX - 14
+    const sld0   = labelX + SPC_LABEL_W
+    const sldR   = valueRight - 38   // leave room for "−1.00" value
+    return { midY, labelX, sld0, sldR, valueRight, indX }
+  }
 
   // ----------------------------------------------------------
   // Transform handles
@@ -1540,7 +1775,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const lineRec = lines[line] ?? { text: '', start: 0 }
     const col = Math.min(Math.max(this._cursorPos - lineRec.start, 0), lineRec.text.length)
 
-    const lineH  = Math.ceil(this._size * 1.35)
+    const lineH  = Math.max(0, this._lineSpacing) * this._size
     const totalH = (lines.length - 1) * lineH
 
     const lineWidth = ctx.measureText(lineRec.text).width
@@ -1549,7 +1784,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     // Local frame: origin at _position, x to the right, y down, before
     // rotation — matches the translate/rotate setup in _renderUnmasked.
-    const localX = -lineWidth / 2 + prefixW
+    const lineOffsetX = this._justify === 'center' ? -lineWidth / 2 :
+                        this._justify === 'right'  ? -lineWidth : 0
+    const localX = lineOffsetX + prefixW
     const localY = -totalH / 2 + line * lineH + this._size * 0.3 + CURSOR_GAP
 
     const cos = Math.cos(this._rotation), sin = Math.sin(this._rotation)
