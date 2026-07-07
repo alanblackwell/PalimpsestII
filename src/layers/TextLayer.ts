@@ -785,15 +785,17 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._updateImageCanvas()
 
     // Update text half-extents used for getSnapBounds and position-handle snap.
+    // Use the actual word-wrapped lines (not raw paragraphs) so long text that
+    // wraps to the canvas width doesn't produce an oversized _textHalfW.
     if (this._maskRows === null) {
-      const lines = this._text.split('\n')
-      const spc = Math.max(0, this._lineSpacing)
-      this._textHalfH = (this._size + spc * (lines.length - 1) * this._size) / 2
       const mc = this._maskCanvas.getContext('2d')
       if (mc) {
         mc.font = this._fontString()
+        const wrapped = this._wrapLines(mc)
+        const spc = Math.max(0, this._lineSpacing)
+        this._textHalfH = (this._size + spc * (wrapped.length - 1) * this._size) / 2
         let maxW = 1
-        for (const l of lines) maxW = Math.max(maxW, mc.measureText(l).width)
+        for (const l of wrapped) maxW = Math.max(maxW, mc.measureText(l.text).width)
         this._textHalfW = maxW / 2
       }
     } else {
@@ -1530,7 +1532,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.translate(-cx, -cy)
     }
 
-    ctx.textAlign    = 'left'
+    ctx.textAlign    = this._justify
     ctx.textBaseline = 'alphabetic'
 
     // Build a flat word queue; null marks a paragraph break.
@@ -1553,6 +1555,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       }
 
       const xStart = scanline.x + pad
+      const xEnd   = scanline.x + scanline.w - pad
       const avail  = scanline.w - pad * 2
 
       // Greedy word-wrap for this line.
@@ -1570,7 +1573,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         }
       }
 
-      if (line) ctx.fillText(line, xStart, y)
+      if (line) {
+        const xDraw = this._justify === 'center' ? (xStart + xEnd) / 2
+                    : this._justify === 'right'  ? xEnd
+                    :                              xStart
+        ctx.fillText(line, xDraw, y)
+      }
       y += lineH
     }
 
