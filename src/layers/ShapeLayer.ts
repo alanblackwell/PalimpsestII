@@ -124,7 +124,8 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   protected _filled = true
   get filled(): boolean { return this._filled }
-  protected _strokeWidth = 2
+  protected _strokeWidth = Node.defaultStrokeWidth
+  get strokeWidth(): number { return this._strokeWidth }
   protected get _maxStrokeWidth(): number { return MAX_STROKE_WIDTH }
   protected get _minStrokeWidth(): number { return 0.5 }
   protected _strokeSliderDrag = false

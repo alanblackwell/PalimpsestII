@@ -166,8 +166,15 @@ export abstract class Node {
   static get artisticMode(): boolean  { return Node._artisticMode }
   static set artisticMode(v: boolean) { if (Node._artisticMode !== v) { Node._artisticMode = v; Node.markAllDirty?.(); Node.scheduleFrame?.() } }
 
-  static outlineDefault = false
-  static greyDefault    = false
+  static outlineDefault    = false
+  static greyDefault       = false
+  static defaultStrokeWidth = 2
+
+  // Monotonically increasing counter — incremented on every Node construction.
+  // Used to distinguish "most recently created" from "topmost in stack" after
+  // layers have been reordered.
+  private static _nextCreationIndex = 0
+  readonly creationIndex: number = Node._nextCreationIndex++
 
   // ----------------------------------------------------------
   // Dependency management

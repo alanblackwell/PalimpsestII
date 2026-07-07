@@ -316,6 +316,26 @@ export class MenuLayer extends Layer {
       Node.outlineDefault = !below.filled
     }
 
+    // Inherit stroke width from the nearest shape layer below the menu, but only
+    // if that layer is also the most recently created shape in the stack (i.e. the
+    // stack hasn't been reordered since it was placed). This avoids surprising
+    // inheritance when the topmost shape was dragged up from below an older one.
+    {
+      let candidate:  ShapeLayer | null = null
+      let newest:     ShapeLayer | null = null
+      let scan: Layer | null = below
+      while (scan !== null) {
+        if (scan instanceof ShapeLayer && !(scan instanceof StrokeLayer)) {
+          if (candidate === null) candidate = scan
+          if (newest === null || scan.creationIndex > newest.creationIndex) newest = scan
+        }
+        scan = scan.layerBelow
+      }
+      if (candidate !== null && candidate === newest) {
+        Node.defaultStrokeWidth = candidate.strokeWidth
+      }
+    }
+
     const newLayer = btn.factory!(vw / 2, vh / 2, vw, vh)
     Layer.assignDebugName(newLayer)
     newLayer.bounds = { ...this.bounds, height: btn.height ?? this.bounds.height }
