@@ -110,6 +110,31 @@ function randomAnimRate(): number {
   return Math.exp(logMin + Math.random() * (logMax - logMin))
 }
 
+// Wire a ColourLayer's sample-image-slot auto-setup: when an image source
+// is first bound to the sample image slot (while the sample point slot is
+// still unbound), create a PointLayer immediately above that image source,
+// bind it to the sample point slot, enable sampling, and select the PointLayer.
+function wireColourSampleSetup(layer: ColourLayer): void {
+  layer.setOnSampleImageBound(() => {
+    const imgSource = layer.sampleImageSlot.source
+    if (!(imgSource instanceof Layer)) return
+
+    const pt = new PointLayer({ x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 })
+    Layer.assignDebugName(pt)
+    pt.bounds = { x: X, y: 24, width: W, height: 36 }
+
+    // Place immediately above the image source if it is in the main stack,
+    // otherwise fall back to above the ColourLayer itself.
+    pt.insertAbove(!imgSource.outsideStack ? imgSource : layer)
+
+    BindingLayer.create(pt, layer.samplePointSlot)
+    layer.enableSampling()
+
+    postInsertLayer(pt)
+    refreshStack(pt)
+  })
+}
+
 // All per-type setup that runs after a new layer is inserted into the stack.
 // Called from both the MenuLayer onAdded callback and wireTutorialLayer so
 // that every creation path (menu, tutorial buttons) gets identical behaviour.
@@ -227,6 +252,9 @@ function postInsertLayer(newLayer: Layer): void {
     }
   }
 
+  if (newLayer instanceof ColourLayer) {
+    wireColourSampleSetup(newLayer)
+  }
   if (newLayer instanceof VideoLayer) {
     wireVideoTrackButton(newLayer)
   }
@@ -858,6 +886,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer)  scanL.setEjectCallback(() => refreshStack())
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
+    if (scanL instanceof ColourLayer)      wireColourSampleSetup(scanL)
     if (scanL instanceof ImageLayer)       wireImageLayer(scanL)
     if (scanL instanceof VideoLayer)       wireVideoTrackButton(scanL)
     if (isAnimatableShape(scanL))          wireAnimatableShape(scanL)
@@ -879,6 +908,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
+    if (archived instanceof ColourLayer)     wireColourSampleSetup(archived)
     if (archived instanceof ImageLayer)      wireImageLayer(archived)
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (archived instanceof VideoLayer)        wireVideoTrackButton(archived)

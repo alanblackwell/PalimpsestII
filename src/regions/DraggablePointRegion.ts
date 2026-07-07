@@ -18,8 +18,9 @@ import type { Layer } from '../core/Layer.js'
 //        --⊙--             circle + centre dot
 //          |
 //
-// Interactive (user-draggable): purple  (#cf7ecf)
-// Bound (read-only display):    muted   (#8a7a8a)
+// Interactive (user-draggable): adaptive — bright lavender on dark bg, dark purple on light bg
+// Bound (read-only display):    adaptive — light grey on dark bg, near-black on light bg
+// Both modes add a contrasting shadow/glow around each element for legibility.
 
 // Radius of the visual circle (px).
 const CIRCLE_R = 8
@@ -136,30 +137,51 @@ export class DraggablePointRegion extends Region {
 
   renderSelf(ctx: Ctx2D): void {
     const { x, y } = this.displayPoint
-    const colour   = this._interactive ? '#cf7ecf' : '#8a7a8a'
+
+    // Sample the single pixel under the handle centre for adaptive contrast.
+    // Perceptual luminance; alpha-composite over black (transparent = dark).
+    let brightness = 0.2
+    try {
+      const d  = ctx.getImageData(Math.round(x), Math.round(y), 1, 1).data
+      const a  = d[3]! / 255
+      brightness = (d[0]! * 0.299 + d[1]! * 0.587 + d[2]! * 0.114) / 255 * a
+    } catch { /* cross-origin or out-of-bounds — keep default */ }
+
+    const lightBg = brightness > 0.5
+
+    // Dark background → bright accent + dark shadow (separates from textures).
+    // Light background → dark accent + white glow (reads against brightness).
+    const markCol = this._interactive
+      ? (lightBg ? '#5c1a5c' : '#e0a0e0')
+      : (lightBg ? '#2a1a2a' : '#a89aa8')
+    const haloCol = lightBg ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.75)'
 
     ctx.save()
     ctx.lineCap = 'round'
 
     // Drag highlight ring
     if (this._dragging) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.45)'
+      ctx.strokeStyle = lightBg ? 'rgba(0,0,0,0.30)' : 'rgba(255,255,255,0.45)'
       ctx.lineWidth   = 1.5
       ctx.beginPath()
       ctx.arc(x, y, CIRCLE_R + 4.5, 0, Math.PI * 2)
       ctx.stroke()
     }
 
+    // All marker elements share the same halo (shadow/glow behind each stroke).
+    ctx.shadowColor   = haloCol
+    ctx.shadowBlur    = 3.5
+    ctx.shadowOffsetX = 0
+    ctx.shadowOffsetY = 0
+
     // Circle
-    ctx.strokeStyle = colour
+    ctx.strokeStyle = markCol
     ctx.lineWidth   = 1.5
     ctx.beginPath()
     ctx.arc(x, y, CIRCLE_R, 0, Math.PI * 2)
     ctx.stroke()
 
     // Crosshair ticks (N / S / W / E)
-    ctx.strokeStyle = colour
-    ctx.lineWidth   = 1.5
     const gap = CIRCLE_R + 2
     const tip = CIRCLE_R + 2 + TICK_LEN
     ;[
@@ -168,11 +190,11 @@ export class DraggablePointRegion extends Region {
       [x - gap, y, x - tip, y],
       [x + gap, y, x + tip, y],
     ].forEach(([x0, y0, x1, y1]) => {
-      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke()
+      ctx.beginPath(); ctx.moveTo(x0!, y0!); ctx.lineTo(x1!, y1!); ctx.stroke()
     })
 
     // Centre dot
-    ctx.fillStyle = colour
+    ctx.fillStyle = markCol
     ctx.beginPath()
     ctx.arc(x, y, 2.5, 0, Math.PI * 2)
     ctx.fill()

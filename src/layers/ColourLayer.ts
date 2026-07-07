@@ -20,16 +20,7 @@ import { drawIcon } from '../ui/icons.js'
 // ColourLayer — a layer that holds and exposes a Colour value
 // ------------------------------------------------------------
 //
-// Operating modes:
-//
-//   Unbound  — the HSV picker is fully interactive; the user
-//              drags the SV square and hue strip to set the colour.
-//
-//   Bound    — the colour is driven by a source layer (the slot);
-//              the picker displays the incoming value read-only.
-//
-// Two further input slots provide independent control over part of
-// the picker, and only apply when the Colour slot above is unbound:
+// Two input slots provide independent control over part of the picker:
 //
 //   hue slot (Amount) — drives the hue strip; amount [0, 1] -> [0, 360)
 //   position slot (Point) — drives the SV cursor; canvas coordinates
@@ -49,25 +40,33 @@ import { drawIcon } from '../ui/icons.js'
 //   │ #ff6a2b                           │ ← hex label
 //   └───────────────────────────────────┘
 
-// ── Sample slot-group constants ──────────────────────────────────
+// ── Sample pill constants ────────────────────────────────────────
 const EV_ACCENT     = '#e0e060'   // Event type accent (enable toggle)
 const SAMPLE_ACCENT = '#e8944a'   // Colour type accent — groups the sample controls
 
-const SAMPLE_RADIUS_MIN = 2     // px
-const SAMPLE_RADIUS_MAX = 100   // px
+const SAMPLE_RADIUS_MIN = 1     // px
+const SAMPLE_RADIUS_MAX = 30    // px
 
-// Mirrors the constants used by Layer.renderSlots, so the sample group's
-// border/slider row line up exactly with the standard slot rows.
-const SLOT_H   = 30
-const SLOT_GAP = 4
-const BTN_SZ   = SLOT_H - 6
+// Layout for the sample pill — mirrors PointLayer's wander pill conventions.
+const SLOT_H         = 30
+const SLOT_GAP       = 4
+const PILL_PAD       = 4
+const LABEL_W        = 78
+const SLIDER_VALUE_W = 40
+const N_SAMPLE_ROWS  = 4   // enable, image, point, radius
+const SAMPLE_PILL_H  = PILL_PAD * 2 + N_SAMPLE_ROWS * SLOT_H + (N_SAMPLE_ROWS - 1) * SLOT_GAP
+
+const SAMPLE_SLOT_TC: Partial<Record<ValueType, string>> = {
+  [ValueType.Event]: EV_ACCENT,
+  [ValueType.Image]: '#7ecf7e',
+  [ValueType.Point]: '#cf7ecf',
+}
 
 registerPromotionFactory((initial: Colour) => new ColourLayer(initial))
 
 export class ColourLayer extends Layer implements ColourSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Colour])
 
-  private readonly _slot:    ParameterSlot   // Colour input
   private readonly _hueSlot: ParameterSlot   // Amount → hue
   private readonly _posSlot: ParameterSlot   // Point  → SV position
 
@@ -80,11 +79,17 @@ export class ColourLayer extends Layer implements ColourSource {
   private readonly _sampleEnableSlot: ParameterSlot   // Event → toggle sampling on/off
 
   private _sampleEnabled = false
-  private _sampleRadius  = 20   // px
+  private _sampleRadius  = 5   // px
   private _lastSampleEventTime: EventValue = null
 
   private _sampleSliderDrag  = false
   private _sampleToggleBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _sampleRadiusRowBounds: { x: number; y: number; width: number; height: number } | null = null
+
+  // Transition detection: fires _onSampleImageBound once when the image slot
+  // goes from inactive to active while the point slot is still unbound.
+  private _prevSampleImageActive = false
+  private _onSampleImageBound: (() => void) | null = null
 
   private static readonly PAD_X    = 10
   private static readonly PAD_Y    = 8
@@ -93,14 +98,13 @@ export class ColourLayer extends Layer implements ColourSource {
   constructor(initial: Colour = { r: 1, g: 0.42, b: 0.17, a: 1 }) {
     super()
     this._colour  = { ...initial }
-    this._slot    = new ParameterSlot(ValueType.Colour, this)
     this._hueSlot = new ParameterSlot(ValueType.Amount, this, 'hue')
-    this._posSlot = new ParameterSlot(ValueType.Point,  this, 'position')
+    this._posSlot = new ParameterSlot(ValueType.Point,  this, 'sat/val')
     this._picker  = new ColourPickerRegion(this, initial)
-    this._sampleImageSlot  = new ParameterSlot(ValueType.Image, this, 'sample image')
-    this._samplePointSlot  = new ParameterSlot(ValueType.Point, this, 'sample point')
-    this._sampleEnableSlot = new ParameterSlot(ValueType.Event, this, 'sample enable')
-    this.slots.push(this._slot, this._hueSlot, this._posSlot,
+    this._sampleImageSlot  = new ParameterSlot(ValueType.Image, this, 'image')
+    this._samplePointSlot  = new ParameterSlot(ValueType.Point, this, 'point')
+    this._sampleEnableSlot = new ParameterSlot(ValueType.Event, this, 'sample')
+    this.slots.push(this._hueSlot, this._posSlot,
                     this._sampleEnableSlot, this._sampleImageSlot, this._samplePointSlot)
     this._picker.setOnHueDragStart(() => this._suspendSlot(this._hueSlot))
     this._picker.setOnSvDragStart(() => this._suspendSlot(this._posSlot))
@@ -124,7 +128,11 @@ export class ColourLayer extends Layer implements ColourSource {
     this.markDirty()
   }
 
-  get slot(): ParameterSlot { return this._slot }
+  get sampleImageSlot(): ParameterSlot { return this._sampleImageSlot }
+  get samplePointSlot(): ParameterSlot { return this._samplePointSlot }
+
+  enableSampling(): void { this._sampleEnabled = true; this.markDirty() }
+  setOnSampleImageBound(fn: () => void): void { this._onSampleImageBound = fn }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the picker, so the binding starts as a no-op.
@@ -165,34 +173,27 @@ export class ColourLayer extends Layer implements ColourSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    if (this._slot.isActive) {
-      const src = this._slot.source as ColourSource
-      this._colour = src.getColour()
-      this._picker.setDisplayColour(this._colour)
-      this._picker.interactive = false
-    } else {
-      this._picker.interactive = true
+    this._picker.interactive = true
 
-      const hueActive = this._hueSlot.isActive
-      const posActive = this._posSlot.isActive
+    const hueActive = this._hueSlot.isActive
+    const posActive = this._posSlot.isActive
 
-      if (hueActive) {
-        const amt = (this._hueSlot.source as AmountSource).getAmount()
-        this._picker.setHue(amt * 360)
-      }
-      if (posActive) {
-        const pt  = (this._posSlot.source as PointSource).getPoint()
-        const sat = pt.x / Node.canvasWidth
-        const val = 1 - pt.y / Node.canvasHeight
-        this._picker.setSatVal(sat, val)
-      }
-
-      this._picker.hueInteractive = !hueActive
-      this._picker.svInteractive  = !posActive
-
-      this._colour = { ...this._picker.colour }
-      this._picker.displayColour = this._colour
+    if (hueActive) {
+      const amt = (this._hueSlot.source as AmountSource).getAmount()
+      this._picker.setHue(amt * 360)
     }
+    if (posActive) {
+      const pt  = (this._posSlot.source as PointSource).getPoint()
+      const sat = pt.x / Node.canvasWidth
+      const val = 1 - pt.y / Node.canvasHeight
+      this._picker.setSatVal(sat, val)
+    }
+
+    this._picker.hueInteractive = !hueActive
+    this._picker.svInteractive  = !posActive
+
+    this._colour = { ...this._picker.colour }
+    this._picker.displayColour = this._colour
 
     // Rising edge on sampleEnableSlot flips _sampleEnabled.
     if (this._sampleEnableSlot.isActive) {
@@ -215,6 +216,15 @@ export class ColourLayer extends Layer implements ColourSource {
       }
     }
 
+    // Rising edge: image slot just became active while point slot is still
+    // unbound → ask main.ts to create and wire a PointLayer for the sample
+    // location. Deferred via queueMicrotask so it runs after evaluate() returns.
+    const nowImageActive = this._sampleImageSlot.isActive
+    if (nowImageActive && !this._prevSampleImageActive && !this._samplePointSlot.isActive) {
+      const cb = this._onSampleImageBound
+      if (cb !== null) queueMicrotask(() => cb())
+    }
+    this._prevSampleImageActive = nowImageActive
   }
 
   // Suspend an active binding so the picker can take over that zone.
@@ -340,7 +350,7 @@ export class ColourLayer extends Layer implements ColourSource {
     ctx.stroke()
 
     ctx.font         = '11px monospace'
-    ctx.fillStyle    = this._slot.isActive ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.80)'
+    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
     ctx.textAlign    = 'left'
     ctx.textBaseline = 'middle'
     ctx.fillText(hex, dotX + dotR + 6, labelY)
@@ -376,124 +386,167 @@ export class ColourLayer extends Layer implements ColourSource {
   }
 
   // ----------------------------------------------------------
-  // Image-sample slot group
+  // Image-sample pill
   // ----------------------------------------------------------
-  //
-  // sampleEnableSlot, sampleImageSlot, and samplePointSlot are ordinary
-  // entries in this.slots[], so Layer.renderSlots already draws standard
-  // bind-target rows for them (directly below the hue/position rows,
-  // which sit directly under the colour picker). This override adds a
-  // border around those three rows plus a radius-slider row below them,
-  // grouping the sampling controls into their own "pill", and overlays
-  // the enable/disable toggle button on the sampleEnableSlot row.
 
   override renderSlots(ctx: Ctx2D): void {
-    super.renderSlots(ctx)
+    this._slotBounds.clear()
+    const stdBottom = this.renderSlotGroup(
+      ctx, [this._hueSlot, this._posSlot], this.panelBottom,
+    )
+    this._renderSamplePill(ctx, stdBottom + 8)
+  }
 
-    const pX = contentLeft(Node.canvasWidth)
-    const pW = panelWidth(Node.canvasWidth)
-    const g = this._sampleGroupGeom()
+  private _samplePillBounds(topY: number) {
+    return { x: contentLeft(Node.canvasWidth), y: topY, width: panelWidth(Node.canvasWidth), height: SAMPLE_PILL_H }
+  }
+
+  private _sampleRow(i: number, pb: { x: number; y: number; width: number; height: number }) {
+    return { x: pb.x, y: pb.y + PILL_PAD + i * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
+  }
+
+  private _renderSamplePill(ctx: Ctx2D, topY: number): void {
+    const pb = this._samplePillBounds(topY)
+
+    // Pill background + accent stripe
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath(); ctx.roundRect(pb.x, pb.y, pb.width, pb.height, 8); ctx.fill()
+    ctx.fillStyle = SAMPLE_ACCENT
+    ctx.beginPath(); ctx.roundRect(pb.x, pb.y, 4, pb.height, [4, 0, 0, 4]); ctx.fill()
+    ctx.restore()
+
+    // Row 0 — sample enable binding + toggle button
+    this._renderSampleSlotRow(ctx, this._sampleEnableSlot, this._sampleRow(0, pb))
+    this._renderEnableButton(ctx, this._sampleRow(0, pb))
+
+    // Row 1 — image binding
+    this._renderSampleSlotRow(ctx, this._sampleImageSlot, this._sampleRow(1, pb))
+
+    // Row 2 — point binding
+    this._renderSampleSlotRow(ctx, this._samplePointSlot, this._sampleRow(2, pb))
+
+    // Row 3 — radius slider
+    const row3 = this._sampleRow(3, pb)
+    this._sampleRadiusRowBounds = row3
+    this._renderRadiusSliderRow(ctx, row3)
+  }
+
+  private _renderSampleSlotRow(
+    ctx: Ctx2D, slot: ParameterSlot,
+    b: { x: number; y: number; width: number; height: number },
+  ): void {
+    const drag     = Node.bindDrag
+    const isCompat = (drag.active && drag.source !== null && slot.type !== null
+                      && drag.source.types.has(slot.type))
+                  || (Node.fileDragActive && slot.type === ValueType.Image
+                      && slot.state === SlotState.Unbound)
+
+    this._slotBounds.set(slot, b)
+
+    const midY = b.y + b.height / 2
+    const tc   = (slot.type !== null ? SAMPLE_SLOT_TC[slot.type] : undefined) ?? '#888888'
+    const vx   = b.x + LABEL_W
+    const vw   = b.width - LABEL_W - 2
+    const by   = b.y + 3
+    const bh   = b.height - 6
 
     ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.fillText(slot.label, b.x + 6, midY)
 
-    // Group border + accent stripe around the three sample-slot rows
-    // plus the radius-slider row below them.
-    const groupH = g.rowsH + SLOT_GAP + SLOT_H
-    ctx.strokeStyle = SAMPLE_ACCENT + '88'
-    ctx.lineWidth   = 1.5
-    ctx.beginPath()
-    ctx.roundRect(pX - 2, g.y0 - 2, pW + 4, groupH + 4, 8)
-    ctx.stroke()
+    if (slot.isActive && !isCompat) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = tc + '22'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = tc + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+      ctx.fillText(srcName, vx + 6, midY)
+    } else if (isCompat) {
+      ctx.fillStyle = 'rgba(50,200,70,0.18)'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+      ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, midY)
+    } else if (slot.state === SlotState.SuspendedBound) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = tc + '11'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+      ctx.fillText('⏸ ' + srcName, vx + 6, midY)
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+      ctx.fillText('unbound', vx + 6, midY)
+    }
 
-    ctx.fillStyle = SAMPLE_ACCENT
-    ctx.beginPath()
-    ctx.roundRect(pX - 2, g.y0 - 2, 4, groupH + 4, [4, 0, 0, 4])
-    ctx.fill()
+    ctx.restore()
+  }
 
-    // Enable/disable toggle button, overlaid on the sampleEnableSlot row
-    const btnX = pX + pW - BTN_SZ - 3
-    const btnY = g.y0 + 3
-    this._sampleToggleBounds = { x: btnX, y: btnY, width: BTN_SZ, height: BTN_SZ }
+  private _renderEnableButton(ctx: Ctx2D, row: { x: number; y: number; width: number; height: number }): void {
+    const btnSz = row.height - 6
+    const btnX  = row.x + row.width - btnSz - 3
+    const btnY  = row.y + 3
+    const midY  = row.y + row.height / 2
+
+    this._sampleToggleBounds = { x: btnX, y: btnY, width: btnSz, height: btnSz }
 
     const state       = this._sampleEnableSlot.state
     const isActive    = state === SlotState.Bound
     const isSuspended = state === SlotState.SuspendedBound
 
-    if (isActive) {
-      ctx.fillStyle = EV_ACCENT + '33'
-    } else if (isSuspended) {
-      ctx.fillStyle = 'rgba(255,255,255,0.10)'
-    } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    }
-    ctx.beginPath()
-    ctx.roundRect(btnX, btnY, BTN_SZ, BTN_SZ, 3)
-    ctx.fill()
+    ctx.save()
+
+    ctx.fillStyle = isActive ? EV_ACCENT + '33' : isSuspended ? 'rgba(255,255,255,0.10)' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath(); ctx.roundRect(btnX, btnY, btnSz, btnSz, 3); ctx.fill()
 
     ctx.strokeStyle = isActive ? EV_ACCENT + '99' : 'rgba(255,255,255,0.30)'
     ctx.lineWidth   = 1
     if (isSuspended) ctx.setLineDash([2, 2])
-    ctx.beginPath()
-    ctx.roundRect(btnX + 0.5, btnY + 0.5, BTN_SZ - 1, BTN_SZ - 1, 3)
-    ctx.stroke()
+    ctx.beginPath(); ctx.roundRect(btnX + 0.5, btnY + 0.5, btnSz - 1, btnSz - 1, 3); ctx.stroke()
     ctx.setLineDash([])
 
-    const iconCol = isActive
-      ? EV_ACCENT
+    const iconCol = isActive ? EV_ACCENT
       : isSuspended ? 'rgba(255,255,255,0.35)'
       : this._sampleEnabled ? 'rgba(180,255,180,0.85)' : 'rgba(255,255,255,0.55)'
 
-    ctx.fillStyle    = iconCol
-    drawIcon(ctx, this._sampleEnabled ? 'aperture' : 'circle-half', btnX + BTN_SZ / 2, btnY + BTN_SZ / 2, BTN_SZ - 8)
-
-    // Radius slider row, below the three sample-slot rows
-    const sg = this._sampleSliderGeom()
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(pX, g.sliderY, pW, SLOT_H, 6)
-    ctx.fill()
-
-    ctx.font         = '10px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.fillText('radius', sg.labelX, sg.midY)
-
-    const norm = (this._sampleRadius - SAMPLE_RADIUS_MIN) / (SAMPLE_RADIUS_MAX - SAMPLE_RADIUS_MIN)
-    this._drawSlider(ctx, sg.midY, sg.sld0, sg.sldR, norm,
-      this._sampleEnabled ? SAMPLE_ACCENT : 'rgba(255,255,255,0.30)')
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`${Math.round(this._sampleRadius)}px`, sg.valueRight, sg.midY)
+    ctx.fillStyle = iconCol
+    drawIcon(ctx, this._sampleEnabled ? 'aperture' : 'circle-half', btnX + btnSz / 2, midY, btnSz - 8)
 
     ctx.restore()
   }
 
-  // Geometry of the sample-slot row group: y0 = top of the sampleEnableSlot
-  // row (the first of the three sample rows), rowsH = height spanned by
-  // those three rows, sliderY = top of the radius-slider row below them.
-  private _sampleGroupGeom() {
-    const startIdx = this.slots.indexOf(this._sampleEnableSlot)
-    const y0       = this.panelBottom + startIdx * (SLOT_H + SLOT_GAP)
-    const rowsH    = 3 * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    const sliderY  = y0 + rowsH + SLOT_GAP
-    return { y0, rowsH, sliderY }
-  }
+  private _renderRadiusSliderRow(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
+    const midY       = b.y + b.height / 2
+    const valueRight = b.x + b.width - 8
+    const sld0       = b.x + LABEL_W
+    const sldR       = valueRight - SLIDER_VALUE_W - 6
+    const norm       = (this._sampleRadius - SAMPLE_RADIUS_MIN) / (SAMPLE_RADIUS_MAX - SAMPLE_RADIUS_MIN)
 
-  private _sampleSliderGeom() {
-    const pX = contentLeft(Node.canvasWidth)
-    const pW = panelWidth(Node.canvasWidth)
-    const g = this._sampleGroupGeom()
-    const midY      = g.sliderY + SLOT_H / 2
-    const labelX    = pX + 8
-    const labelW    = 50  // "radius"
-    const valueRight = pX + pW - 8
-    const valueW    = 36
-    const sld0      = labelX + labelW
-    const sldR      = valueRight - valueW - 6
-    return { ...g, midY, labelX, sld0, sldR, valueRight }
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.fillText('radius', b.x + 6, midY)
+
+    this._drawSlider(ctx, midY, sld0, sldR, norm,
+      this._sampleEnabled ? SAMPLE_ACCENT : 'rgba(255,255,255,0.30)')
+
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${Math.round(this._sampleRadius)}px`, valueRight, midY)
+    ctx.restore()
   }
 
   // Track + filled portion + thumb, FilterLayer/NoiseLayer/FillLayer slider style.
@@ -543,16 +596,22 @@ export class ColourLayer extends Layer implements ColourSource {
   }
 
   private _sliderHit(point: Point): boolean {
-    const g = this._sampleSliderGeom()
-    return point.x >= g.sld0 - 6 && point.x <= g.sldR + 6 &&
-           point.y >= g.sliderY  && point.y <= g.sliderY + SLOT_H
+    const b = this._sampleRadiusRowBounds
+    if (b === null) return false
+    const sld0 = b.x + LABEL_W
+    const sldR = b.x + b.width - 8 - SLIDER_VALUE_W - 6
+    return point.x >= sld0 - 6 && point.x <= sldR + 6 &&
+           point.y >= b.y       && point.y <= b.y + b.height
   }
 
   private _setSampleRadiusFromPointer(px: number): void {
-    const g      = this._sampleSliderGeom()
+    const b = this._sampleRadiusRowBounds
+    if (b === null) return
+    const sld0   = b.x + LABEL_W
+    const sldR   = b.x + b.width - 8 - SLIDER_VALUE_W - 6
     const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = g.sldR - thumbR
+    const lo     = sld0 + thumbR
+    const hi     = sldR - thumbR
     const range  = Math.max(1e-6, hi - lo)
     this.setSampleRadius((px - lo) / range)
   }
