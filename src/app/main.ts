@@ -51,6 +51,7 @@ import { TransformLayer }    from '../layers/TransformLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
+import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
 import { LineLayer }         from '../layers/LineLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import { TraceLayer }        from '../layers/TraceLayer.js'
@@ -108,6 +109,18 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
 function randomAnimRate(): number {
   const logMin = Math.log(0.1), logMax = Math.log(1.5)
   return Math.exp(logMin + Math.random() * (logMax - logMin))
+}
+
+function wireColourFillButton(layer: ColourLayer): void {
+  layer.setOnAddFill(() => {
+    const fill = new FillLayer()
+    Layer.assignDebugName(fill)
+    fill.bounds = { x: X, y: 24, width: W, height: 36 }
+    fill.insertBelow(layer)
+    BindingLayer.create(layer, fill.colourASlot)
+    postInsertLayer(fill)
+    refreshStack()
+  })
 }
 
 // Wire a ColourLayer's sample-image-slot auto-setup: when an image source
@@ -241,6 +254,37 @@ function postInsertLayer(newLayer: Layer): void {
     }
     if (cols[0] && !newLayer.colourASlot.isActive) BindingLayer.create(cols[0], newLayer.colourASlot)
     if (cols[1] && !newLayer.colourBSlot.isActive) BindingLayer.create(cols[1], newLayer.colourBSlot)
+    // Wire the opacity SliderSlot's inspector button to the InteractionSystem panel.
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+  }
+
+  if (newLayer instanceof PointLayer) {
+    const wireInspector = (slot: ParameterSlot, cx: number, cy: number) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.amountWidget.onInspectorRequest = wireInspector
+    newLayer.speedWidget.onInspectorRequest  = wireInspector
+  }
+
+  if (newLayer instanceof TransformLayer) {
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+  }
+
+  if (newLayer instanceof FilterLayer) {
+    newLayer.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+  }
+
+  if (newLayer instanceof MotionBlurLayer) {
+    const wire = (slot: ParameterSlot, cx: number, cy: number) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.fadeWidget.onInspectorRequest  = wire
+    newLayer.delayWidget.onInspectorRequest = wire
+  }
+
+  if (newLayer instanceof DirectionLayer) {
+    newLayer.speedWidget.onInspectorRequest = (slot, cx, cy) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
   }
 
   if (newLayer instanceof NoiseLayer) {
@@ -250,9 +294,16 @@ function postInsertLayer(newLayer: Layer): void {
     if (!newLayer.timeSlot.isActive) {
       BindingLayer.create(clock, newLayer.timeSlot)
     }
+    const wire = (slot: ParameterSlot, cx: number, cy: number) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.scaleWidget.onInspectorRequest  = wire
+    newLayer.speedWidget.onInspectorRequest  = wire
+    newLayer.detailWidget.onInspectorRequest = wire
+    newLayer.driftWidget.onInspectorRequest  = wire
   }
 
   if (newLayer instanceof ColourLayer) {
+    wireColourFillButton(newLayer)
     wireColourSampleSetup(newLayer)
   }
   if (newLayer instanceof VideoLayer) {
@@ -708,6 +759,7 @@ canvas.width  = Math.max(window.innerWidth,  MIN_CANVAS_W)
 canvas.height = Math.max(window.innerHeight, MIN_CANVAS_H)
 canvas.style.cssText = 'position:absolute;top:0;left:0;touch-action:none;transform-origin:0 0'
 container.appendChild(canvas)
+Node.canvasElement = canvas
 
 // Widget canvas: always viewport-sized, overlaid with pointer-events:none so
 // touches pass through to the content canvas. The LayerStackWidget renders
@@ -886,7 +938,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer)  scanL.setEjectCallback(() => refreshStack())
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
-    if (scanL instanceof ColourLayer)      wireColourSampleSetup(scanL)
+    if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
     if (scanL instanceof ImageLayer)       wireImageLayer(scanL)
     if (scanL instanceof VideoLayer)       wireVideoTrackButton(scanL)
     if (isAnimatableShape(scanL))          wireAnimatableShape(scanL)
@@ -903,12 +955,32 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof LineLayer)       wirePointButton(scanL)
     if (scanL instanceof StrokeLayer)     wireStrokeSnapPoint(scanL)
     if (scanL instanceof LineLayer)       wireLineSnapPoint(scanL)
+    if (scanL instanceof PointLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.amountWidget.onInspectorRequest = wi
+      scanL.speedWidget.onInspectorRequest  = wi
+    }
+    if (scanL instanceof TransformLayer)  scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (scanL instanceof FilterLayer)     scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+    if (scanL instanceof MotionBlurLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.fadeWidget.onInspectorRequest  = wi
+      scanL.delayWidget.onInspectorRequest = wi
+    }
+    if (scanL instanceof DirectionLayer)  scanL.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (scanL instanceof NoiseLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.scaleWidget.onInspectorRequest  = wi
+      scanL.speedWidget.onInspectorRequest  = wi
+      scanL.detailWidget.onInspectorRequest = wi
+      scanL.driftWidget.onInspectorRequest  = wi
+    }
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
-    if (archived instanceof ColourLayer)     wireColourSampleSetup(archived)
+    if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
     if (archived instanceof ImageLayer)      wireImageLayer(archived)
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (archived instanceof VideoLayer)        wireVideoTrackButton(archived)
@@ -925,6 +997,26 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof LineLayer)       wirePointButton(archived)
     if (archived instanceof StrokeLayer)     wireStrokeSnapPoint(archived)
     if (archived instanceof LineLayer)       wireLineSnapPoint(archived)
+    if (archived instanceof PointLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.amountWidget.onInspectorRequest = wi
+      archived.speedWidget.onInspectorRequest  = wi
+    }
+    if (archived instanceof TransformLayer)  archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (archived instanceof FilterLayer)     archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+    if (archived instanceof MotionBlurLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.fadeWidget.onInspectorRequest  = wi
+      archived.delayWidget.onInspectorRequest = wi
+    }
+    if (archived instanceof DirectionLayer)  archived.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (archived instanceof NoiseLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.scaleWidget.onInspectorRequest  = wi
+      archived.speedWidget.onInspectorRequest  = wi
+      archived.detailWidget.onInspectorRequest = wi
+      archived.driftWidget.onInspectorRequest  = wi
+    }
   }
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)

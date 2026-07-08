@@ -91,6 +91,10 @@ export class ColourLayer extends Layer implements ColourSource {
   private _prevSampleImageActive = false
   private _onSampleImageBound: (() => void) | null = null
 
+  // Fill convenience button
+  private _addFillDone = false
+  private _onAddFill: (() => void) | null = null
+
   private static readonly PAD_X    = 10
   private static readonly PAD_Y    = 8
   private static readonly LABEL_H  = 18  // space reserved at bottom for hex label
@@ -133,6 +137,7 @@ export class ColourLayer extends Layer implements ColourSource {
 
   enableSampling(): void { this._sampleEnabled = true; this.markDirty() }
   setOnSampleImageBound(fn: () => void): void { this._onSampleImageBound = fn }
+  setOnAddFill(fn: () => void): void { this._onAddFill = fn }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the picker, so the binding starts as a no-op.
@@ -156,6 +161,7 @@ export class ColourLayer extends Layer implements ColourSource {
       colour:        this._colour,
       sampleEnabled: this._sampleEnabled,
       sampleRadius:  this._sampleRadius,
+      addFillDone:   this._addFillDone,
     }
   }
 
@@ -165,7 +171,8 @@ export class ColourLayer extends Layer implements ColourSource {
       this._picker.setDisplayColour(this._colour)
     }
     if (typeof state.sampleEnabled === 'boolean') this._sampleEnabled = state.sampleEnabled
-    if (typeof state.sampleRadius === 'number')   this._sampleRadius  = state.sampleRadius
+    if (typeof state.sampleRadius  === 'number')  this._sampleRadius  = state.sampleRadius
+    if (typeof state.addFillDone   === 'boolean') this._addFillDone   = state.addFillDone
   }
 
   // ----------------------------------------------------------
@@ -382,6 +389,37 @@ export class ColourLayer extends Layer implements ColourSource {
       dx -= ctx.measureText(label).width + 5
     }
 
+    ctx.restore()
+  }
+
+  // ----------------------------------------------------------
+  // Fill convenience button
+  // ----------------------------------------------------------
+
+  private _fillBtnRect() {
+    const left = contentLeft(Node.canvasWidth)
+    const w    = 50
+    const x    = left + Math.max(0, (Node.viewportWidth - left - w) / 2)
+    const y    = Node.viewportHeight - 30 - 14
+    return { x, y, w, h: 30 }
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    super.renderOverlay(ctx)
+    if (this._addFillDone || this._onAddFill === null) return
+    const { x, y, w, h } = this._fillBtnRect()
+    const midY = y + h / 2
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
+    ctx.fillStyle = SAMPLE_ACCENT + 'cc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText('Fill', x + 10, midY)
+    ctx.restore()
     ctx.restore()
   }
 
@@ -621,12 +659,24 @@ export class ColourLayer extends Layer implements ColourSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point) {
+    if (!this._addFillDone && this._onAddFill !== null) {
+      const { x, y, w, h } = this._fillBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     if (this._sampleToggleBounds !== null && boundingBoxContains(this._sampleToggleBounds, point)) return this
     if (this._sliderHit(point)) return this
     return this._picker.hitTest(point)
   }
 
   handlePointerDown(point: Point): boolean {
+    if (!this._addFillDone && this._onAddFill !== null) {
+      const { x, y, w, h } = this._fillBtnRect()
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addFillDone = true
+        this._onAddFill()
+        return true
+      }
+    }
     if (this._sampleToggleBounds !== null && boundingBoxContains(this._sampleToggleBounds, point)) {
       this._handleSampleToggle()
       return true

@@ -324,6 +324,19 @@ export class InteractionSystem {
     this._createBindingMap = fn
   }
 
+  // Show the binding inspector panel for `slot`, anchored at (cx, cy) in
+  // client/screen coordinates.  Used by SliderSlot's inspector button so
+  // left-clicking it triggers the same panel as right-clicking the slot.
+  showInspectorForSlot(slot: ParameterSlot, cx: number, cy: number): void {
+    if (slot.state === SlotState.Unbound) return
+    const bl = BindingLayer.findForSlot(slot)
+    if (bl === null) return
+    // Defer past the current pointer-event batch: _showInspector registers a
+    // mousedown "outside" listener, which would fire immediately and close the
+    // panel if we're being called from a pointerdown handler.
+    setTimeout(() => this._showInspector(bl, slot, cx, cy), 0)
+  }
+
   // Handle a tap/click on a slot row. If the slot is suspended and the click
   // landed on the pause icon, resume it; otherwise delegate to _onSlotClick.
   private _handleSlotTap(layer: Layer, slot: ParameterSlot, point: Point): void {

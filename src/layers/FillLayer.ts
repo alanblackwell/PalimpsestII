@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
@@ -12,6 +13,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // FillLayer — procedural fill / gradient image generator
@@ -54,7 +56,11 @@ import { BindingLayer } from './BindingLayer.js'
 //   │ ▌  [◀] linear [▶]   colA ●  colB ●  pos ●  dir ○        │
 //   └──────────────────────────────────────────────────────────┘
 //   ┌──────────────────────────────────────────────────────────┐
-//   │ ▌  opacity  ──────────●────────────────────  0.80    ○   │
+//   │  opacity  [⏸ | ─────●────────────────────────────── | ⋯] │  ← SliderSlot
+//   │  colour a [ ··· unbound / bound source ··············· ] │
+//   │  colour b [ ··············································]│
+//   │  position [ ··············································]│
+//   │  direction[ ··············································]│
 //   └──────────────────────────────────────────────────────────┘
 //
 // Call resize(w, h) when the canvas dimensions change.
@@ -71,9 +77,17 @@ const LABEL_W  = 52
 const BTN_M    = 6
 const SWAP_W   = 18   // swap-colours button, between the two swatches
 
-const OPACITY_H = 36   // separate pill below the main controls
-const OP_LABEL_W = 50
-const OP_VALUE_W = 40
+// Slot group layout — must match Layer.renderSlotGroup
+const SLOT_H     = 30
+const SLOT_GAP   = 4
+const SL_LABEL_W = 78   // label column width (shared with slot rows)
+
+const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
+  [ValueType.Amount]:    '#4a8fe8',
+  [ValueType.Colour]:    '#e8944a',
+  [ValueType.Point]:     '#cf7ecf',
+  [ValueType.Direction]: '#7ecfcf',
+}
 
 type GradType = 'fill' | 'linear' | 'radial'
 const GRAD_TYPES: GradType[] = ['fill', 'linear', 'radial']
@@ -110,9 +124,11 @@ export class FillLayer extends Layer implements ImageSource {
   private _gradIndex: number = 0   // default: fill
   private _offscreen:  OffscreenCanvas
 
-  // Manual opacity, used while opacitySlot is unbound.
+  // Manual opacity, used while opacitySlot is unbound or suspended.
   private _opacity: number = 1   // [0, 1]
-  private _opacityDrag = false
+
+  // Combined slider + binding-slot widget for the opacity control.
+  private readonly _opacityWidget: SliderSlot
 
   constructor(canvasWidth = 1920, canvasHeight = 1080) {
     super()
@@ -124,6 +140,14 @@ export class FillLayer extends Layer implements ImageSource {
     this._opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this.slots.push(this._colourASlot, this._colourBSlot,
                     this._positionSlot, this._directionSlot, this._opacitySlot)
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._opacitySlot.isActive
+            ? (this._opacitySlot.source as AmountSource).getAmount() as number
+            : this._opacity,
+      v => this.setOpacity(v),
+      () => this.markDirty(),
+    )
     this.debugName = 'FillLayer'
     graph.register(this)
   }
@@ -143,6 +167,7 @@ export class FillLayer extends Layer implements ImageSource {
   get positionSlot():  ParameterSlot { return this._positionSlot  }
   get directionSlot(): ParameterSlot { return this._directionSlot }
   get opacitySlot():   ParameterSlot { return this._opacitySlot   }
+  get opacityWidget(): SliderSlot    { return this._opacityWidget  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
@@ -248,47 +273,22 @@ export class FillLayer extends Layer implements ImageSource {
     if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._labelBounds(),   point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._swapBtnBounds(), point)) { this._swapColours(); return true }
-
-    const g = this._opacitySliderGeom()
-    if (point.x >= g.sld0 - 6 && point.x <= g.sldR + 6 &&
-        point.y >= g.b.y    && point.y <= g.b.y + g.b.height) {
-      this._opacityDrag = true
-      this._setOpacityFromPointer(point.x)
-      return true
-    }
-
+    if (this._opacityWidget.handlePointerDown(point, this._opacityRowBounds())) return true
     return false
   }
 
   handlePointerMove(point: Point): void {
-    if (!this._opacityDrag) return
-    this._setOpacityFromPointer(point.x)
+    this._opacityWidget.handlePointerMove(point, this._opacityRowBounds())
   }
 
   handlePointerUp(): void {
-    this._opacityDrag = false
-  }
-
-  private _setOpacityFromPointer(px: number): void {
-    const g      = this._opacitySliderGeom()
-    const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = g.sldR - thumbR
-    const range  = Math.max(1e-6, hi - lo)
-    this.setOpacity((px - lo) / range)
+    this._opacityWidget.handlePointerUp()
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (boundingBoxContains(this.canvasBounds, point)) return this
-    if (boundingBoxContains(this._opacityPillBounds(), point)) return this
+    if (boundingBoxContains(this._opacityRowBounds(), point)) return this
     return null
-  }
-
-  // Slot rows are drawn below the opacity pill, not directly below the
-  // main controls pill.
-  override get panelBottom(): number {
-    const ob = this._opacityPillBounds()
-    return ob.y + ob.height + 8
   }
 
   // ----------------------------------------------------------
@@ -376,87 +376,8 @@ export class FillLayer extends Layer implements ImageSource {
     }
 
     ctx.restore()
-
-    this._drawOpacityPill(ctx)
   }
 
-  private _drawOpacityPill(ctx: Ctx2D): void {
-    const g = this._opacitySliderGeom()
-    const { x, y, width, height } = g.b
-
-    const active = this._opacitySlot.isActive
-    const value  = active
-      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : this._opacity
-    const colour = active ? AM_COL : ACCENT
-
-    ctx.save()
-
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    // Accent stripe
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    // Label
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('opacity', g.labelX, g.midY)
-
-    // Slider
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, value, colour)
-
-    // Value text
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(value.toFixed(2), g.valueRight, g.midY)
-
-    // Bind indicator
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
-    ctx.restore()
-  }
-
-  // Track + filled portion + thumb, FilterLayer/NoiseLayer slider style.
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo     = x0 + thumbR
-    const hi     = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-
-    ctx.lineCap = 'round'
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(hi, midY)
-    ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(thumbX, midY)
-    ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
-    ctx.fill()
-  }
 
   // ----------------------------------------------------------
   // Fill / gradient drawing
@@ -592,20 +513,109 @@ export class FillLayer extends Layer implements ImageSource {
     return { x: sb.x + sb.width + 4, y: sb.y, width: 22, height: sb.height }
   }
 
-  // Opacity pill — directly below the main controls pill.
-  private _opacityPillBounds() {
+  // Bounds of the opacity SliderSlot row — first row of the combined pill.
+  private _opacityRowBounds() {
     const cb = this.canvasBounds
-    return { x: cb.x, y: cb.y + cb.height + 8, width: cb.width, height: OPACITY_H }
+    return { x: cb.x, y: this.panelBottom, width: cb.width, height: SLOT_H }
   }
 
-  private _opacitySliderGeom() {
-    const b      = this._opacityPillBounds()
-    const midY   = b.y + b.height / 2
-    const labelX = b.x + 12
-    const indX   = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0   = labelX + OP_LABEL_W
-    const sldR   = valueRight - OP_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  // Combined pill: SliderSlot (opacity) in row 0, standard slot rows below.
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+
+    const cb     = this.canvasBounds
+    const px     = cb.x
+    const pw     = cb.width
+    const y0     = this.panelBottom
+    // rows: 1 SliderSlot + 4 standard slots (colourA/B, position, direction)
+    const n      = this.slots.length   // 5 total; opacity handled by widget
+    const totalH = n * (SLOT_H + SLOT_GAP) - SLOT_GAP
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(px, y0, pw, totalH, 6)
+    ctx.fill()
+    ctx.restore()
+
+    // Row 0: combined opacity slider + binding slot
+    const opacityRow = this._opacityRowBounds()
+    this._slotBounds.set(this._opacitySlot, opacityRow)  // full row = drop target
+    this._opacityWidget.render(ctx, opacityRow)
+
+    // Rows 1–4: standard slot rows (skipping opacitySlot, already handled above)
+    let y = y0 + SLOT_H + SLOT_GAP
+    for (const slot of this.slots) {
+      if (slot === this._opacitySlot) continue
+      this._renderSlotRow(ctx, slot, { x: px, y, width: pw, height: SLOT_H })
+      y += SLOT_H + SLOT_GAP
+    }
+  }
+
+  // Standard slot-binding row — replicates Layer.renderSlotGroup's per-row
+  // rendering so the slot rows can be placed inside the combined slider pill.
+  private _renderSlotRow(
+    ctx: Ctx2D,
+    slot: ParameterSlot,
+    b: { x: number; y: number; width: number; height: number },
+  ): void {
+    const drag = Node.bindDrag
+    const isCompat = (drag.active && drag.source !== null && slot.type !== null
+                      && drag.source.types.has(slot.type))
+                  || (Node.fileDragActive && slot.type === ValueType.Image
+                      && slot.state === SlotState.Unbound)
+
+    this._slotBounds.set(slot, b)
+
+    const midY = b.y + b.height / 2
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.textBaseline = 'middle'
+
+    ctx.fillStyle = 'rgba(255,255,255,0.62)'
+    ctx.textAlign = 'left'
+    ctx.fillText(slot.label, b.x + 6, midY)
+
+    const tc = (slot.type !== null ? TYPE_COLOUR[slot.type] : undefined) ?? '#888888'
+    const vx = b.x + SL_LABEL_W
+    const vw = b.width - SL_LABEL_W - 2
+    const by = b.y + 3
+    const bh = b.height - 6
+
+    if (slot.isActive && !isCompat) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = tc + '22'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = tc + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
+      ctx.fillText(srcName, vx + 6, midY)
+    } else if (isCompat) {
+      ctx.fillStyle = 'rgba(50,200,70,0.18)'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
+      ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, midY)
+    } else if (slot.state === SlotState.SuspendedBound) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = tc + '11'
+      ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+      ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
+      ctx.fillText('⏸ ' + srcName, vx + 6, midY)
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1
+      ctx.setLineDash([3, 3])
+      ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+      ctx.setLineDash([])
+      ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
+      ctx.fillText('unbound', vx + 6, midY)
+    }
+
+    ctx.restore()
   }
 }

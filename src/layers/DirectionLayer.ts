@@ -14,6 +14,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, angleDist } from '../interaction/AngleSnapper.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // DirectionLayer — a 2-D direction picker (angle + magnitude)
@@ -54,10 +55,9 @@ type BBox = { x: number; y: number; width: number; height: number }
 const ROT_PILL_PAD     = 4
 const ROT_ROW_H        = 30
 const ROT_ROW_GAP      = 4
-const ROT_LABEL_W      = 78
-const ROT_SLIDER_VAL_W = 40
-const ROT_BTN_SZ       = ROT_ROW_H - 6
-const N_ROT_ROWS       = 4
+const ROT_LABEL_W = 78
+const ROT_BTN_SZ  = ROT_ROW_H - 6
+const N_ROT_ROWS       = 3
 const ROT_PILL_H       = ROT_PILL_PAD * 2 + N_ROT_ROWS * ROT_ROW_H + (N_ROT_ROWS - 1) * ROT_ROW_GAP
 
 // Animation constants
@@ -115,7 +115,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // Hit-test bounds for the two toggle buttons (set during renderSlots)
   private _rotateToggleBounds: BBox | null = null
   private _cwBounds:           BBox | null = null
-  private _speedSliderDrag = false
+  private readonly _speedWidget: SliderSlot
 
   constructor(angle = 0, magnitude = 1) {
     super()
@@ -134,6 +134,17 @@ export class DirectionLayer extends Layer implements DirectionSource {
     )
     this.displayBaseName = 'Angle'
     this.debugName = 'Angle'
+    this._speedWidget = new SliderSlot(
+      this._speedSlot, 'speed', AM_ACCENT,
+      () => this._speedSlot.isActive
+        ? (this._speedSlot.source as AmountSource).getAmount() as number
+        : this._rotateSpeed,
+      v => {
+        if (this._speedSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._speedSlot)?.toggle()
+        this._rotateSpeed = v; this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
@@ -155,6 +166,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
   get magnitudeSlot():     ParameterSlot { return this._magnitudeSlot     }
   get rotateToggleSlot():  ParameterSlot { return this._rotateToggleSlot  }
   get speedSlot():         ParameterSlot { return this._speedSlot         }
+  get speedWidget():       SliderSlot    { return this._speedWidget        }
   get cwSlot():            ParameterSlot { return this._cwSlot            }
 
   getDialPosition():   Point { return { ...this._position }       }
@@ -325,20 +337,13 @@ export class DirectionLayer extends Layer implements DirectionSource {
       this._handleCwToggle()
       return true
     }
-    if (this._speedSliderHit(point)) {
-      this._speedSliderDrag = true
-      this._setSpeedFromPointer(point.x)
-      return true
-    }
+    if (this._speedWidget.handlePointerDown(point, this._rotateRow(1))) return true
 
     return false
   }
 
   handlePointerMove(point: Point): void {
-    if (this._speedSliderDrag) {
-      this._setSpeedFromPointer(point.x)
-      return
-    }
+    this._speedWidget.handlePointerMove(point, this._rotateRow(1))
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
@@ -356,7 +361,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
 
   handlePointerUp(): void {
     this._drag = null
-    this._speedSliderDrag = false
+    this._speedWidget.handlePointerUp()
     this._clearDwellTimer()
   }
 
@@ -369,7 +374,7 @@ export class DirectionLayer extends Layer implements DirectionSource {
     // Pill controls
     if (this._rotateToggleBounds !== null && boundingBoxContains(this._rotateToggleBounds, point)) return this
     if (this._cwBounds           !== null && boundingBoxContains(this._cwBounds, point))           return this
-    if (this._speedSliderHit(point)) return this
+    if (boundingBoxContains(this._rotateRow(1), point)) return this
     return null
   }
 
@@ -410,32 +415,6 @@ export class DirectionLayer extends Layer implements DirectionSource {
     return { x: b.x, y: b.y + ROT_PILL_PAD + i * (ROT_ROW_H + ROT_ROW_GAP), width: b.width, height: ROT_ROW_H }
   }
 
-  private _speedSliderRow(): BBox { return this._rotateRow(1) }
-
-  private _speedSliderHit(point: Point): boolean {
-    const b = this._speedSliderRow()
-    return boundingBoxContains(b, point)
-  }
-
-  private _speedSliderGeom() {
-    const b          = this._speedSliderRow()
-    const valueRight = b.x + b.width - 8
-    const sld0       = b.x + ROT_LABEL_W
-    const sldR       = valueRight - ROT_SLIDER_VAL_W - 6
-    return { b, midY: b.y + b.height / 2, sld0, sldR, valueRight }
-  }
-
-  private _setSpeedFromPointer(px: number): void {
-    if (this._speedSlot.state === SlotState.Bound) {
-      BindingLayer.findForSlot(this._speedSlot)?.toggle()
-    }
-    const g = this._speedSliderGeom()
-    const lo    = g.sld0 + 5
-    const hi    = g.sldR - 5
-    const range = Math.max(1e-6, hi - lo)
-    this._rotateSpeed = Math.max(0, Math.min(1, (px - lo) / range))
-    this.markDirty()
-  }
 
   private _handleRotateToggle(): void {
     if (this._rotateToggleSlot.state === SlotState.Bound) {
@@ -476,42 +455,17 @@ export class DirectionLayer extends Layer implements DirectionSource {
       this._rotating ? EV_ACCENT : 'rgba(255,255,255,0.55)',
       this._rotateToggleSlot.state, (b) => { this._rotateToggleBounds = b })
 
-    // Row 1 — speed slider
-    this._renderSpeedSlider(ctx)
+    // Row 1 — speed SliderSlot
+    const speedRow = this._rotateRow(1)
+    this._slotBounds.set(this._speedSlot, speedRow)
+    this._speedWidget.render(ctx, speedRow)
 
-    // Row 2 — speedSlot binding
-    this._renderBindRow(ctx, this._speedSlot, this._rotateRow(2))
-
-    // Row 3 — CW/CCW toggle binding + direction button
-    const row3 = this._rotateRow(3)
-    this._renderBindRow(ctx, this._cwSlot, row3)
-    this._renderToggleBtn(ctx, row3, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
+    // Row 2 — CW/CCW toggle binding + direction button
+    const row2 = this._rotateRow(2)
+    this._renderBindRow(ctx, this._cwSlot, row2)
+    this._renderToggleBtn(ctx, row2, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
       ACCENT,
       this._cwSlot.state, (b) => { this._cwBounds = b })
-  }
-
-  private _renderSpeedSlider(ctx: Ctx2D): void {
-    const g      = this._speedSliderGeom()
-    const active = this._speedSlot.isActive
-    const colour = active ? AM_ACCENT : ACCENT
-    const val    = active
-      ? (this._speedSlot.source as AmountSource).getAmount() as Amount
-      : this._rotateSpeed
-
-    ctx.save()
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('speed', g.b.x + 8, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, val, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(val.toFixed(2), g.valueRight, g.midY)
-    ctx.restore()
   }
 
   // Generic toggle button — a small square at the right of `row`.
@@ -609,21 +563,6 @@ export class DirectionLayer extends Layer implements DirectionSource {
     }
 
     ctx.restore()
-  }
-
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo     = x0 + thumbR
-    const hi     = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-    ctx.lineCap  = 'round'
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 3
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(hi, midY); ctx.stroke()
-    ctx.strokeStyle = colour
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(thumbX, midY); ctx.stroke()
-    ctx.fillStyle = colour
-    ctx.beginPath(); ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
   }
 
   // ----------------------------------------------------------

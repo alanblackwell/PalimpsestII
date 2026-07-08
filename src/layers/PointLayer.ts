@@ -17,6 +17,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { DraggablePointRegion, registerPromotionFactory } from '../regions/DraggablePointRegion.js'
 import { drawIcon } from '../ui/icons.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 registerPromotionFactory((initial: Point) => new PointLayer(initial))
 
@@ -151,9 +152,9 @@ const LABEL_W        = 78   // label column width, matches Layer.renderSlots' va
 const BTN_W          = 18   // mode-cycler / toggle button width
 const BTN_H          = ROW_H - 6   // 20 — leaves a 3px margin top/bottom within a row
 const MODE_LABEL_W   = 56
-const SLIDER_VALUE_W = 40
 
-const N_WANDER_ROWS = 7
+
+const N_WANDER_ROWS = 5
 const WANDER_PILL_H = PILL_PAD * 2 + N_WANDER_ROWS * ROW_H + (N_WANDER_ROWS - 1) * ROW_GAP
 
 // Simulation constants
@@ -222,7 +223,8 @@ export class PointLayer extends Layer implements PointSource {
   private _lastToggleTime: number | null = null   // wanderToggleSlot rising-edge detection
   private _lastTickTime:   number | null = null   // performance.now() of previous tick
 
-  private _sliderDrag: 'amount' | 'speed' | null = null
+  private readonly _amountWidget: SliderSlot
+  private readonly _speedWidget: SliderSlot
   private _toggleBounds: BBox | null = null
 
   // Reused scratch canvas for the long-range (coarse) mask search.
@@ -248,6 +250,24 @@ export class PointLayer extends Layer implements PointSource {
       this._slot, this._shapeSlot, this._shapeIndexSlot,
       this._wanderToggleSlot, this._amountSlot, this._speedSlot, this._maskSlot,
     )
+
+    this._amountWidget = new SliderSlot(
+      this._amountSlot, 'amount', AM_ACCENT,
+      () => this._amountSlot.isActive
+        ? Math.max(0, Math.min(1, (this._amountSlot.source as AmountSource).getAmount() as number))
+        : this._amount,
+      v => this.setAmount(v),
+      () => this.markDirty(),
+    )
+    this._speedWidget = new SliderSlot(
+      this._speedSlot, 'speed', RATE_ACCENT,
+      () => this._speedSlot.isActive
+        ? Math.max(0, Math.min(1, (this._speedSlot.source as RateSource).getRate() / RATE_DISPLAY_MAX))
+        : this._speed,
+      v => this.setSpeed(v),
+      () => this.markDirty(),
+    )
+
     this.debugName = 'PointLayer'
     graph.register(this)
   }
@@ -291,6 +311,8 @@ export class PointLayer extends Layer implements PointSource {
   get amountSlot():       ParameterSlot { return this._amountSlot       }
   get speedSlot():        ParameterSlot { return this._speedSlot        }
   get maskSlot():         ParameterSlot { return this._maskSlot         }
+  get amountWidget():     SliderSlot    { return this._amountWidget      }
+  get speedWidget():      SliderSlot    { return this._speedWidget       }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the manual control, so the binding starts as a no-op.
@@ -749,6 +771,9 @@ export class PointLayer extends Layer implements PointSource {
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     if (this._hitWanderControls(point)) return this
     if (this._hitShapeSpinner(point)) return this
+    // Ref-point markers take priority over the main-handle drag zone so clicking
+    // a numbered circle always selects that index rather than starting a free drag.
+    if (this._shapeSlot.isActive && this._hitTestRefPoint(point) !== null) return this
     // Intercept main handle drag when shape slot is active to provide snap-to-ref.
     if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
       const dx = point.x - this._point.x, dy = point.y - this._point.y
@@ -757,18 +782,23 @@ export class PointLayer extends Layer implements PointSource {
     return this._region.hitTest(point)
   }
 
+  private _hitTestRefPoint(point: Point): number | null {
+    if (this._cachedRefPoints.length === 0) return null
+    const hitR = REF_HANDLE_R + 4
+    for (let i = 0; i < this._cachedRefPoints.length; i++) {
+      const ref = this._cachedRefPoints[i]!
+      if (Math.hypot(point.x - ref.x, point.y - ref.y) <= hitR) return i
+    }
+    return null
+  }
+
   private _hitWanderControls(point: Point): boolean {
     const { prev, label, next } = this._modeButtons(this._wanderRow(1))
     if (boundingBoxContains(prev,  point)) return true
     if (boundingBoxContains(label, point)) return true
     if (boundingBoxContains(next,  point)) return true
-
-    for (const i of [2, 4]) {
-      const row = this._wanderRow(i)
-      const { sld0, sldR } = this._sliderGeom(row)
-      if (point.x >= sld0 - 6 && point.x <= sldR + 6 &&
-          point.y >= row.y  && point.y <= row.y + row.height) return true
-    }
+    if (boundingBoxContains(this._wanderRow(2), point)) return true
+    if (boundingBoxContains(this._wanderRow(3), point)) return true
     return false
   }
 
@@ -797,6 +827,23 @@ export class PointLayer extends Layer implements PointSource {
       this._cycleShapeRef(+1); return true
     }
 
+    // Clicking a numbered ref-point marker selects that index and enables binding.
+    if (this._shapeSlot.isActive) {
+      const ri = this._hitTestRefPoint(point)
+      if (ri !== null) {
+        this._shapeRefIndex = ri
+        this._shapeEnabled  = true
+        const ref = this._cachedRefPoints[ri]
+        if (ref) {
+          this._point = { ...ref }
+          this._region.setPoint(this._point)
+          this._region.interactive = false
+        }
+        this.markDirty()
+        return true
+      }
+    }
+
     // Main handle drag while shape slot is active — intercept for snap-to-ref.
     if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
       const dx = point.x - this._point.x, dy = point.y - this._point.y
@@ -814,16 +861,8 @@ export class PointLayer extends Layer implements PointSource {
       }
     }
 
-    for (const i of [2, 4]) {
-      const row = this._wanderRow(i)
-      const { sld0, sldR } = this._sliderGeom(row)
-      if (point.x >= sld0 - 6 && point.x <= sldR + 6 &&
-          point.y >= row.y  && point.y <= row.y + row.height) {
-        this._sliderDrag = i === 2 ? 'amount' : 'speed'
-        this._setSliderFromPointer(this._sliderDrag, point.x)
-        return true
-      }
-    }
+    if (this._amountWidget.handlePointerDown(point, this._wanderRow(2))) return true
+    if (this._speedWidget.handlePointerDown(point, this._wanderRow(3))) return true
     return false
   }
 
@@ -832,8 +871,8 @@ export class PointLayer extends Layer implements PointSource {
       this._updateShapeSnap(point)
       return
     }
-    if (this._sliderDrag === null) return
-    this._setSliderFromPointer(this._sliderDrag, point.x)
+    this._amountWidget.handlePointerMove(point, this._wanderRow(2))
+    this._speedWidget.handlePointerMove(point, this._wanderRow(3))
   }
 
   handlePointerUp(): void {
@@ -857,7 +896,8 @@ export class PointLayer extends Layer implements PointSource {
       this.markDirty()
       return
     }
-    this._sliderDrag = null
+    this._amountWidget.handlePointerUp()
+    this._speedWidget.handlePointerUp()
   }
 
   private _updateShapeSnap(point: Point): void {
@@ -922,17 +962,6 @@ export class PointLayer extends Layer implements PointSource {
     this.markDirty()
   }
 
-  private _setSliderFromPointer(which: 'amount' | 'speed', px: number): void {
-    const row = this._wanderRow(which === 'amount' ? 2 : 4)
-    const { sld0, sldR } = this._sliderGeom(row)
-    const thumbR = 5
-    const lo     = sld0 + thumbR
-    const hi     = sldR - thumbR
-    const range  = Math.max(1e-6, hi - lo)
-    const v      = Math.max(0, Math.min(1, (px - lo) / range))
-    if (which === 'amount') this.setAmount(v)
-    else this.setSpeed(v)
-  }
 
   // ----------------------------------------------------------
   // Rendering
@@ -1068,39 +1097,18 @@ export class PointLayer extends Layer implements PointSource {
     // Row 2 — algorithm cycler
     this._renderModeRow(ctx, this._wanderRow(1))
 
-    // Row 3 — amount slider
-    const amountVal = this._amountSlot.isActive
-      ? Math.max(0, Math.min(1, (this._amountSlot.source as AmountSource).getAmount() as Amount))
-      : this._amount
-    this._renderSliderRow(
-      ctx, this._wanderRow(2), this._amountSlot, 'amount', AM_ACCENT,
-      amountVal, amountVal.toFixed(2),
-    )
+    // Row 3 — amount SliderSlot
+    const amountRow = this._wanderRow(2)
+    this._slotBounds.set(this._amountSlot, amountRow)
+    this._amountWidget.render(ctx, amountRow)
 
-    // Row 4 — amount binding
-    this._renderSlotRow(ctx, this._amountSlot, this._wanderRow(3))
+    // Row 4 — speed SliderSlot
+    const speedRow = this._wanderRow(3)
+    this._slotBounds.set(this._speedSlot, speedRow)
+    this._speedWidget.render(ctx, speedRow)
 
-    // Row 5 — speed slider
-    let speedVal01: number
-    let speedText: string
-    if (this._speedSlot.isActive) {
-      const rate = (this._speedSlot.source as RateSource).getRate()
-      speedVal01 = Math.max(0, Math.min(1, rate / RATE_DISPLAY_MAX))
-      speedText  = rate.toFixed(2)
-    } else {
-      speedVal01 = this._speed
-      speedText  = this._speed.toFixed(2)
-    }
-    this._renderSliderRow(
-      ctx, this._wanderRow(4), this._speedSlot, 'speed', RATE_ACCENT,
-      speedVal01, speedText,
-    )
-
-    // Row 6 — speed binding
-    this._renderSlotRow(ctx, this._speedSlot, this._wanderRow(5))
-
-    // Row 7 — mask binding
-    this._renderSlotRow(ctx, this._maskSlot, this._wanderRow(6))
+    // Row 5 — mask binding
+    this._renderSlotRow(ctx, this._maskSlot, this._wanderRow(4))
   }
 
   // Standard slot-binding row (label + drop-target box), reimplemented from
@@ -1167,30 +1175,6 @@ export class PointLayer extends Layer implements PointSource {
     ctx.restore()
   }
 
-  // Slider row — label, track, and resolved value. Tinted with
-  // `activeColour` when `slot` is bound (visual link to its binding row,
-  // drawn separately by _renderSlotRow). No drop target of its own.
-  private _renderSliderRow(
-    ctx: Ctx2D, b: BBox, slot: ParameterSlot, label: string,
-    activeColour: string, value01: number, valueText: string,
-  ): void {
-    const midY = b.y + b.height / 2
-    const { sld0, sldR, valueRight } = this._sliderGeom(b)
-    const colour = slot.state === SlotState.Bound ? activeColour : ACCENT
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + 8, midY)
-
-    this._drawSlider(ctx, midY, sld0, sldR, value01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(valueText, valueRight, midY)
-  }
 
   // Row 2 content — [◀] <algorithm> [▶] cycler, no slot binding.
   private _renderModeRow(ctx: Ctx2D, b: BBox): void {
@@ -1319,34 +1303,6 @@ export class PointLayer extends Layer implements PointSource {
     ctx.restore()
   }
 
-  // Track + filled portion + thumb, FilterLayer/NoiseLayer slider style.
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo     = x0 + thumbR
-    const hi     = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-
-    ctx.lineCap = 'round'
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(hi, midY)
-    ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(thumbX, midY)
-    ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
-    ctx.fill()
-  }
 
   private _drawNavBtn(ctx: Ctx2D, b: BBox, label: string, midY: number): void {
     ctx.fillStyle = 'rgba(255,255,255,0.07)'
@@ -1410,11 +1366,4 @@ export class PointLayer extends Layer implements PointSource {
     return { prev, label, next }
   }
 
-  // Slider track + value geometry within row `b`.
-  private _sliderGeom(b: BBox): { sld0: number; sldR: number; valueRight: number } {
-    const valueRight = b.x + b.width - 8
-    const sld0       = b.x + LABEL_W
-    const sldR       = valueRight - SLIDER_VALUE_W - 6
-    return { sld0, sldR, valueRight }
-  }
 }

@@ -10,6 +10,8 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import { filterGL } from './FilterGL.js'
 import { contentLeft } from '../interaction/layout.js'
 
@@ -37,13 +39,6 @@ import { contentLeft } from '../interaction/layout.js'
 
 type ApplyFn = (d: Uint8ClampedArray, t: number, w: number, h: number) => void
 
-function _grayscale(d: Uint8ClampedArray, t: number): void {
-  for (let i = 0; i < d.length; i += 4) {
-    const r = d[i]!, g = d[i+1]!, b = d[i+2]!
-    const v = 0.2126*r + 0.7152*g + 0.0722*b
-    d[i] = r + (v-r)*t;  d[i+1] = g + (v-g)*t;  d[i+2] = b + (v-b)*t
-  }
-}
 
 function _brightness(d: Uint8ClampedArray, t: number): void {
   const f = t * 2   // slider 0→1 maps to brightness 0→2× (neutral at 0.5)
@@ -445,7 +440,6 @@ const FILTER_DEFS: readonly FilterDef[] = [
   { label: 'contrast',   defaultT: 0.75, apply: _contrast   },
   { label: 'saturate',   defaultT: 0.75, apply: _saturate   },
   { label: 'hue-rotate', defaultT: 0.25, apply: _hueRotate  },
-  { label: 'grayscale',  defaultT: 1.00, apply: _grayscale  },
   { label: 'invert',     defaultT: 1.00, apply: _invert     },
   { label: 'sepia',      defaultT: 1.00, apply: _sepia      },
   { label: 'threshold',  defaultT: 0.50, apply: _threshold  },
@@ -468,7 +462,7 @@ interface FilterRow {
   readonly enableSlot: ParameterSlot
   readonly amountSlot: ParameterSlot
   lastEventTime:       EventValue
-  sliderDragging:      boolean
+  sliderWidget:        SliderSlot
 }
 
 // ── Layout (all coordinates are canvas-space) ────────────────
@@ -479,14 +473,13 @@ const AM_COL  = '#4a8fe8'    // Amount type colour
 
 const PY0     = 50            // pill column top (= canvasBounds.y)
 
-// Each pill has 3 equal rows:
-//   Row 1: drag handle | filter name | thumbnail
-//   Row 2: toggle button | enable slot (no label)
-//   Row 3: slider + mini dotted square  OR  collapse-button + amount slot
+// Each pill has 2 rows:
+//   Row 1: drag handle | filter name | event-slot indicator | thumbnail
+//   Row 2: toggle button | slider track + mini amount-slot square
 const ROW_H   = 26            // height of each row
 const ROW_PAD = 3             // top/bottom padding inside pill
 const ROW_GAP = 3             // vertical gap between rows
-const PH = ROW_PAD + ROW_H + ROW_GAP + ROW_H + ROW_GAP + ROW_H + ROW_PAD  // = 90
+const PH = ROW_PAD + ROW_H + ROW_GAP + ROW_H + ROW_PAD  // = 61
 const PGAP    = 4             // gap between pills
 
 // Column layout — pills are centred in the space to the right of the
@@ -500,19 +493,19 @@ const RIGHT_MARGIN = 12        // minimum gap to the canvas's right edge
 // Left side offsets (relative to each pill's left edge):
 const STRIPE  = 4             // accent stripe width
 const DRAG_OX = STRIPE + 4   // left edge of the button/handle column  (8)
-const BTN_W   = 22            // width of toggle button and collapse button
+const BTN_W   = 22            // width of toggle button
 const DRAG_W  = 14            // drag-handle bars width (centred in BTN_W column)
 
-// Content starts after the left-column button in rows 2 and 3, and after
-// the drag-handle region in row 1.
+// Content starts after the left-column button/handle region.
 const SLT_X   = DRAG_OX + BTN_W + 4   // slot / name content left  (34)
 
 // Right side — relative to each pill's left edge
 const RPAD    = 8
 
-// Row 3 mini amount-slot square
-const MINI_SQ  = 22           // side length of mini slot square
-const MINI_GAP = 4            // gap between slider track end and mini square
+// Row 1 event-slot indicator (between filter name and thumbnail)
+const EV_IND_W   = 52          // width of the compact event-slot indicator box
+const EV_IND_GAP = 4           // gap between indicator and thumbnail
+const EV_BTN_W   = 16          // width of the ⏸/▶ button within the indicator
 
 // Source slot row height — the image source row above the pills is a plain
 // slot row and keeps its own fixed height independent of the pill rows above.
@@ -567,15 +560,37 @@ export class FilterLayer extends Layer implements ImageSource {
 
     this._sourceSlot = new ParameterSlot(ValueType.Image, this, 'image')
 
-    this._rows = FILTER_DEFS.map(def => ({
-      def,
-      enabled:       false,
-      intensity:     def.defaultT,
-      enableSlot:    new ParameterSlot(ValueType.Event,  this, def.label + ' toggle'),
-      amountSlot:    new ParameterSlot(ValueType.Amount, this, def.label + ' amount'),
-      lastEventTime: null,
-      sliderDragging: false,
-    }))
+    this._rows = FILTER_DEFS.map(def => {
+      const enableSlot = new ParameterSlot(ValueType.Event,  this, def.label + ' toggle')
+      const amountSlot = new ParameterSlot(ValueType.Amount, this, def.label + ' amount')
+      const row: FilterRow = {
+        def,
+        enabled:       false,
+        intensity:     def.defaultT,
+        enableSlot,
+        amountSlot,
+        lastEventTime: null,
+        sliderWidget:  null!,
+      }
+      row.sliderWidget = new SliderSlot(
+        amountSlot, 'amount', AM_COL,
+        () => amountSlot.isActive
+          ? (amountSlot.source as AmountSource).getAmount() as number
+          : row.intensity,
+        v => {
+          if (amountSlot.state === SlotState.Bound) BindingLayer.findForSlot(amountSlot)?.toggle()
+          if (!row.enabled) {
+            if (enableSlot.state === SlotState.Bound) BindingLayer.findForSlot(enableSlot)?.toggle()
+            row.enabled = true
+          }
+          row.intensity = v
+          this.markDirty()
+        },
+        () => this.markDirty(),
+        0,  // no label column — filter name is already in row 1
+      )
+      return row
+    })
 
     // Registered on `this.slots` (in fixed FILTER_DEFS order, independent of
     // `_rows`'s mutable drag-to-reorder order) purely so the persistence
@@ -599,6 +614,10 @@ export class FilterLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   get sourceSlot(): ParameterSlot { return this._sourceSlot }
+
+  wireSliderInspectors(fn: (slot: ParameterSlot, cx: number, cy: number) => void): void {
+    for (const row of this._rows) row.sliderWidget.onInspectorRequest = fn
+  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding intensity slider, so the binding
@@ -919,9 +938,8 @@ export class FilterLayer extends Layer implements ImageSource {
 
       const r1Y = py + ROW_PAD
       const r2Y = r1Y + ROW_H + ROW_GAP
-      const r3Y = r2Y + ROW_H + ROW_GAP
 
-      // ── Row 1: drag handle or consume ─────────────────────
+      // ── Row 1: drag handle | name | event indicator | thumbnail ──
       if (point.y < r2Y) {
         if (point.x >= colX + DRAG_OX && point.x < colX + DRAG_OX + BTN_W) {
           this._dragRow     = i
@@ -933,41 +951,30 @@ export class FilterLayer extends Layer implements ImageSource {
           this.markDirty()
           return true
         }
-        return true  // consume other row-1 clicks
+        // Event indicator zone
+        const thumbL = colX + pillW - RPAD - THUMB_W
+        const evIndX = thumbL - EV_IND_GAP - EV_IND_W
+        if (point.x >= evIndX && point.x < thumbL) {
+          // ⏸/▶ button at the right edge of the indicator
+          const hasBinding = row.enableSlot.isActive || row.enableSlot.state === SlotState.SuspendedBound
+          if (hasBinding && point.x >= evIndX + EV_IND_W - EV_BTN_W) {
+            this._handleToggle(row)
+            return true
+          }
+          return false  // slot click for rest of indicator
+        }
+        return true  // consume other row-1 clicks (name area, thumbnail)
       }
 
-      // ── Row 2: toggle button or enable-slot click ──────────
-      if (point.y < r3Y) {
-        if (point.x >= colX + DRAG_OX && point.x < colX + DRAG_OX + BTN_W) {
-          this._handleToggle(row)
-          return true
-        }
-        return false  // route to InteractionSystem slot click for enableSlot
-      }
-
-      // ── Row 3: depends on amountSlot state ────────────────
-      if (row.amountSlot.isActive) {
-        // Collapse button → suspend binding → back to slider mode
-        if (point.x >= colX + DRAG_OX && point.x < colX + DRAG_OX + BTN_W) {
-          row.amountSlot.suspend()
-          this.markDirty()
-          return true
-        }
-        return false  // slot click (select source, replace binding, context menu)
-      } else {
-        // Mini square at right → slot click
-        const miniL = colX + pillW - RPAD - MINI_SQ
-        if (point.x >= miniL) return false
-
-        // Slider area → drag; auto-enable if the filter is currently off
-        if (!row.enabled) {
-          if (row.enableSlot.state === SlotState.Bound) row.enableSlot.suspend()
-          row.enabled = true
-        }
-        row.sliderDragging = true
-        this._setSlider(row, colX, point.x, pillW)
+      // ── Row 2: toggle button | SliderSlot for amount ──────────
+      if (point.x >= colX + DRAG_OX && point.x < colX + DRAG_OX + BTN_W) {
+        this._handleToggle(row)
         return true
       }
+
+      const slotRow = { x: colX + SLT_X, y: r2Y, width: pillW - SLT_X - RPAD, height: ROW_H }
+      if (row.sliderWidget.handlePointerDown(point, slotRow)) return true
+      return false  // slot click for amountSlot
     }
     return false
   }
@@ -995,13 +1002,12 @@ export class FilterLayer extends Layer implements ImageSource {
       return
     }
 
-    // Slider drag
+    // SliderSlot drag (only the dragging widget responds internally)
     for (let i = 0; i < this._rows.length; i++) {
-      const row = this._rows[i]!
-      if (row.sliderDragging) {
-        this._setSlider(row, this._pillX(i, panX, pillW, ppc), point.x, pillW)
-        return
-      }
+      const row  = this._rows[i]!
+      const colX = this._pillX(i, panX, pillW, ppc)
+      const slotRow = { x: colX + SLT_X, y: this._pillY(i, ppc) + ROW_PAD + ROW_H + ROW_GAP, width: pillW - SLT_X - RPAD, height: ROW_H }
+      row.sliderWidget.handlePointerMove(point, slotRow)
     }
   }
 
@@ -1019,8 +1025,8 @@ export class FilterLayer extends Layer implements ImageSource {
       this._dragTarget = -1
     }
 
-    // End slider drag
-    for (const row of this._rows) row.sliderDragging = false
+    // End SliderSlot drags
+    for (const row of this._rows) row.sliderWidget.handlePointerUp()
   }
 
   // ----------------------------------------------------------
@@ -1028,24 +1034,11 @@ export class FilterLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   private _handleToggle(row: FilterRow): void {
-    if (row.enableSlot.state === SlotState.Bound) {
-      row.enableSlot.suspend()
-    } else if (row.enableSlot.state === SlotState.SuspendedBound) {
-      row.enableSlot.resume()
-    } else {
-      row.enabled = !row.enabled
-      this.markDirty()
-    }
-  }
-
-  private _setSlider(row: FilterRow, colX: number, px: number, pillW: number): void {
-    const sldX0 = colX + DRAG_OX
-    const sldXR = colX + pillW - RPAD - MINI_GAP - MINI_SQ
-    const sldW  = sldXR - sldX0
-    if (sldW <= 0) return
-    row.intensity = Math.max(0, Math.min(1, (px - sldX0) / sldW))
+    if (row.enableSlot.state === SlotState.Bound) row.enableSlot.suspend()
+    row.enabled = !row.enabled
     this.markDirty()
   }
+
 
   /** Preview thumbnail overlaid at the top-right of row 1. */
   private _drawThumb(
@@ -1081,9 +1074,7 @@ export class FilterLayer extends Layer implements ImageSource {
   ): void {
     const r1Y    = py + ROW_PAD
     const r2Y    = r1Y + ROW_H + ROW_GAP
-    const r3Y    = r2Y + ROW_H + ROW_GAP
     const r1MidY = r1Y + ROW_H / 2
-    const r3MidY = r3Y + ROW_H / 2
     const enabled = row.enabled
 
     // ── Full pill background ───────────────────────────────────
@@ -1094,87 +1085,45 @@ export class FilterLayer extends Layer implements ImageSource {
     ctx.fillStyle = enabled ? ACCENT : 'rgba(126,207,126,0.28)'
     ctx.beginPath(); ctx.roundRect(colX, py, STRIPE, PH, [3, 0, 0, 3]); ctx.fill()
 
-    // ── Row 1: Drag handle | Filter name | Thumbnail ──────────
+    // ── Row 1: drag handle | filter name | event indicator | thumbnail ──
     const dhMidX = colX + DRAG_OX + BTN_W / 2
     ctx.fillStyle = 'rgba(255,255,255,0.22)'
     for (let d = 0; d < 3; d++) {
       const dy = r1MidY - 4 + d * 4
       ctx.fillRect(dhMidX - DRAG_W / 2, dy - 1, DRAG_W, 2)
     }
+
+    // Event-slot indicator (fixed zone between name and thumbnail)
+    const thumbL  = colX + pillW - RPAD - THUMB_W
+    const evIndX  = thumbL - EV_IND_GAP - EV_IND_W
+    const evIndY  = r1Y + 3
+    const evIndH  = ROW_H - 6
+    this._drawEventIndicator(ctx, row.enableSlot, evIndX, evIndY, EV_IND_W, evIndH)
+    if (registerSlots) {
+      this._filterSlotBounds.set(row.enableSlot, { x: evIndX, y: r1Y, width: EV_IND_W, height: ROW_H })
+    }
+
+    // Filter name (clipped to avoid event indicator)
+    const nameMaxW = evIndX - (colX + SLT_X) - 4
+    ctx.save()
+    ctx.beginPath(); ctx.rect(colX + SLT_X, r1Y, nameMaxW, ROW_H); ctx.clip()
     ctx.font = 'bold 10px monospace'
     ctx.fillStyle = enabled ? 'rgba(255,255,255,1)' : 'rgba(255,255,255,0.7)'
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
     ctx.fillText(row.def.label, colX + SLT_X, r1MidY)
+    ctx.restore()
+
     this._drawThumb(ctx, this._rowPreviews.get(row), colX, r1Y, pillW, enabled)
 
-    // ── Row 2: Toggle button | Enable slot (no label) ─────────
+    // ── Row 2: toggle button | SliderSlot for amount ──────────
     this._drawToggle(ctx, colX + DRAG_OX, r2Y + (ROW_H - BTN_W) / 2, BTN_W, row)
-    const evX = colX + SLT_X
-    const evW = pillW - SLT_X - RPAD
-    this._drawCompactSlot(ctx, row.enableSlot, evX, r2Y + 3, evW, ROW_H - 6, EV_COL)
+
+    const slotRow = { x: colX + SLT_X, y: r2Y, width: pillW - SLT_X - RPAD, height: ROW_H }
     if (registerSlots) {
-      this._filterSlotBounds.set(row.enableSlot, { x: evX, y: r2Y, width: evW, height: ROW_H })
+      this._filterSlotBounds.set(row.amountSlot, slotRow)
     }
+    row.sliderWidget.render(ctx, slotRow)
 
-    // ── Row 3: Slider + mini square  -or-  Collapse btn + slot ─
-    const amBound  = row.amountSlot.isActive
-    const amSusp   = row.amountSlot.state === SlotState.SuspendedBound
-    const amCompat = Node.bindDrag.active
-                  && Node.bindDrag.source !== null
-                  && row.amountSlot.type !== null
-                  && Node.bindDrag.source.types.has(row.amountSlot.type)
-
-    if (amBound) {
-      // Mini slider as collapse-to-slider control at left column
-      const miniSliderCol = row.enabled ? ACCENT : 'rgba(255,255,255,0.22)'
-      this._drawMiniSlider(ctx, colX + DRAG_OX, r3Y + (ROW_H - BTN_W) / 2, BTN_W, miniSliderCol)
-      // Amount slot expanded to full content width
-      const amX = colX + SLT_X
-      const amW = pillW - SLT_X - RPAD
-      this._drawCompactSlot(ctx, row.amountSlot, amX, r3Y + 3, amW, ROW_H - 6, AM_COL)
-      if (registerSlots) {
-        this._filterSlotBounds.set(row.amountSlot, { x: colX, y: r3Y, width: pillW, height: ROW_H })
-      }
-    } else {
-      // Compat-drag highlight covers the entire slider + mini-square area
-      if (amCompat) {
-        const hlX = colX + DRAG_OX;  const hlW = pillW - DRAG_OX - RPAD
-        const hlY = r3Y + 2;         const hlH = ROW_H - 4
-        ctx.fillStyle = 'rgba(50,200,70,0.12)'
-        ctx.beginPath(); ctx.roundRect(hlX, hlY, hlW, hlH, 4); ctx.fill()
-        ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
-        ctx.beginPath(); ctx.roundRect(hlX + 0.5, hlY + 0.5, hlW - 1, hlH - 1, 4); ctx.stroke()
-      }
-
-      // Slider track (greyed when suspended)
-      this._drawSlider(ctx, row, colX, r3MidY, pillW, amSusp)
-
-      // Mini slot square at right
-      const sqX = colX + pillW - RPAD - MINI_SQ
-      const sqY = r3Y + (ROW_H - MINI_SQ) / 2
-      if (!amCompat) {
-        if (amSusp) {
-          ctx.fillStyle = AM_COL + '11'
-          ctx.beginPath(); ctx.roundRect(sqX, sqY, MINI_SQ, MINI_SQ, 4); ctx.fill()
-          ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
-          ctx.beginPath(); ctx.roundRect(sqX + 0.5, sqY + 0.5, MINI_SQ - 1, MINI_SQ - 1, 4); ctx.stroke()
-          ctx.setLineDash([])
-          ctx.fillStyle = 'rgba(255,255,255,0.50)'; ctx.font = '11px monospace'
-          ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-          ctx.fillText('⏸', sqX + MINI_SQ / 2, r3MidY)
-        } else {
-          ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
-          ctx.beginPath(); ctx.roundRect(sqX + 0.5, sqY + 0.5, MINI_SQ - 1, MINI_SQ - 1, 4); ctx.stroke()
-          ctx.setLineDash([])
-        }
-      }
-
-      if (registerSlots) {
-        this._filterSlotBounds.set(row.amountSlot, { x: colX, y: r3Y, width: pillW, height: ROW_H })
-      }
-    }
-
-    // Suppress stale textBaseline
     ctx.textBaseline = 'alphabetic'
   }
 
@@ -1223,92 +1172,58 @@ export class FilterLayer extends Layer implements ImageSource {
     ctx.fill()
   }
 
-  private _drawSlider(ctx: Ctx2D, row: FilterRow, colX: number, midY: number, pillW: number, suspended = false): void {
-    const sldXR = colX + pillW - RPAD - MINI_GAP - MINI_SQ
-    const sldX0 = colX + DRAG_OX
-    const sldW  = sldXR - sldX0
-    if (sldW <= 0) return
-    const v      = row.intensity
-    const thumbR = 5
-    const x1     = sldX0 + thumbR
-    const x2     = sldXR - thumbR
-    const range  = Math.max(0, x2 - x1)
-    const thumbX = x1 + v * range
-
-    ctx.lineCap = 'round'
-
-    // Track background
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke()
-
-    // Filled portion + thumb (dimmed when binding is suspended)
-    const col = suspended           ? 'rgba(255,255,255,0.22)'
-              : row.enabled         ? ACCENT
-              :                      'rgba(255,255,255,0.22)'
-    ctx.strokeStyle = col; ctx.lineWidth = 3
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(thumbX, midY); ctx.stroke()
-    ctx.fillStyle = col
-    ctx.beginPath(); ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
-  }
-
-  /** Compact slot box used in rows 2 and 3 — no label text. */
-  private _drawCompactSlot(
-    ctx: Ctx2D, slot: ParameterSlot, x: number, y: number, w: number, h: number, typeCol: string,
+  /** Row 1 event-slot indicator — compact box with truncated source name + ⏸/▶ button. */
+  private _drawEventIndicator(
+    ctx: Ctx2D, slot: ParameterSlot, x: number, y: number, w: number, h: number,
   ): void {
-    const isCompat = Node.bindDrag.active
-                  && Node.bindDrag.source !== null
-                  && slot.type !== null
-                  && Node.bindDrag.source.types.has(slot.type)
+    const isCompat = Node.bindDrag.active && Node.bindDrag.source !== null
+                  && slot.type !== null && Node.bindDrag.source.types.has(slot.type)
+    const midY   = y + h / 2
+    const btnX   = x + w - EV_BTN_W   // right-aligned pause/resume button
+    const nameW  = w - EV_BTN_W - 3   // name area left of button
+    ctx.save()
+    ctx.font = '9px monospace'; ctx.textBaseline = 'middle'
 
-    ctx.font = '10px monospace'; ctx.textBaseline = 'middle'
-
-    if (slot.isActive && !isCompat) {
-      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
-      ctx.fillStyle = typeCol + '22'
-      ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.fill()
-      ctx.strokeStyle = typeCol + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
-      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 4); ctx.stroke()
-      ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.textAlign = 'left'
-      ctx.fillText(srcName, x + 6, y + h / 2)
-    } else if (isCompat) {
+    if (isCompat) {
       ctx.fillStyle = 'rgba(50,200,70,0.18)'
-      ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.fill()
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill()
       ctx.strokeStyle = 'rgba(50,200,70,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
-      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 4); ctx.stroke()
-      ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
-      ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', x + 6, y + h / 2)
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); ctx.stroke()
+    } else if (slot.isActive) {
+      const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
+      ctx.fillStyle = EV_COL + '22'
+      ctx.beginPath(); ctx.roundRect(x, y, w, h, 3); ctx.fill()
+      ctx.strokeStyle = EV_COL + 'cc'; ctx.lineWidth = 1; ctx.setLineDash([])
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); ctx.stroke()
+      // Truncated source name
+      ctx.fillStyle = EV_COL; ctx.textAlign = 'left'
+      ctx.save(); ctx.beginPath(); ctx.rect(x + 3, y, nameW, h); ctx.clip()
+      ctx.fillText(srcName, x + 3, midY)
+      ctx.restore()
+      // ⏸ pause button
+      ctx.fillStyle = EV_COL + 'cc'; ctx.textAlign = 'center'
+      ctx.fillText('⏸', btnX + EV_BTN_W / 2, midY)
     } else if (slot.state === SlotState.SuspendedBound) {
       const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
-      ctx.fillStyle = typeCol + '11'
-      ctx.beginPath(); ctx.roundRect(x, y, w, h, 4); ctx.fill()
-      ctx.strokeStyle = 'rgba(255,255,255,0.40)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
-      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 4); ctx.stroke()
+      ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 1; ctx.setLineDash([2, 2])
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); ctx.stroke()
       ctx.setLineDash([])
-      ctx.fillStyle = 'rgba(255,255,255,0.60)'; ctx.textAlign = 'left'
-      ctx.fillText('⏸ ' + srcName, x + 6, y + h / 2)
+      // Truncated source name (ghosted)
+      ctx.fillStyle = 'rgba(255,255,255,0.28)'; ctx.textAlign = 'left'
+      ctx.save(); ctx.beginPath(); ctx.rect(x + 3, y, nameW, h); ctx.clip()
+      ctx.fillText(srcName, x + 3, midY)
+      ctx.restore()
+      // ▶ resume button
+      ctx.fillStyle = 'rgba(255,255,255,0.55)'; ctx.textAlign = 'center'
+      ctx.fillText('▶', btnX + EV_BTN_W / 2, midY)
     } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.32)'; ctx.lineWidth = 1; ctx.setLineDash([3, 3])
-      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 4); ctx.stroke()
+      ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.setLineDash([2, 2])
+      ctx.beginPath(); ctx.roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 3); ctx.stroke()
       ctx.setLineDash([])
     }
+    ctx.restore()
   }
 
-  /** Mini slider used as the collapse-to-slider button in row 3 when amountSlot is bound. */
-  private _drawMiniSlider(ctx: Ctx2D, bx: number, by: number, sz: number, col: string): void {
-    const midX  = bx + sz / 2
-    const midY  = by + sz / 2
-    const thumbR = 5
-    const x1 = bx + thumbR + 1   // track left  (a few px beyond left thumb edge)
-    const x2 = bx + sz - thumbR - 1  // track right (a few px beyond right thumb edge)
-    ctx.lineCap = 'round'
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'; ctx.lineWidth = 3
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(x2, midY); ctx.stroke()
-    ctx.strokeStyle = col; ctx.lineWidth = 3
-    ctx.beginPath(); ctx.moveTo(x1, midY); ctx.lineTo(midX, midY); ctx.stroke()
-    ctx.fillStyle = col
-    ctx.beginPath(); ctx.arc(midX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
-  }
 
   private _drawSlotRow(
     ctx: Ctx2D,

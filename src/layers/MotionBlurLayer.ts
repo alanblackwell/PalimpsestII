@@ -10,6 +10,7 @@ import {
 } from '../core/types.js'
 import { graph }        from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
+import { SliderSlot }   from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // MotionBlurLayer — temporal image accumulation / trails
@@ -39,14 +40,10 @@ const ACCENT = '#7ecf7e'   // Image type colour
 const AM_COL = '#4a8fe8'   // Amount type colour
 const EV_COL = '#e0e060'   // Event type colour
 
-const HDR_H    = 36   // header row height
-const SLIDER_H = 26   // per-slider row height
-const ROW_GAP  = 4    // gap between rows
-const LABEL_W  = 48   // slider label column width
-const VALUE_W  = 36   // numeric value column width
-
-// Canvas-space pill height: header + 2 slider rows
-const PILL_H = HDR_H + ROW_GAP + SLIDER_H + ROW_GAP + SLIDER_H   // 96
+const HDR_H   = 36   // header row height (panel pill)
+const ROW_H   = 30   // SliderSlot row height (matches Layer.renderSlotGroup)
+const ROW_GAP = 4    // gap between slot rows
+const ROW_PAD = 3    // slot pill top/bottom padding
 
 // Fade is remapped through a cubic curve so the slider midpoint (0.5)
 // gives the same visual decay as the raw value 0.15 did previously,
@@ -77,8 +74,8 @@ export class MotionBlurLayer extends Layer implements ImageSource {
 
   private _frameCount = 0
 
-  // 0 = fade slider, 1 = delay slider, null = none dragging
-  private _sliderDrag: 0 | 1 | null = null
+  private readonly _fadeWidget:  SliderSlot
+  private readonly _delayWidget: SliderSlot
 
   constructor() {
     super()
@@ -89,6 +86,28 @@ export class MotionBlurLayer extends Layer implements ImageSource {
     this.slots.push(this._imageSlot, this._fadeSlot, this._delaySlot, this._captureSlot)
     this.displayBaseName = 'Trail'
     this.debugName = 'Trail'
+    this._fadeWidget = new SliderSlot(
+      this._fadeSlot, 'fade', AM_COL,
+      () => this._fadeSlot.isActive
+        ? Math.max(0, Math.min(1, (this._fadeSlot.source as AmountSource).getAmount() as number))
+        : this._fade,
+      v => {
+        if (this._fadeSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._fadeSlot)?.toggle()
+        this._fade = v; this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+    this._delayWidget = new SliderSlot(
+      this._delaySlot, 'delay', AM_COL,
+      () => this._delaySlot.isActive
+        ? Math.max(0, Math.min(1, (this._delaySlot.source as AmountSource).getAmount() as number))
+        : this._delay,
+      v => {
+        if (this._delaySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._delaySlot)?.toggle()
+        this._delay = v; this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
@@ -106,6 +125,8 @@ export class MotionBlurLayer extends Layer implements ImageSource {
   get fadeSlot():    ParameterSlot { return this._fadeSlot    }
   get delaySlot():   ParameterSlot { return this._delaySlot   }
   get captureSlot(): ParameterSlot { return this._captureSlot }
+  get fadeWidget():  SliderSlot    { return this._fadeWidget  }
+  get delayWidget(): SliderSlot    { return this._delayWidget }
 
   override getSlotDefault(slot: ParameterSlot): number | Point | Direction | null {
     if (slot === this._fadeSlot)  return this._fade
@@ -219,11 +240,11 @@ export class MotionBlurLayer extends Layer implements ImageSource {
   }
 
   override get canvasBounds() {
-    return { ...super.canvasBounds, height: PILL_H }
+    return { ...super.canvasBounds, height: HDR_H }
   }
 
   override get panelBottom(): number {
-    return 50 + PILL_H + 8
+    return 50 + HDR_H + 8
   }
 
   renderPanel(ctx: Ctx2D): void {
@@ -232,16 +253,16 @@ export class MotionBlurLayer extends Layer implements ImageSource {
 
     ctx.save()
 
-    // Background pill
+    // Background pill (header row only)
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
-    ctx.roundRect(x, y, width, PILL_H, 8)
+    ctx.roundRect(x, y, width, HDR_H, 8)
     ctx.fill()
 
     // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(x, y, 4, PILL_H, [4, 0, 0, 4])
+    ctx.roundRect(x, y, 4, HDR_H, [4, 0, 0, 4])
     ctx.fill()
 
     // Header row
@@ -252,26 +273,38 @@ export class MotionBlurLayer extends Layer implements ImageSource {
     ctx.textBaseline = 'middle'
     ctx.fillText('Motion Blur', x + 12, hdrMidY)
 
-    // Slot indicators right-to-left: image, fade, delay, capture
+    // Indicators for image and capture only (fade/delay shown via SliderSlot rows)
     this._drawIndicators(ctx, [
       { slot: this._imageSlot,   label: 'img', colour: ACCENT },
-      { slot: this._fadeSlot,    label: 'fde', colour: AM_COL },
-      { slot: this._delaySlot,   label: 'dly', colour: AM_COL },
       { slot: this._captureSlot, label: 'cap', colour: EV_COL },
     ], x + width - 8, hdrMidY)
 
-    // Slider rows
-    const fadeVal  = this._fadeSlot.isActive
-      ? Math.max(0, Math.min(1, (this._fadeSlot.source as AmountSource).getAmount() as Amount))
-      : this._fade
-    const delayVal = this._delaySlot.isActive
-      ? Math.max(0, Math.min(1, (this._delaySlot.source as AmountSource).getAmount() as Amount))
-      : this._delay
-
-    this._renderSliderRow(ctx, 0, 'fade',  this._fadeSlot,  fadeVal,  AM_COL, x, y, width)
-    this._renderSliderRow(ctx, 1, 'delay', this._delaySlot, delayVal, AM_COL, x, y, width)
-
     ctx.restore()
+  }
+
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const cb   = this.canvasBounds
+    const px   = cb.x, py = this.panelBottom, pw = cb.width
+    const pillH = 2 * (ROW_H + ROW_GAP) - ROW_GAP + 2 * ROW_PAD
+
+    // Pill background for fade + delay SliderSlot rows
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath(); ctx.roundRect(px, py, pw, pillH, 6); ctx.fill()
+    ctx.fillStyle = AM_COL
+    ctx.beginPath(); ctx.roundRect(px, py, 4, pillH, [4, 0, 0, 4]); ctx.fill()
+    ctx.restore()
+
+    const fadeRow  = { x: px, y: py + ROW_PAD,                    width: pw, height: ROW_H }
+    const delayRow = { x: px, y: py + ROW_PAD + ROW_H + ROW_GAP, width: pw, height: ROW_H }
+    this._slotBounds.set(this._fadeSlot,  fadeRow)
+    this._slotBounds.set(this._delaySlot, delayRow)
+    this._fadeWidget.render(ctx, fadeRow)
+    this._delayWidget.render(ctx, delayRow)
+
+    // Standard rows for image and capture
+    this.renderSlotGroup(ctx, [this._imageSlot, this._captureSlot], py + pillH + 8)
   }
 
   // ----------------------------------------------------------
@@ -282,108 +315,43 @@ export class MotionBlurLayer extends Layer implements ImageSource {
 
   protected override hitTestSelf(point: Point): this | null {
     const b = this.canvasBounds
-    return (point.x >= b.x && point.x <= b.x + b.width &&
-            point.y >= b.y && point.y <= b.y + b.height) ? this : null
+    if (point.x >= b.x && point.x <= b.x + b.width &&
+        point.y >= b.y && point.y <= b.y + b.height) return this
+    // SliderSlot pill
+    const pillH = 2 * (ROW_H + ROW_GAP) - ROW_GAP + 2 * ROW_PAD
+    if (point.x >= b.x && point.x <= b.x + b.width &&
+        point.y >= this.panelBottom && point.y <= this.panelBottom + pillH) return this
+    return null
   }
 
   handlePointerDown(point: Point): boolean {
-    const { x, y, width } = this.canvasBounds
-    for (let i = 0; i < 2; i++) {
-      const ry = this._sliderRowY(i, y)
-      if (point.y < ry || point.y > ry + SLIDER_H) continue
-      const { sld0, sldR } = this._sliderLayout(x, width)
-      if (point.x < sld0 - 6 || point.x > sldR + 6) continue
-      const slot = i === 0 ? this._fadeSlot : this._delaySlot
-      if (slot.state === SlotState.Bound) BindingLayer.findForSlot(slot)?.toggle()
-      this._sliderDrag = i as 0 | 1
-      this._applySliderDrag(i, point.x, x, width)
-      return true
-    }
+    const { fadeRow, delayRow } = this._slotRows()
+    if (this._fadeWidget.handlePointerDown(point, fadeRow))   return true
+    if (this._delayWidget.handlePointerDown(point, delayRow)) return true
     return false
   }
 
   handlePointerMove(point: Point): void {
-    if (this._sliderDrag === null) return
-    const { x, width } = this.canvasBounds
-    this._applySliderDrag(this._sliderDrag, point.x, x, width)
+    const { fadeRow, delayRow } = this._slotRows()
+    this._fadeWidget.handlePointerMove(point, fadeRow)
+    this._delayWidget.handlePointerMove(point, delayRow)
   }
 
   handlePointerUp(): void {
-    this._sliderDrag = null
+    this._fadeWidget.handlePointerUp()
+    this._delayWidget.handlePointerUp()
   }
 
   // ----------------------------------------------------------
   // Private helpers
   // ----------------------------------------------------------
 
-  private _sliderRowY(i: number, pillY: number): number {
-    return pillY + HDR_H + ROW_GAP + i * (SLIDER_H + ROW_GAP)
-  }
-
-  private _sliderLayout(pillX: number, pillW: number) {
-    const sld0 = pillX + 8 + 4 + LABEL_W
-    const sldR = pillX + pillW - 8 - VALUE_W - 14
-    return { sld0, sldR }
-  }
-
-  private _applySliderDrag(i: number, px: number, pillX: number, pillW: number): void {
-    const { sld0, sldR } = this._sliderLayout(pillX, pillW)
-    const thumbR = 5
-    const lo = sld0 + thumbR
-    const hi = sldR - thumbR
-    const v = Math.max(0, Math.min(1, (px - lo) / Math.max(1e-6, hi - lo)))
-    if (i === 0) this._fade  = v
-    else         this._delay = v
-    this.markDirty()
-  }
-
-  private _renderSliderRow(
-    ctx: Ctx2D, i: number, label: string, slot: ParameterSlot,
-    value01: number, activeColour: string,
-    pillX: number, pillY: number, pillW: number,
-  ): void {
-    const ry     = this._sliderRowY(i, pillY)
-    const midY   = ry + SLIDER_H / 2
-    const active = slot.isActive
-    const colour = active ? activeColour : ACCENT
-    const { sld0, sldR } = this._sliderLayout(pillX, pillW)
-    const indX   = pillX + pillW - 8
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, pillX + 12, midY)
-
-    this._drawSlider(ctx, midY, sld0, sldR, value01, colour)
-
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(value01.toFixed(2), indX - 12, midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? activeColour : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', indX, midY)
-  }
-
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo = x0 + thumbR
-    const hi = x1 - thumbR
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * Math.max(0, hi - lo)
-
-    ctx.lineCap = 'round'
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(hi, midY); ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(thumbX, midY); ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath(); ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
+  private _slotRows() {
+    const cb = this.canvasBounds
+    const px = cb.x, py = this.panelBottom, pw = cb.width
+    const fadeRow  = { x: px, y: py + ROW_PAD,                    width: pw, height: ROW_H }
+    const delayRow = { x: px, y: py + ROW_PAD + ROW_H + ROW_GAP, width: pw, height: ROW_H }
+    return { fadeRow, delayRow }
   }
 
   private _drawIndicators(

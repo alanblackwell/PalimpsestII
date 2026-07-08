@@ -147,6 +147,12 @@ export abstract class Node {
   // what the Clock's forceDirty cascade does each tick for time-dependent nodes.
   static markAllDirty: (() => void) | null = null
 
+  // The main content canvas element — set once by main.ts after canvas
+  // creation. Used by SliderSlot (and any future canvas-aware UI helper)
+  // to convert canvas-space coordinates to client/screen coordinates for
+  // positioning floating HTML panels (e.g. the binding inspector).
+  static canvasElement: HTMLCanvasElement | null = null
+
   // -- Global mode flags --------------------------------------------------
   // showGrid and artisticMode use get/set so toggling them automatically
   // marks all nodes dirty (same effect as a canvas resize).

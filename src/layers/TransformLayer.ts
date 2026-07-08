@@ -16,6 +16,7 @@ import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // TransformLayer — 2-D affine transform applied to an image
@@ -130,7 +131,7 @@ export class TransformLayer extends Layer implements ImageSource {
 
   // Manual opacity, used while opacitySlot is unbound.
   private _opacity: number = 1   // [0, 1]
-  private _opacityDrag = false
+  private readonly _opacityWidget: SliderSlot
 
   private _reflectEnabled = false
   private _reflectBtnBounds: { x: number; y: number; width: number; height: number } | null = null
@@ -166,6 +167,14 @@ export class TransformLayer extends Layer implements ImageSource {
                     this._rotateSlot, this._centreSlot, this._opacitySlot, this._reflectSlot)
     this.displayBaseName = 'Move'
     this.debugName = 'Move'
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._opacitySlot.isActive
+        ? (this._opacitySlot.source as AmountSource).getAmount() as number
+        : this._opacity,
+      v => this.setOpacity(v),
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
@@ -190,6 +199,7 @@ export class TransformLayer extends Layer implements ImageSource {
   get centreSlot():   ParameterSlot { return this._centreSlot   }
   get opacitySlot():  ParameterSlot { return this._opacitySlot  }
   get reflectSlot():  ParameterSlot { return this._reflectSlot  }
+  get opacityWidget(): SliderSlot   { return this._opacityWidget }
 
   // Touching the slider while opacitySlot is bound suspends the binding
   // and hands manual control to the user (suspend-on-touch convention).
@@ -358,7 +368,7 @@ export class TransformLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._drag !== null || this._opacityDrag) return this
+    if (this._drag !== null) return this
     // Handles take priority over pill controls
     const hp = this._handlePos()
     if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
@@ -437,22 +447,13 @@ export class TransformLayer extends Layer implements ImageSource {
       return true
     }
 
-    const og = this._opacitySliderGeom()
-    if (point.x >= og.sld0 - 6 && point.x <= og.sldR + 6 &&
-        point.y >= og.b.y    && point.y <= og.b.y + og.b.height) {
-      this._opacityDrag = true
-      this._setOpacityFromPointer(point.x)
-      return true
-    }
+    if (this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())) return true
 
     return false
   }
 
   handlePointerMove(point: Point): void {
-    if (this._opacityDrag) {
-      this._setOpacityFromPointer(point.x)
-      return
-    }
+    this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
@@ -488,7 +489,7 @@ export class TransformLayer extends Layer implements ImageSource {
   }
 
   handlePointerUp(): void {
-    this._opacityDrag = false
+    this._opacityWidget.handlePointerUp()
     this._drag = null
     this._clearRotDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null
@@ -519,15 +520,6 @@ export class TransformLayer extends Layer implements ImageSource {
     }
     this._snapSnapped  = false
     this._snapProgress = 0
-  }
-
-  private _setOpacityFromPointer(px: number): void {
-    const g      = this._opacitySliderGeom()
-    const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = g.sldR - thumbR
-    const range  = Math.max(1e-6, hi - lo)
-    this.setOpacity((px - lo) / range)
   }
 
   // ----------------------------------------------------------
@@ -782,112 +774,36 @@ export class TransformLayer extends Layer implements ImageSource {
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
   }
 
-  // Standard slot-row pill, then an opacity slider pill, then a reflect pill.
-  // _reflectSlot is kept in this.slots for evaluation ordering but drawn
-  // inside the reflect pill, so it is filtered out of the standard group.
+  // Standard slot-row pill, then an opacity SliderSlot pill, then a reflect pill.
+  // Both _reflectSlot and _opacitySlot are filtered out of the standard group:
+  // _reflectSlot is drawn inside the reflect pill; _opacitySlot uses a SliderSlot.
   override renderSlots(ctx: Ctx2D): void {
     if (this.slots.length === 0) return
     this._slotBounds.clear()
-    const standardSlots = this.slots.filter(s => s !== this._reflectSlot)
+    const standardSlots = this.slots.filter(s => s !== this._reflectSlot && s !== this._opacitySlot)
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
     this._drawOpacityPill(ctx)
     this._drawReflectPill(ctx)
   }
 
   private _drawOpacityPill(ctx: Ctx2D): void {
-    const g = this._opacitySliderGeom()
-    const { x, y, width, height } = g.b
-
-    const active = this._opacitySlot.isActive
-    const value  = active
-      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : this._opacity
-    const colour = active ? AM_COL : ACCENT
-
+    const b = this._opacityPillBounds()
     ctx.save()
-
-    // Background pill
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    // Accent stripe
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    // Label
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('opacity', g.labelX, g.midY)
-
-    // Slider
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, value, colour)
-
-    // Value text
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(value.toFixed(2), g.valueRight, g.midY)
-
-    // Bind indicator
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.width, b.height, 8); ctx.fill()
+    ctx.fillStyle = AM_COL
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, 4, b.height, [4, 0, 0, 4]); ctx.fill()
     ctx.restore()
+    this._slotBounds.set(this._opacitySlot, b)
+    this._opacityWidget.render(ctx, b)
   }
 
-  // Track + filled portion + thumb, FilterLayer/NoiseLayer slider style.
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo     = x0 + thumbR
-    const hi     = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-
-    ctx.lineCap = 'round'
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(hi, midY)
-    ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.beginPath()
-    ctx.moveTo(lo, midY)
-    ctx.lineTo(thumbX, midY)
-    ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath()
-    ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2)
-    ctx.fill()
-  }
-
-  // Opacity pill — directly below the standard slot-row pill.
+  // Opacity SliderSlot pill — directly below the standard slot-row pill.
   private _opacityPillBounds() {
-    const groupH = this.slots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    const n = this.slots.filter(s => s !== this._reflectSlot && s !== this._opacitySlot).length
+    const groupH = n * (SLOT_H + SLOT_GAP) - SLOT_GAP
     const y = this.panelBottom + groupH + PILL_GAP
     return { x: contentLeft(Node.canvasWidth), y, width: panelWidth(Node.canvasWidth), height: OPACITY_H }
-  }
-
-  private _opacitySliderGeom() {
-    const b      = this._opacityPillBounds()
-    const midY   = b.y + b.height / 2
-    const labelX = b.x + 12
-    const indX   = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0   = labelX + OP_LABEL_W
-    const sldR   = valueRight - OP_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
   }
 
   // Reflect pill — directly below the opacity pill.

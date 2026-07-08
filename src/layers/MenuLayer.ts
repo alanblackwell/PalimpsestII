@@ -155,7 +155,7 @@ const COLUMNS: ColDef[] = [
       { label: 'Fill',    colour: '#7ecf7e',              factory: (_,__,w,h) => new FillLayer(w, h) },
       { label: 'Tile',      colour: '#7ecf7e', factory: ()          => new TileLayer(),           selectAfterCreate: true },
       { label: 'Trail',      colour: '#7ecf7e', factory: ()          => new MotionBlurLayer(),    selectAfterCreate: true },
-      { label: 'Noise',   colour: '#4a8fe8', height: 161, factory: ()          => new NoiseLayer() },
+      { label: 'Noise',   colour: '#4a8fe8', height: 41,  factory: ()          => new NoiseLayer() },
     ],
   },
 

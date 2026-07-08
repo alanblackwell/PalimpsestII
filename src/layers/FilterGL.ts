@@ -89,16 +89,6 @@ void main() {
   gl_FragColor = vec4(clamp(m * c.rgb, 0.0, 1.0), c.a);
 }`,
 
-  grayscale: /* glsl */`
-precision mediump float;
-uniform sampler2D uTex;
-uniform float uT;
-varying vec2 vUv;
-void main() {
-  vec4 c = texture2D(uTex, vUv);
-  float v = dot(c.rgb, vec3(0.2126, 0.7152, 0.0722));
-  gl_FragColor = vec4(mix(c.rgb, vec3(v), uT), c.a);
-}`,
 
   invert: /* glsl */`
 precision mediump float;
