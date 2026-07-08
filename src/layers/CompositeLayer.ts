@@ -2,7 +2,7 @@ import { Layer } from '../core/Layer.js'
 import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   boundingBoxContains,
   type ImageValue, type ImageSource,
   type MaskValue,  type MaskSource,
@@ -11,8 +11,8 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
-import { SliderRegion } from '../regions/SliderRegion.js'
 import { BindingLayer } from './BindingLayer.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
@@ -158,9 +158,9 @@ export class CompositeLayer extends Layer implements ImageSource {
 
   private _modeIndex: number = 0  // default: normal
 
-  // "Amount" handle — used when opacitySlot is unbound. Default 0.5.
+  // Manual blend value — used when opacitySlot is unbound. Default 0.5.
   private _amount: Amount = 0.5
-  private readonly _slider: SliderRegion
+  private readonly _blendWidget: SliderSlot
 
   // Off-screen surfaces — recreated on resize()
   private _result:   OffscreenCanvas
@@ -176,9 +176,22 @@ export class CompositeLayer extends Layer implements ImageSource {
     this._rightSlot   = new ParameterSlot(ValueType.Image,  this)
     this._maskSlot    = new ParameterSlot(ValueType.Mask,   this)
     this._opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
-    this._slider      = new SliderRegion(this, this._amount)
     this.slots.push(this._leftSlot, this._rightSlot, this._maskSlot, this._opacitySlot)
-    this._slider.setOnDragStart(() => this._suspendAmountSlot())
+    this._blendWidget = new SliderSlot(
+      this._opacitySlot, '', ACCENT,
+      () => this._opacitySlot.isActive
+        ? (this._opacitySlot.source as AmountSource).getAmount() as number
+        : this._amount,
+      v => {
+        if (this._opacitySlot.state === SlotState.Bound) {
+          BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+        }
+        this._amount = v as Amount
+        this.markDirty()
+      },
+      () => this.markDirty(),
+      0,  // no label column
+    )
     this.displayBaseName = 'Blend'
     this.debugName = 'Blend'
     graph.register(this)
@@ -198,30 +211,13 @@ export class CompositeLayer extends Layer implements ImageSource {
   get rightSlot():   ParameterSlot { return this._rightSlot   }
   get maskSlot():    ParameterSlot { return this._maskSlot    }
   get opacitySlot(): ParameterSlot { return this._opacitySlot }
+  get blendWidget(): SliderSlot    { return this._blendWidget  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the manual slider, so the binding starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this._opacitySlot) return this._amount
     return null
-  }
-
-  // ----------------------------------------------------------
-  // Amount handle
-  // ----------------------------------------------------------
-
-  // Called by SliderRegion when the user drags the handle.
-  setValue(v: Amount): void {
-    this._amount = v
-    this.markDirty()
-  }
-
-  // Suspend an active opacitySlot binding so the user can take manual
-  // control of the handle (same pattern as AmountLayer's slider).
-  private _suspendAmountSlot(): void {
-    if (this._opacitySlot.isActive) {
-      BindingLayer.findForSlot(this._opacitySlot)?.toggle()
-    }
   }
 
   // ----------------------------------------------------------
@@ -268,10 +264,7 @@ export class CompositeLayer extends Layer implements ImageSource {
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.modeIndex === 'number') this._modeIndex = state.modeIndex
-    if (typeof state.amount === 'number') {
-      this._amount = state.amount as Amount
-      this._slider.setValue(this._amount)
-    }
+    if (typeof state.amount === 'number') this._amount = state.amount as Amount
   }
 
   // ----------------------------------------------------------
@@ -297,15 +290,9 @@ export class CompositeLayer extends Layer implements ImageSource {
     const mask    = this._maskSlot.isActive
       ? (this._maskSlot.source as MaskSource).getMask()      : null
 
-    if (this._opacitySlot.isActive) {
-      this._amount = (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      this._slider.displayValue = this._amount
-      this._slider.interactive  = false
-    } else {
-      this._slider.interactive  = true
-      this._slider.displayValue = this._amount
-    }
-    const opacity = this._amount
+    const opacity: Amount = this._opacitySlot.isActive
+      ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
+      : this._amount
 
     const rctx = this._result.getContext('2d')!
     rctx.clearRect(0, 0, cw, ch)
@@ -440,6 +427,22 @@ export class CompositeLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Slots
+  // ----------------------------------------------------------
+
+  // Standard binding rows for left/right/mask; blend SliderSlot drawn on top
+  // of the centre-of-canvas widget (rendered after renderPanel in frame order).
+  override renderSlots(ctx: Ctx2D): void {
+    if (this.slots.length === 0) return
+    this._slotBounds.clear()
+    const standardSlots = this.slots.filter(s => s !== this._opacitySlot)
+    this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    const row = this._sliderBounds()
+    this._slotBounds.set(this._opacitySlot, row)
+    this._blendWidget.render(ctx, row)
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 
@@ -448,14 +451,27 @@ export class CompositeLayer extends Layer implements ImageSource {
     if (boundingBoxContains(this._nextBtnBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._modeLabelBounds(), point)) { this.cycleNext(); return true }
     if (boundingBoxContains(this._swapBtnBounds(), point)) { this._swapLeftRight(); return true }
-    return false
+    return this._blendWidget.handlePointerDown(point, this._sliderBounds())
+  }
+
+  handlePointerMove(point: Point): void {
+    this._blendWidget.handlePointerMove(point, this._sliderBounds())
+  }
+
+  handlePointerUp(): void {
+    this._blendWidget.handlePointerUp()
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (boundingBoxContains(this.canvasBounds, point)) return this
-    if (this._slider.hitTest(point) !== null) return this._slider
-    if (boundingBoxContains(this._swapBtnBounds(), point)) return this
+    if (boundingBoxContains(this._widgetBounds(), point)) return this
     return null
+  }
+
+  override hitTestSlot(point: Point): ParameterSlot | null {
+    if (boundingBoxContains(this._leftThumbBounds(),  point)) return this._leftSlot
+    if (boundingBoxContains(this._rightThumbBounds(), point)) return this._rightSlot
+    return super.hitTestSlot(point)
   }
 
   // ----------------------------------------------------------
@@ -509,12 +525,11 @@ export class CompositeLayer extends Layer implements ImageSource {
     // [▶] next
     this._drawNavBtn(ctx, this._nextBtnBounds(), '▶', midY)
 
-    // Slot indicators — right side
+    // Slot indicators — right side (opacitySlot shown in blend widget, not here)
     const slots = [
-      { slot: this._leftSlot,    label: 'left'  },
-      { slot: this._rightSlot,   label: 'right' },
-      { slot: this._maskSlot,    label: 'mask'  },
-      { slot: this._opacitySlot, label: 'α'     },
+      { slot: this._leftSlot,  label: 'left'  },
+      { slot: this._rightSlot, label: 'right' },
+      { slot: this._maskSlot,  label: 'mask'  },
     ]
     let dx = x + width - 8
     ctx.font = '9px monospace'
@@ -554,9 +569,8 @@ export class CompositeLayer extends Layer implements ImageSource {
     this._drawThumb(ctx, this._leftThumbBounds(),  this._leftSlot)
     this._drawThumb(ctx, this._rightThumbBounds(), this._rightSlot)
 
-    // Slider
-    this._slider.bounds = this._sliderBounds()
-    this._slider.renderSelf(ctx)
+    // Blend widget (SliderSlot) is rendered in renderSlots, after renderPanel,
+    // so it appears on top of this background pill.
 
     // Swap button
     const sb = this._swapBtnBounds()
@@ -575,6 +589,10 @@ export class CompositeLayer extends Layer implements ImageSource {
     b: { x: number; y: number; width: number; height: number },
     slot: ParameterSlot,
   ): void {
+    const drag     = Node.bindDrag
+    const isCompat = (drag.active && drag.source !== null && drag.source.types.has(ValueType.Image))
+                  || (Node.fileDragActive && !slot.isActive)
+
     ctx.save()
     ctx.fillStyle = 'rgba(255,255,255,0.06)'
     ctx.beginPath()
@@ -593,8 +611,15 @@ export class CompositeLayer extends Layer implements ImageSource {
       }
     }
 
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-    ctx.lineWidth   = 1
+    if (isCompat) {
+      ctx.fillStyle = 'rgba(50,200,70,0.18)'
+      ctx.beginPath()
+      ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+      ctx.fill()
+    }
+
+    ctx.strokeStyle = isCompat ? 'rgba(50,200,70,0.85)' : 'rgba(255,255,255,0.25)'
+    ctx.lineWidth   = isCompat ? 1.5 : 1
     ctx.beginPath()
     ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
     ctx.stroke()

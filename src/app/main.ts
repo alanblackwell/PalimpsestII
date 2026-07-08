@@ -52,6 +52,7 @@ import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
+import { CompositeLayer }   from '../layers/CompositeLayer.js'
 import { LineLayer }         from '../layers/LineLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import { TraceLayer }        from '../layers/TraceLayer.js'
@@ -268,6 +269,11 @@ function postInsertLayer(newLayer: Layer): void {
 
   if (newLayer instanceof TransformLayer) {
     newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) =>
+      interaction.showInspectorForSlot(slot, cx, cy)
+  }
+
+  if (newLayer instanceof CompositeLayer) {
+    newLayer.blendWidget.onInspectorRequest = (slot, cx, cy) =>
       interaction.showInspectorForSlot(slot, cx, cy)
   }
 
@@ -961,6 +967,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
       scanL.speedWidget.onInspectorRequest  = wi
     }
     if (scanL instanceof TransformLayer)  scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (scanL instanceof CompositeLayer)  scanL.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (scanL instanceof FilterLayer)     scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
     if (scanL instanceof MotionBlurLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
@@ -1003,6 +1010,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
       archived.speedWidget.onInspectorRequest  = wi
     }
     if (archived instanceof TransformLayer)  archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    if (archived instanceof CompositeLayer)  archived.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof FilterLayer)     archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
     if (archived instanceof MotionBlurLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
