@@ -442,24 +442,24 @@ export class StrokeLayer extends PathLayer {
   // renderSlots: exclude positionSlot from standard pill
   // ----------------------------------------------------------
 
-  // Slots shown in the standard pill: excludes per-pill slots but includes
-  // positionSlot (first) so the whole-stroke position binding appears at the top.
+  // Slots shown in the standard pill: excludes per-pill slots.
   private get _standardSlots() {
     return this.slots.filter(
       s => s !== this.fillModeSlot && s !== this.strokeWidthSlot &&
-           s !== this.scaleSlot && s !== this.radiusSlot
+           s !== this.scaleSlot && s !== this.radiusSlot && s !== this.opacitySlot
     )
   }
 
-  protected override _strokePillBounds() {
+  protected override _opacityPillBounds() {
     const cb        = this.canvasBounds
     const standardH = this._standardSlots.length * (30 + 4) - 4
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * 30 + 4 * 4 }
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
   }
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
     this.renderSlotGroup(ctx, this._standardSlots, this.panelBottom)
+    this._drawOpacityPill(ctx)
     this._drawStrokePill(ctx)
     this._drawRadiusPill(ctx)
   }

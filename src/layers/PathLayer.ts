@@ -3,7 +3,6 @@ import { Node } from '../core/Node.js'
 import {
   ValueType,
   SlotState,
-  boundingBoxContains,
   type Colour,
   type Point,
   type PointSource,
@@ -14,6 +13,7 @@ import {
 } from '../core/types.js'
 import { BindingLayer } from './BindingLayer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import {
   hashString,
@@ -135,12 +135,9 @@ const BRUSH_BLEND_HW    = 2
 const BRUSH_OFFSETS     = [0, 0, 3, 5, 11]
 const BRUSH_SAMPLES     = 200
 
-// Radius slider geometry — mirrors ShapeLayer's stroke-width pill layout
-const SLOT_H      = 30
-const SLOT_GAP    = 4
-const MAX_RADIUS  = 0.8   // slider maps [0, MAX_RADIUS]
-const RAD_LABEL_W = 78
-const RAD_VALUE_W = 38
+const SLOT_H     = 30
+const SLOT_GAP   = 4
+const MAX_RADIUS = 0.8   // slider maps [0, MAX_RADIUS]
 
 // ------------------------------------------------------------------
 // PathLayer
@@ -157,9 +154,9 @@ export class PathLayer extends ShapeLayer {
   private _dragStartCenter: Point = { x: 0, y: 0 }
   private _dragStartAngle:  number = 0
 
-  protected _radius          = 0.5
-  private _radiusSliderDrag = false
-  readonly radiusSlot:     ParameterSlot
+  protected _radius       = 0.5
+  readonly radiusSlot:    ParameterSlot
+  protected readonly _radiusWidget: SliderSlot
 
   // Edge snap guide lines (set during move/point drags, cleared on pointer-up)
   private _pathEdgeSnapX: number | null = null
@@ -193,7 +190,19 @@ export class PathLayer extends ShapeLayer {
     this._points    = points ?? defaultPoints(cx, cy)
     this.radiusSlot = new ParameterSlot(ValueType.Amount, this, 'spline radius')
     this.slots.push(this.radiusSlot)
+    this._radiusWidget = new SliderSlot(
+      this.radiusSlot, 'spline radius', AM_COL,
+      () => Math.max(0, Math.min(1, this._radius / MAX_RADIUS)),
+      (v) => {
+        if (this.radiusSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.radiusSlot)?.toggle()
+        this._radius = v * MAX_RADIUS
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
   }
+
+  get radiusWidget(): SliderSlot { return this._radiusWidget }
 
   override getSnapBounds() {
     if (this._points.length === 0) return null
@@ -390,23 +399,26 @@ export class PathLayer extends ShapeLayer {
   // Slot rendering — radius pill appended below the stroke pill
   // ----------------------------------------------------------
 
-  // Override to exclude radiusSlot from the standard-slot count so the
-  // stroke pill is positioned correctly when computing standardH.
-  protected override _strokePillBounds() {
+  // Override to also exclude radiusSlot and opacitySlot so the stroke pill
+  // is positioned correctly below the opacity pill.
+  protected override _opacityPillBounds() {
     const cb = this.canvasBounds
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot && s !== this.radiusSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot
+        && s !== this.scaleSlot && s !== this.opacitySlot && s !== this.radiusSlot
     )
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * SLOT_H + 4 * SLOT_GAP }
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: SLOT_H }
   }
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot && s !== this.radiusSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot
+        && s !== this.scaleSlot && s !== this.opacitySlot && s !== this.radiusSlot
     )
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    this._drawOpacityPill(ctx)
     this._drawStrokePill(ctx)
     this._drawRadiusPill(ctx)
   }
@@ -414,95 +426,19 @@ export class PathLayer extends ShapeLayer {
   private _radiusPillBounds() {
     const spb = this._strokePillBounds()
     const cb  = this.canvasBounds
-    return { x: cb.x, y: spb.y + spb.height + 8, width: cb.width, height: 2 * SLOT_H + SLOT_GAP }
-  }
-
-  private _radiusRowBounds() {
-    const pb = this._radiusPillBounds()
-    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
-  }
-
-  private _radiusBindRowBounds() {
-    const pb = this._radiusPillBounds()
-    return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
-  }
-
-  private _radiusSliderGeom() {
-    const b = this._radiusRowBounds()
-    const midY       = b.y + b.height / 2
-    const labelX     = b.x + 12
-    const indX       = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0       = labelX + RAD_LABEL_W
-    const sldR       = valueRight - RAD_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
-  }
-
-  private _radiusSliderHit(point: Point): boolean {
-    return boundingBoxContains(this._radiusRowBounds(), point)
-  }
-
-  private _setRadiusFromPointer(px: number): void {
-    if (this.radiusSlot.state === SlotState.Bound) {
-      BindingLayer.findForSlot(this.radiusSlot)?.toggle()
-    }
-    const g = this._radiusSliderGeom()
-    const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = g.sldR - thumbR
-    const range  = Math.max(1e-6, hi - lo)
-    this._radius = Math.max(0, Math.min(1, (px - lo) / range)) * MAX_RADIUS
-    this.markDirty()
+    return { x: cb.x, y: spb.y + spb.height + 8, width: cb.width, height: SLOT_H }
   }
 
   protected _drawRadiusPill(ctx: Ctx2D): void {
-    const rRow = this._radiusRowBounds()
+    const b = this._radiusPillBounds()
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
     ctx.beginPath()
-    ctx.roundRect(rRow.x, rRow.y, rRow.width, 2 * SLOT_H + SLOT_GAP, 6)
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
     ctx.fill()
     ctx.restore()
-    this._drawRadiusSlider(ctx, false)
-    this._renderBindingRow(ctx, this.radiusSlot, this._radiusBindRowBounds().y)
-  }
-
-  private _drawRadiusSlider(ctx: Ctx2D, drawBackdrop = true): void {
-    const g = this._radiusSliderGeom()
-    const { x, y, width, height } = g.b
-
-    const active = this.radiusSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01    = Math.max(0, Math.min(1, this._radius / MAX_RADIUS))
-
-    ctx.save()
-
-    if (drawBackdrop) {
-      ctx.fillStyle = 'rgba(0,0,0,0.28)'
-      ctx.beginPath()
-      ctx.roundRect(x, y, width, height, 6)
-      ctx.fill()
-    }
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('spline radius', g.labelX, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(this._radius.toFixed(2), g.valueRight, g.midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
-    ctx.restore()
+    this._slotBounds.set(this.radiusSlot, b)
+    this._radiusWidget.render(ctx, b)
   }
 
   // ----------------------------------------------------------
@@ -546,9 +482,10 @@ export class PathLayer extends ShapeLayer {
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) return this
     }
-    if (this._strokeSliderHit(point)) return this
-    if (this._scaleSliderHit(point))  return this
-    if (this._radiusSliderHit(point)) return this
+    if (this._opacitySliderHit(point)) return this
+    if (this._strokeSliderHit(point))  return this
+    if (this._scaleSliderHit(point))   return this
+    if (this._radiusWidget.hitZone(point, this._radiusPillBounds()) !== null) return this
     return null
   }
 
@@ -642,23 +579,17 @@ export class PathLayer extends ShapeLayer {
         return true
       }
     }
+    if (this._opacitySliderHit(point)) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+    }
     if (this._strokeSliderHit(point)) {
-      this._strokeSliderDrag = true
-      this._setStrokeWidthFromPointer(point.x)
-      this.markDirty()
-      return true
+      return this._strokeWidthWidget.handlePointerDown(point, this._strokeWidthRowBounds())
     }
     if (this._scaleSliderHit(point)) {
-      this._scaleSliderDrag = true
-      this._setScaleFromPointer(point.x)
-      this.markDirty()
-      return true
+      return this._scaleWidget.handlePointerDown(point, this._scaleWidgetRowBounds())
     }
-    if (this._radiusSliderHit(point)) {
-      this._radiusSliderDrag = true
-      this._setRadiusFromPointer(point.x)
-      this.markDirty()
-      return true
+    if (this._radiusWidget.hitZone(point, this._radiusPillBounds()) !== null) {
+      return this._radiusWidget.handlePointerDown(point, this._radiusPillBounds())
     }
     return false
   }
@@ -688,16 +619,20 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerMove(point: Point): void {
-    if (this._strokeSliderDrag) {
-      this._setStrokeWidthFromPointer(point.x)
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
       return
     }
-    if (this._scaleSliderDrag) {
-      this._setScaleFromPointer(point.x)
+    if (this._strokeWidthWidget.isDragging) {
+      this._strokeWidthWidget.handlePointerMove(point, this._strokeWidthRowBounds())
       return
     }
-    if (this._radiusSliderDrag) {
-      this._setRadiusFromPointer(point.x)
+    if (this._scaleWidget.isDragging) {
+      this._scaleWidget.handlePointerMove(point, this._scaleWidgetRowBounds())
+      return
+    }
+    if (this._radiusWidget.isDragging) {
+      this._radiusWidget.handlePointerMove(point, this._radiusPillBounds())
       return
     }
     if (this._specialDrag === 'center') {
@@ -759,11 +694,12 @@ export class PathLayer extends ShapeLayer {
   }
 
   override handlePointerUp(): void {
-    this._specialDrag      = null
-    this._dragIndex        = -1
-    this._strokeSliderDrag = false
-    this._scaleSliderDrag  = false
-    this._radiusSliderDrag = false
+    this._specialDrag  = null
+    this._dragIndex    = -1
+    this._opacityWidget.handlePointerUp()
+    this._strokeWidthWidget.handlePointerUp()
+    this._scaleWidget.handlePointerUp()
+    this._radiusWidget.handlePointerUp()
     this._pathEdgeSnapX    = null
     this._pathEdgeSnapY    = null
     this.markDirty()

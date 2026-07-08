@@ -374,14 +374,16 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   private _detail:     number = 0.5
   private _driftAngle: number   // radians
 
-  private readonly _scaleWidget:  SliderSlot
-  private readonly _speedWidget:  SliderSlot
-  private readonly _detailWidget: SliderSlot
-  private readonly _driftWidget:  SliderSlot
+  private readonly _scaleWidget:   SliderSlot
+  private readonly _speedWidget:   SliderSlot
+  private readonly _detailWidget:  SliderSlot
+  private readonly _driftWidget:   SliderSlot
+  private readonly _opacityWidget: SliderSlot
 
   // Opacity — 0.55 default matches the previous hardcoded overlay alpha.
   // Computed each recompute from slot when bound.
   private _opacity = 0.55
+  private _manualOpacity = 0.55
 
   // Resolved each recompute
   private _frequency:  number = DEFAULT_FREQ
@@ -460,6 +462,16 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
       v => this.setDrift(v),
       () => this.markDirty(),
     )
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this._opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
@@ -487,11 +499,12 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   get detailSlot():   ParameterSlot { return this._detailSlot   }
   get positionSlot(): ParameterSlot { return this._positionSlot }
   get driftSlot():    ParameterSlot { return this._driftSlot    }
-  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
-  get scaleWidget():  SliderSlot    { return this._scaleWidget  }
-  get speedWidget():  SliderSlot    { return this._speedWidget  }
-  get detailWidget(): SliderSlot    { return this._detailWidget }
-  get driftWidget():  SliderSlot    { return this._driftWidget  }
+  get opacitySlot():   ParameterSlot { return this._opacitySlot  }
+  get scaleWidget():   SliderSlot    { return this._scaleWidget  }
+  get speedWidget():   SliderSlot    { return this._speedWidget  }
+  get detailWidget():  SliderSlot    { return this._detailWidget }
+  get driftWidget():   SliderSlot    { return this._driftWidget  }
+  get opacityWidget(): SliderSlot    { return this._opacityWidget }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual slider, so the binding
@@ -501,7 +514,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     if (slot === this._speedSlot)   return this._speed
     if (slot === this._detailSlot)  return this._detail
     if (slot === this._driftSlot)   return this._drift
-    if (slot === this._opacitySlot) return this._opacity
+    if (slot === this._opacitySlot) return this._manualOpacity
     return null
   }
 
@@ -558,7 +571,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   protected recompute(): void {
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : 0.55
+      : this._manualOpacity
 
     const elapsed = this._timeSlot.isActive
       ? (this._timeSlot.source as AmountSource).getAmount() as Amount
@@ -616,13 +629,14 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      noiseIndex: this._noiseIndex,
-      seed:       this._seed,
-      scale:      this._scale,
-      speed:      this._speed,
-      detail:     this._detail,
-      driftAngle: this._driftAngle,
-      staticGrid: Array.from(this._staticGrid),
+      noiseIndex:    this._noiseIndex,
+      seed:          this._seed,
+      scale:         this._scale,
+      speed:         this._speed,
+      detail:        this._detail,
+      driftAngle:    this._driftAngle,
+      manualOpacity: this._manualOpacity,
+      staticGrid:    Array.from(this._staticGrid),
     }
   }
 
@@ -632,7 +646,8 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     if (typeof state.scale === 'number')       this._scale      = state.scale
     if (typeof state.speed === 'number')       this._speed      = state.speed
     if (typeof state.detail === 'number')      this._detail     = state.detail
-    if (typeof state.driftAngle === 'number')  this._driftAngle = state.driftAngle
+    if (typeof state.driftAngle === 'number')    this._driftAngle    = state.driftAngle
+    if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
     if (Array.isArray(state.staticGrid) && state.staticGrid.length === this._staticGrid.length) {
       this._staticGrid = Float32Array.from(state.staticGrid as number[])
     }
@@ -655,6 +670,9 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     if (this._speedWidget.handlePointerDown(point,  rows.speedRow))  return true
     if (this._detailWidget.handlePointerDown(point, rows.detailRow)) return true
     if (this._driftWidget.handlePointerDown(point,  rows.driftRow))  return true
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+    }
     return false
   }
 
@@ -664,6 +682,9 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._speedWidget.handlePointerMove(point,  rows.speedRow)
     this._detailWidget.handlePointerMove(point, rows.detailRow)
     this._driftWidget.handlePointerMove(point,  rows.driftRow)
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+    }
   }
 
   handlePointerUp(): void {
@@ -671,6 +692,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._speedWidget.handlePointerUp()
     this._detailWidget.handlePointerUp()
     this._driftWidget.handlePointerUp()
+    this._opacityWidget.handlePointerUp()
   }
 
   private _slotRows() {
@@ -682,10 +704,13 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (boundingBoxContains(this.canvasBounds, point)) return this
-    // SliderSlot pill
+    // SliderSlot pill (scale/speed/warp/drift)
     const pillH = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP + 2 * SLOT_PAD
     const b = { x: this.canvasBounds.x, y: this.panelBottom, width: this.canvasBounds.width, height: pillH }
-    return boundingBoxContains(b, point) ? this : null
+    if (boundingBoxContains(b, point)) return this
+    // Standard slot pill (time + position) and opacity SliderSlot pill
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
+    return null
   }
 
   // ----------------------------------------------------------
@@ -750,8 +775,26 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._detailWidget.render(ctx, rows.detailRow)
     this._driftWidget.render(ctx, rows.driftRow)
 
-    // Standard rows for time, position, opacity
-    this.renderSlotGroup(ctx, [this._timeSlot, this._positionSlot, this._opacitySlot], py + pillH + 8)
+    // Standard rows for time and position
+    this.renderSlotGroup(ctx, [this._timeSlot, this._positionSlot], py + pillH + 8)
+
+    // Opacity SliderSlot pill — one row below the standard pair
+    const ob = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(ob.x, ob.y, ob.width, ob.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this._opacitySlot, ob)
+    this._opacityWidget.render(ctx, ob)
+  }
+
+  private _opacityPillBounds(): BBox {
+    const pillH    = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP + 2 * SLOT_PAD
+    const standardH = 2 * (SLOT_H + SLOT_GAP) - SLOT_GAP   // time + position
+    const cb = this.canvasBounds
+    return { x: cb.x, y: this.panelBottom + pillH + 8 + standardH + 8 + SLOT_PAD, width: cb.width, height: SLOT_H }
   }
 
   private _renderRow1(ctx: Ctx2D): void {

@@ -17,6 +17,7 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD, collectRefPointSources } from '../interaction/EdgeSnapper.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import {
   hashString,
   drawPencilLine, drawNibPen, NIB_PEN_DEFAULTS,
@@ -61,10 +62,8 @@ const LINE_SNAP_DWELL_MS  = 700
 // Minimum extension of arrowhead wing beyond the stroke edge (px each side).
 const ARROW_MIN_EXTEND = 5
 
-const SLOT_H      = 30
-const SLOT_GAP    = 4
-const SW_LABEL_W  = 78
-const SW_VALUE_W  = 38
+const SLOT_H   = 30
+const SLOT_GAP = 4
 
 type BBox = { x: number; y: number; width: number; height: number }
 type HandleDrag = 'start' | 'end'
@@ -111,8 +110,11 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   private _arrowStart = false
   private _arrowEnd   = false
 
-  // Opacity — computed each recompute from slot; 1.0 when unbound
-  private _opacity = 1.0
+  private _opacity       = 1.0
+  private _manualOpacity = 1.0
+
+  private readonly _widthWidget:   SliderSlot
+  private readonly _opacityWidget: SliderSlot
 
   // Offscreen canvas — all line elements composited here, then drawn once
   // to the main canvas so the edit-mode drop-shadow covers the whole shape.
@@ -154,7 +156,6 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   // Tracks which handle was last used while direction is active with neither
   // point bound, so that switching to the other handle disables direction.
   private _lastDraggedHandle: HandleDrag | null = null
-  private _sliderDrag = false
 
   // Angle snap
   private readonly _lineSnapper = new AngleSnapper(LINE_SNAP_ANGLES, LINE_SNAP_THRESHOLD, LINE_SNAP_DWELL_MS)
@@ -204,8 +205,33 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     this.colourSlot    = new ParameterSlot(ValueType.Colour,    this, 'colour')
     this.opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this.slots.push(this.startSlot, this.endSlot, this.directionSlot, this.widthSlot, this.colourSlot, this.opacitySlot)
+
+    this._widthWidget = new SliderSlot(
+      this.widthSlot, 'stroke width', AM_COL,
+      () => Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W)),
+      (v) => {
+        if (this.widthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.widthSlot)?.toggle()
+        this._strokeWidth = Math.max(0.5, v * MAX_STROKE_W)
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+    this._opacityWidget = new SliderSlot(
+      this.opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this.opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this.opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+
     graph.register(this)
   }
+
+  get widthWidget():   SliderSlot { return this._widthWidget   }
+  get opacityWidget(): SliderSlot { return this._opacityWidget }
 
   // ----------------------------------------------------------
   // ImageSource
@@ -239,14 +265,15 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
 
   override serializeState(): Record<string, unknown> {
     return {
-      start:       this._start,
-      end:         this._end,
-      strokeWidth: this._strokeWidth,
-      colour:      this._colour,
-      arrowStart:  this._arrowStart,
-      arrowEnd:    this._arrowEnd,
+      start:        this._start,
+      end:          this._end,
+      strokeWidth:  this._strokeWidth,
+      colour:       this._colour,
+      arrowStart:   this._arrowStart,
+      arrowEnd:     this._arrowEnd,
       addMaskDone:  this._addMaskDone,
       addPointDone: this._addPointDone,
+      manualOpacity: this._manualOpacity,
     }
   }
 
@@ -259,6 +286,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
     if (typeof state.addMaskDone  === 'boolean') this._addMaskDone  = state.addMaskDone
     if (typeof state.addPointDone === 'boolean') this._addPointDone = state.addPointDone
+    if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
@@ -266,7 +294,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     if (slot === this.startSlot)     return { ...this._start }
     if (slot === this.endSlot)       return { ...this._end   }
     if (slot === this.widthSlot)     return Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))
-    if (slot === this.opacitySlot)   return this._opacity
+    if (slot === this.opacitySlot)   return this._manualOpacity
     if (slot === this.directionSlot) {
       const dx = this._end.x - this._start.x
       const dy = this._end.y - this._start.y
@@ -282,7 +310,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   protected recompute(): void {
     this._opacity = this.opacitySlot.isActive
       ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+      : this._manualOpacity
 
     if (this.startSlot.isActive)  this._start = (this.startSlot.source  as PointSource).getPoint()
     if (this.endSlot.isActive)    this._end   = (this.endSlot.source    as PointSource).getPoint()
@@ -636,19 +664,8 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     ctx.fillText('Line', x + 12, midY)
 
     ctx.font      = '10px monospace'
-    ctx.fillStyle = this.widthSlot.isActive ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.70)'
+    ctx.fillStyle = 'rgba(255,255,255,0.70)'
     ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, x + 54, midY)
-
-    // Opacity slot indicator
-    {
-      const active = this.opacitySlot.isActive
-      ctx.font      = '9px monospace'
-      ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-      ctx.textAlign = 'right'
-      ctx.fillText(active ? '●' : '○', x + width - (2 * BTN_SZ + 4 + 3) - 8, midY)
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText('α', x + width - (2 * BTN_SZ + 4 + 3) - 20, midY)
-    }
 
     // Arrow toggles at right edge: end (▶) first (rightmost), then start (◀).
     let btnX = x + width - BTN_SZ - 3
@@ -730,108 +747,44 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.directionSlot, this.colourSlot, this.opacitySlot], this.panelBottom)
+    this.renderSlotGroup(ctx, [this.startSlot, this.endSlot, this.directionSlot, this.colourSlot], this.panelBottom)
     this._drawWidthPill(ctx)
+    this._drawOpacityPill(ctx)
   }
 
   private _widthPillBounds(): BBox {
-    const mainH = 5 * (SLOT_H + SLOT_GAP) - SLOT_GAP
+    const mainH = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP
     return {
       x:      contentLeft(Node.canvasWidth),
       y:      this.panelBottom + mainH + 8,
       width:  panelWidth(Node.canvasWidth),
-      height: 2 * SLOT_H + SLOT_GAP,
+      height: SLOT_H,
     }
   }
 
-  private _widthSliderRowBounds(): BBox {
-    const pb = this._widthPillBounds()
-    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
-  }
-
-  private _widthBindRowBounds(): BBox {
-    const pb = this._widthPillBounds()
-    return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
-  }
-
-  private _widthSliderGeom() {
-    const b          = this._widthSliderRowBounds()
-    const midY       = b.y + b.height / 2
-    const labelX     = b.x + 12
-    const indX       = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0       = labelX + SW_LABEL_W
-    const sldR       = valueRight - SW_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  private _opacityPillBounds(): BBox {
+    const wb = this._widthPillBounds()
+    return { x: wb.x, y: wb.y + wb.height + 8, width: wb.width, height: SLOT_H }
   }
 
   private _drawWidthPill(ctx: Ctx2D): void {
-    this._drawWidthSlider(ctx)
-    this.renderSlotGroup(ctx, [this.widthSlot], this._widthBindRowBounds().y)
-  }
-
-  private _drawWidthSlider(ctx: Ctx2D): void {
-    const g      = this._widthSliderGeom()
-    const { x, y, width, height } = g.b
-    const active = this.widthSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01    = Math.max(0, Math.min(1, this._strokeWidth / MAX_STROKE_W))
-
+    const b = this._widthPillBounds()
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, 6)
-    ctx.fill()
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('stroke width', g.labelX, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, g.valueRight, g.midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.width, b.height, 6); ctx.fill()
     ctx.restore()
+    this._slotBounds.set(this.widthSlot, b)
+    this._widthWidget.render(ctx, b)
   }
 
-  private _drawSlider(ctx: Ctx2D, midY: number, x0: number, x1: number, v: number, colour: string): void {
-    const thumbR = 5
-    const lo     = x0 + thumbR
-    const hi     = x1 - thumbR
-    const range  = Math.max(0, hi - lo)
-    const thumbX = lo + Math.max(0, Math.min(1, v)) * range
-
-    ctx.lineCap     = 'round'
-    ctx.strokeStyle = 'rgba(255,255,255,0.10)'
-    ctx.lineWidth   = 3
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(hi, midY); ctx.stroke()
-
-    ctx.strokeStyle = colour
-    ctx.beginPath(); ctx.moveTo(lo, midY); ctx.lineTo(thumbX, midY); ctx.stroke()
-
-    ctx.fillStyle = colour
-    ctx.beginPath(); ctx.arc(thumbX, midY, thumbR, 0, Math.PI * 2); ctx.fill()
-  }
-
-  private _setWidthFromPointer(px: number): void {
-    if (this.widthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.widthSlot)?.toggle()
-    const g      = this._widthSliderGeom()
-    const thumbR = 5
-    const lo     = g.sld0 + thumbR
-    const hi     = g.sldR - thumbR
-    const range  = Math.max(1e-6, hi - lo)
-    this._strokeWidth = Math.max(0.5, Math.max(0, Math.min(1, (px - lo) / range)) * MAX_STROKE_W)
-    this.markDirty()
+  private _drawOpacityPill(ctx: Ctx2D): void {
+    const b = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath(); ctx.roundRect(b.x, b.y, b.width, b.height, 6); ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this.opacitySlot, b)
+    this._opacityWidget.render(ctx, b)
   }
 
   // ----------------------------------------------------------
@@ -894,7 +847,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   }
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._drag !== null || this._sliderDrag || this._pivotDrag !== null) return this
+    if (this._drag !== null || this._widthWidget.isDragging || this._opacityWidget.isDragging || this._pivotDrag !== null) return this
     if (!this._addPointDone && this._onAddPoint !== null) {
       const { x, y, w, h } = this._lineBtnRect('point')
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
@@ -908,7 +861,8 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     const dirMode = this._dirTranslateMode
     if (ptDist(point, dirMode ? this._renderedStart : this._start) <= HANDLE_HIT) return this
     if (ptDist(point, dirMode ? this._renderedEnd   : this._end)   <= HANDLE_HIT) return this
-    if (this._inBox(point, this._widthSliderRowBounds())) return this
+    if (this._widthWidget.hitZone(point, this._widthPillBounds())     !== null) return this
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     return null
   }
 
@@ -1005,10 +959,11 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
       return true
     }
 
-    if (this._inBox(point, this._widthSliderRowBounds())) {
-      this._sliderDrag = true
-      this._setWidthFromPointer(point.x)
-      return true
+    if (this._widthWidget.hitZone(point, this._widthPillBounds()) !== null) {
+      return this._widthWidget.handlePointerDown(point, this._widthPillBounds())
+    }
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
     }
 
     return false
@@ -1068,8 +1023,12 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   }
 
   handlePointerMove(point: Point): void {
-    if (this._sliderDrag) {
-      this._setWidthFromPointer(point.x)
+    if (this._widthWidget.isDragging) {
+      this._widthWidget.handlePointerMove(point, this._widthPillBounds())
+      return
+    }
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
       return
     }
     if (this._pivotDrag !== null) {
@@ -1127,7 +1086,8 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     this._dragStartPt      = null
     this._dragStartOtherPt = null
     this._pivotDrag        = null
-    this._sliderDrag       = false
+    this._widthWidget.handlePointerUp()
+    this._opacityWidget.handlePointerUp()
     this._clearSnapDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null
     // _lastDraggedHandle intentionally kept: it persists across drag sessions so

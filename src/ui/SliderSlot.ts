@@ -82,6 +82,7 @@ export class SliderSlot {
   private readonly _onChanged:  () => void     // after pause/resume toggle
 
   private _dragging = false
+  get isDragging(): boolean { return this._dragging }
 
   constructor(
     slot:        ParameterSlot,

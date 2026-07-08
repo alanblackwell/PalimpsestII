@@ -17,6 +17,7 @@ import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon } from '../ui/icons.js'
 import { contentLeft } from '../interaction/layout.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -41,6 +42,7 @@ import { contentLeft } from '../interaction/layout.js'
 
 const ACCENT     = '#7ecf7e'
 const DIR_ACCENT = '#7ecfcf'
+const AM_COL     = '#4a8fe8'
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
@@ -96,7 +98,10 @@ export class ImageLayer extends Layer implements ImageSource {
   private _rotation:       number       = 0
   private _manualPosition: Point | null = null
   private _manualScale:    number | null = null
+  private _manualOpacity   = 1.0
   private _drag:           DragState | null = null
+
+  private readonly _opacityWidget: SliderSlot
 
   private readonly _rotSnapper = new AngleSnapper(ROT_SNAP_ANGLES, ROT_SNAP_THRESHOLD, ROT_SNAP_DWELL_MS)
   private _snapSnapped  = false
@@ -125,6 +130,16 @@ export class ImageLayer extends Layer implements ImageSource {
     this._scaleSlot    = new ParameterSlot(ValueType.Amount,    this, 'scale')
     this._rotationSlot = new ParameterSlot(ValueType.Direction, this)
     this.slots.push(this._positionSlot, this._opacitySlot, this._scaleSlot, this._rotationSlot)
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this._opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     this.debugName = 'ImageLayer'
     graph.register(this)
   }
@@ -153,17 +168,18 @@ export class ImageLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get positionSlot(): ParameterSlot { return this._positionSlot }
-  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
-  get scaleSlot():    ParameterSlot { return this._scaleSlot    }
-  get rotationSlot(): ParameterSlot { return this._rotationSlot }
+  get positionSlot():  ParameterSlot { return this._positionSlot }
+  get opacitySlot():   ParameterSlot { return this._opacitySlot  }
+  get scaleSlot():     ParameterSlot { return this._scaleSlot    }
+  get rotationSlot():  ParameterSlot { return this._rotationSlot }
+  get opacityWidget(): SliderSlot    { return this._opacityWidget }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this._positionSlot)  return this._manualPosition ?? this._position
-    if (slot === this._opacitySlot)   return this._opacity
+    if (slot === this._opacitySlot)   return this._manualOpacity
     if (slot === this._scaleSlot) {
       const scale = this._manualScale ?? this._scale
       return Math.max(0, Math.min(1, (scale - MIN_SCALE) / (MAX_SCALE - MIN_SCALE)))
@@ -232,7 +248,7 @@ export class ImageLayer extends Layer implements ImageSource {
 
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+      : this._manualOpacity
 
     if (this._scaleSlot.isActive) {
       const t = (this._scaleSlot.source as AmountSource).getAmount() as Amount
@@ -282,6 +298,7 @@ export class ImageLayer extends Layer implements ImageSource {
       manualScale:    this._manualScale,
       addClipDone:    this._addClipDone,
       addFilterDone:  this._addFilterDone,
+      manualOpacity:  this._manualOpacity,
     }
   }
 
@@ -296,7 +313,8 @@ export class ImageLayer extends Layer implements ImageSource {
     }
     if (typeof state.addClipDone   === 'boolean') this._addClipDone   = state.addClipDone
     if (typeof state.addFilterDone === 'boolean') this._addFilterDone = state.addFilterDone
-    if (typeof state.manualScale === 'number') this._manualScale = state.manualScale
+    if (typeof state.manualScale   === 'number')  this._manualScale   = state.manualScale
+    if (typeof state.manualOpacity === 'number')  this._manualOpacity = state.manualOpacity
   }
 
   // ----------------------------------------------------------
@@ -365,10 +383,18 @@ export class ImageLayer extends Layer implements ImageSource {
       return true
     }
 
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+    }
+
     return false
   }
 
   handlePointerMove(point: Point): void {
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+      return
+    }
     if (this._drag === null) return
 
     if (this._drag.type === 'move') {
@@ -408,6 +434,7 @@ export class ImageLayer extends Layer implements ImageSource {
     this._drag = null
     this._clearRotDwellTimer()
     this._edgeSnapX = null; this._edgeSnapY = null
+    this._opacityWidget.handlePointerUp()
   }
 
   private _applySnapRotation(raw: number): void {
@@ -437,6 +464,28 @@ export class ImageLayer extends Layer implements ImageSource {
     this._snapProgress = 0
   }
 
+  private _opacityPillBounds() {
+    const cb = this.canvasBounds
+    const standard = this.slots.filter(s => s !== this._opacitySlot)
+    const standardH = standard.length * (30 + 4) - 4
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
+  }
+
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const standard = this.slots.filter(s => s !== this._opacitySlot)
+    this.renderSlotGroup(ctx, standard, this.panelBottom)
+    const ob = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(ob.x, ob.y, ob.width, ob.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this._opacitySlot, ob)
+    this._opacityWidget.render(ctx, ob)
+  }
+
   protected override hitTestSelf(point: { x: number; y: number }) {
     // Capture all events while dragging
     if (this._drag !== null) return this
@@ -450,6 +499,7 @@ export class ImageLayer extends Layer implements ImageSource {
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     // Panel strip (load button, etc.)
     if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     return null
   }
 

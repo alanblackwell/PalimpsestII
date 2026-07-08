@@ -13,13 +13,19 @@ across the codebase, identified by surveying every layer file after the initial 
 |---|---|---|
 | FilterLayer | per-filter `amountSlot` | Amount |
 | FillLayer | `_opacitySlot` | Amount |
-| NoiseLayer | `_scaleSlot`, `_speedSlot`, `_detailSlot` | Amount |
+| NoiseLayer | `_scaleSlot`, `_speedSlot`, `_detailSlot`, `_opacitySlot` | Amount |
 | NoiseLayer | `_driftSlot` | Direction |
 | PointLayer | `_amountSlot` | Amount |
 | PointLayer | `_speedSlot` | **Rate** |
 | MotionBlurLayer | `_fadeSlot`, `_delaySlot` | Amount |
 | TransformLayer | `_opacitySlot` | Amount |
 | DirectionLayer | `_speedSlot` | Amount |
+| ShapeLayer | `opacitySlot`, `strokeWidthSlot`, `scaleSlot` | Amount | All subclasses: RectLayer, EllipseLayer, PathLayer, StrokeLayer |
+| TextLayer | `_opacitySlot` | Amount | |
+| ImageLayer | `_opacitySlot` | Amount | |
+| VideoLayer | `opacitySlot` | Amount | |
+| TileLayer | `_opacitySlot` | Amount | |
+| LineLayer | `widthSlot`, `opacitySlot` | Amount | |
 
 ---
 
@@ -32,7 +38,7 @@ use `SliderRegion` or bespoke code rather than `SliderSlot`:
 |---|---|---|---|
 | **AmountLayer** | `_slider` (SliderRegion) | `_slot` (Amount) | Core widget; `_xSlot`/`_ySlot` (Point) are separate decomposition inputs, no slider needed |
 | **CompositeLayer** | `_blendSlider` (SliderRegion) | `opacitySlot` (Amount) | Canvas-centre blend control |
-| **ShapeLayer** | bespoke `_scaleSliderDrag` | `scaleSlot` (Amount) | Two-row custom implementation; unifying would simplify significantly |
+| ~~**ShapeLayer**~~ | ~~bespoke `_scaleSliderDrag`~~ | ~~`scaleSlot` (Amount)~~ | ~~Two-row custom implementation; unifying would simplify significantly~~ | ✓ done |
 | **TempoLayer** | `_rateSlider` (SliderRegion) | *(no slot for rate)* | Rate slider controls Hz output; `_timeSlot` (Amount) is the time input with no slider |
 
 ---
@@ -41,28 +47,28 @@ use `SliderRegion` or bespoke code rather than `SliderSlot`:
 
 | Layer | Slot | Binding type | Notes |
 |---|---|---|---|
-| **ShapeLayer** | `opacitySlot` | Amount | Standard binding row only; shared by RectLayer, EllipseLayer, PathLayer |
-| **ShapeLayer** | `strokeWidthSlot` | Amount | Binding row only; value shown but no drag control |
+| ~~**ShapeLayer**~~ | ~~`opacitySlot`~~ | ~~Amount~~ | ✓ done |
+| ~~**ShapeLayer**~~ | ~~`strokeWidthSlot`~~ | ~~Amount~~ | ✓ done |
 | **ShapeLayer** | `rotationSlot` | **Direction** | Overlay handle exists; a slider would give numeric scrub alongside it |
 | **TextLayer** | `_sizeSlot` ('scale') | Amount | Overlay handles for scale; no pill slider |
-| **TextLayer** | `_opacitySlot` | Amount | No slider at all |
+| ~~**TextLayer**~~ | ~~`_opacitySlot`~~ | ~~Amount~~ | ✓ done |
 | **TextLayer** | `_lineSpacingSlot` | Amount | No slider |
 | **TextLayer** | `_rotationSlot` | **Direction** | Overlay handle only |
-| **ImageLayer** | `_opacitySlot` | Amount | Overlay handles only |
+| ~~**ImageLayer**~~ | ~~`_opacitySlot`~~ | ~~Amount~~ | ✓ done |
 | **ImageLayer** | `_scaleSlot` | Amount | Overlay handles only |
 | **ImageLayer** | `_rotationSlot` | **Direction** | Overlay rotate handle only |
 | **ClipLayer** | `_scaleSlot` | Amount | Overlay handles only |
 | **ClipLayer** | `_rotationSlot` | **Direction** | Overlay handle only |
-| **VideoLayer** | `_opacitySlot` | Amount | No manual control at all |
-| **TileLayer** | `_opacitySlot` | Amount | No slider |
-| **LineLayer** | `_widthSlot` | Amount | No pill slider |
-| **LineLayer** | `_opacitySlot` | Amount | No slider |
-| **LineLayer** | `_directionSlot` | **Direction** | No slider |
+| ~~**VideoLayer**~~ | ~~`_opacitySlot`~~ | ~~Amount~~ | ✓ done |
+| ~~**TileLayer**~~ | ~~`_opacitySlot`~~ | ~~Amount~~ | ✓ done |
+| ~~**LineLayer**~~ | ~~`widthSlot`~~ | ~~Amount~~ | ✓ done |
+| ~~**LineLayer**~~ | ~~`opacitySlot`~~ | ~~Amount~~ | ✓ done |
+| **LineLayer** | `directionSlot` | **Direction** | No slider |
 | **AnimationPathLayer** | `_posSlot` ('position') | Amount | Scrubbing playback position 0–1 would be highly useful |
 | **SequencerLayer** | `_rateSlot` ('rate') | Amount | Manual tempo control with optional binding |
 | **TraceLayer** | `phaseSlot` | Amount | Has 6 other SliderRegion controls but `phaseSlot` has no slider |
 | **MathLayer** | `_slotA`, `_slotB` | Amount | Adding sliders would let MathLayer act as a constant source as well as a combiner |
-| **PathLayer** | `radiusSlot` ('spline radius') | Amount | Overlay-driven but no pill slider |
+| ~~**PathLayer**~~ | ~~`radiusSlot` ('spline radius')~~ | ~~Amount~~ | ✓ done |
 
 ---
 

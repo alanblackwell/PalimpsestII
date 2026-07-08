@@ -3,6 +3,7 @@ import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType,
+  SlotState,
   boundingBoxContains,
   type ImageValue, type ImageSource,
   type Amount, type AmountSource,
@@ -10,6 +11,8 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
+import { SliderSlot }   from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // TileLayer — repeat or stretch an image's content to fill the canvas
@@ -49,6 +52,8 @@ export class TileLayer extends Layer implements ImageSource {
 
   private readonly _sourceSlot:  ParameterSlot
   private readonly _opacitySlot: ParameterSlot
+  private _manualOpacity = 1.0
+  private readonly _opacityWidget: SliderSlot
 
   private _mode:       Mode = 'tile'
   // Opacity — computed each recompute from slot; 1.0 when unbound
@@ -64,6 +69,16 @@ export class TileLayer extends Layer implements ImageSource {
     this._sourceSlot = new ParameterSlot(ValueType.Image,  this, 'image')
     this._opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
     this.slots.push(this._sourceSlot, this._opacitySlot)
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this._opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     this.debugName = 'TileLayer'
     graph.register(this)
   }
@@ -78,11 +93,12 @@ export class TileLayer extends Layer implements ImageSource {
   // Slot accessors
   // ----------------------------------------------------------
 
-  get sourceSlot():  ParameterSlot { return this._sourceSlot  }
-  get opacitySlot(): ParameterSlot { return this._opacitySlot }
+  get sourceSlot():    ParameterSlot { return this._sourceSlot    }
+  get opacitySlot():   ParameterSlot { return this._opacitySlot  }
+  get opacityWidget(): SliderSlot    { return this._opacityWidget }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this._opacitySlot) return this._opacity
+    if (slot === this._opacitySlot) return this._manualOpacity
     return null
   }
 
@@ -114,12 +130,13 @@ export class TileLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { mode: this._mode, margin: this._margin }
+    return { mode: this._mode, margin: this._margin, manualOpacity: this._manualOpacity }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (state.mode === 'tile' || state.mode === 'fit') this._mode = state.mode
     if (typeof state.margin === 'number') this._margin = state.margin
+    if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
   }
 
   // ----------------------------------------------------------
@@ -129,7 +146,7 @@ export class TileLayer extends Layer implements ImageSource {
   protected recompute(): void {
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+      : this._manualOpacity
 
     const w = Node.canvasWidth
     const h = Node.canvasHeight
@@ -194,6 +211,27 @@ export class TileLayer extends Layer implements ImageSource {
   }
 
   // ----------------------------------------------------------
+  // Slot rendering
+  // ----------------------------------------------------------
+
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    // Standard slots except opacitySlot
+    const standard = this.slots.filter(s => s !== this._opacitySlot)
+    this.renderSlotGroup(ctx, standard, this.panelBottom)
+    // Opacity SliderSlot pill
+    const ob = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(ob.x, ob.y, ob.width, ob.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this._opacitySlot, ob)
+    this._opacityWidget.render(ctx, ob)
+  }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 
@@ -210,14 +248,27 @@ export class TileLayer extends Layer implements ImageSource {
       this.increaseMargin()
       return true
     }
+    const ob = this._opacityPillBounds()
+    if (this._opacityWidget.hitZone(point, ob) !== null) {
+      return this._opacityWidget.handlePointerDown(point, ob)
+    }
     return false
   }
 
-  handlePointerMove(_point: Point): void {}
-  handlePointerUp(): void {}
+  handlePointerMove(point: Point): void {
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+    }
+  }
+
+  handlePointerUp(): void {
+    this._opacityWidget.handlePointerUp()
+  }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return boundingBoxContains(this.canvasBounds, point) ? this : null
+    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
+    return null
   }
 
   // ----------------------------------------------------------
@@ -304,6 +355,13 @@ export class TileLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
   // Private helpers
   // ----------------------------------------------------------
+
+  private _opacityPillBounds() {
+    const cb = this.canvasBounds
+    const standard = this.slots.filter(s => s !== this._opacitySlot)
+    const stdH = standard.length * (30 + 4) - 4
+    return { x: cb.x, y: this.panelBottom + stdH + 8, width: cb.width, height: 30 }
+  }
 
   private _toggleBtnBounds() {
     const { x, y, height } = this.canvasBounds

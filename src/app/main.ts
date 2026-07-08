@@ -50,6 +50,7 @@ import { ClipDrawingLayer }  from '../layers/ClipDrawingLayer.js'
 import { TransformLayer }    from '../layers/TransformLayer.js'
 import { RotateLayer }       from '../layers/RotateLayer.js'
 import { NoiseLayer }        from '../layers/NoiseLayer.js'
+import { TileLayer }         from '../layers/TileLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
 import { CompositeLayer }   from '../layers/CompositeLayer.js'
@@ -169,6 +170,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof ImageLayer) {
     wireImageLayer(newLayer)
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
   }
   if (newLayer instanceof StrokeLayer) {
     newLayer.setOnClose((stroke) => {
@@ -203,9 +205,17 @@ function postInsertLayer(newLayer: Layer): void {
       !_isTrackShapeLayer(newLayer)) {
     wireMaskButton(newLayer)
   }
-  if (newLayer instanceof TextLayer)  wireTextMaskButton(newLayer)
-  if (newLayer instanceof TextLayer)  wirePointButton(newLayer)
-  if (newLayer instanceof LineLayer)  wireLineMaskButton(newLayer)
+  if (newLayer instanceof TextLayer) {
+    wireTextMaskButton(newLayer)
+    wirePointButton(newLayer)
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  }
+  if (newLayer instanceof LineLayer) {
+    wireLineMaskButton(newLayer)
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.widthWidget.onInspectorRequest   = wi
+    newLayer.opacityWidget.onInspectorRequest = wi
+  }
   if (newLayer instanceof TraceLayer) wireTraceButtons(newLayer)
   if (newLayer instanceof ShapeLayer &&
       !(newLayer instanceof ClipRectLayer) &&
@@ -267,6 +277,14 @@ function postInsertLayer(newLayer: Layer): void {
     newLayer.speedWidget.onInspectorRequest  = wireInspector
   }
 
+  if (newLayer instanceof ShapeLayer) {
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.opacityWidget.onInspectorRequest      = wi
+    newLayer.strokeWidthWidget.onInspectorRequest  = wi
+    newLayer.scaleWidget.onInspectorRequest        = wi
+    if (newLayer instanceof PathLayer) newLayer.radiusWidget.onInspectorRequest = wi
+  }
+
   if (newLayer instanceof TransformLayer) {
     newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) =>
       interaction.showInspectorForSlot(slot, cx, cy)
@@ -305,7 +323,12 @@ function postInsertLayer(newLayer: Layer): void {
     newLayer.scaleWidget.onInspectorRequest  = wire
     newLayer.speedWidget.onInspectorRequest  = wire
     newLayer.detailWidget.onInspectorRequest = wire
-    newLayer.driftWidget.onInspectorRequest  = wire
+    newLayer.driftWidget.onInspectorRequest   = wire
+    newLayer.opacityWidget.onInspectorRequest = wire
+  }
+
+  if (newLayer instanceof TileLayer) {
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
   }
 
   if (newLayer instanceof ColourLayer) {
@@ -314,6 +337,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof VideoLayer) {
     wireVideoTrackButton(newLayer)
+    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
   }
   if (newLayer instanceof TrackRectLayer || newLayer instanceof TrackEllipseLayer ||
       newLayer instanceof TrackPathLayer  || newLayer instanceof TrackDrawingLayer) {
@@ -945,17 +969,26 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof CollectionLayer)  scanL.setEjectCallback(() => refreshStack())
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
     if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
-    if (scanL instanceof ImageLayer)       wireImageLayer(scanL)
-    if (scanL instanceof VideoLayer)       wireVideoTrackButton(scanL)
+    if (scanL instanceof ImageLayer) { wireImageLayer(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+    if (scanL instanceof VideoLayer) { wireVideoTrackButton(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+    if (scanL instanceof TileLayer)        scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (isAnimatableShape(scanL))          wireAnimatableShape(scanL)
     if (scanL instanceof TrackRectLayer    || scanL instanceof TrackEllipseLayer ||
         scanL instanceof TrackPathLayer    || scanL instanceof TrackDrawingLayer)
       wireTrackLayer(scanL)
     if (isClipShapeMovable(scanL))         wireClipShapeLayer(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wireMaskButton(scanL)
-    if (scanL instanceof TextLayer)       wireTextMaskButton(scanL)
-    if (scanL instanceof TextLayer)       wirePointButton(scanL)
-    if (scanL instanceof LineLayer)       wireLineMaskButton(scanL)
+    if (scanL instanceof TextLayer) {
+      wireTextMaskButton(scanL)
+      wirePointButton(scanL)
+      scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    }
+    if (scanL instanceof LineLayer) {
+      wireLineMaskButton(scanL)
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.widthWidget.onInspectorRequest   = wi
+      scanL.opacityWidget.onInspectorRequest = wi
+    }
     if (scanL instanceof TraceLayer)      wireTraceButtons(scanL)
     if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wirePointButton(scanL)
     if (scanL instanceof LineLayer)       wirePointButton(scanL)
@@ -965,6 +998,13 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
       scanL.amountWidget.onInspectorRequest = wi
       scanL.speedWidget.onInspectorRequest  = wi
+    }
+    if (scanL instanceof ShapeLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.opacityWidget.onInspectorRequest     = wi
+      scanL.strokeWidthWidget.onInspectorRequest = wi
+      scanL.scaleWidget.onInspectorRequest       = wi
+      if (scanL instanceof PathLayer) scanL.radiusWidget.onInspectorRequest = wi
     }
     if (scanL instanceof TransformLayer)  scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (scanL instanceof CompositeLayer)  scanL.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
@@ -977,10 +1017,11 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof DirectionLayer)  scanL.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (scanL instanceof NoiseLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.scaleWidget.onInspectorRequest  = wi
-      scanL.speedWidget.onInspectorRequest  = wi
-      scanL.detailWidget.onInspectorRequest = wi
-      scanL.driftWidget.onInspectorRequest  = wi
+      scanL.scaleWidget.onInspectorRequest   = wi
+      scanL.speedWidget.onInspectorRequest   = wi
+      scanL.detailWidget.onInspectorRequest  = wi
+      scanL.driftWidget.onInspectorRequest   = wi
+      scanL.opacityWidget.onInspectorRequest = wi
     }
     scanL = scanL.layerAbove
   }
@@ -988,17 +1029,26 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
     if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
-    if (archived instanceof ImageLayer)      wireImageLayer(archived)
+    if (archived instanceof ImageLayer)      { wireImageLayer(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
-    if (archived instanceof VideoLayer)        wireVideoTrackButton(archived)
+    if (archived instanceof VideoLayer)      { wireVideoTrackButton(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+    if (archived instanceof TileLayer)         archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof TrackRectLayer    || archived instanceof TrackEllipseLayer ||
         archived instanceof TrackPathLayer    || archived instanceof TrackDrawingLayer)
       wireTrackLayer(archived)
     if (isClipShapeMovable(archived))          wireClipShapeLayer(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wireMaskButton(archived)
-    if (archived instanceof TextLayer)       wireTextMaskButton(archived)
-    if (archived instanceof TextLayer)       wirePointButton(archived)
-    if (archived instanceof LineLayer)       wireLineMaskButton(archived)
+    if (archived instanceof TextLayer) {
+      wireTextMaskButton(archived)
+      wirePointButton(archived)
+      archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    }
+    if (archived instanceof LineLayer) {
+      wireLineMaskButton(archived)
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.widthWidget.onInspectorRequest   = wi
+      archived.opacityWidget.onInspectorRequest = wi
+    }
     if (archived instanceof TraceLayer)      wireTraceButtons(archived)
     if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wirePointButton(archived)
     if (archived instanceof LineLayer)       wirePointButton(archived)
@@ -1008,6 +1058,13 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
       archived.amountWidget.onInspectorRequest = wi
       archived.speedWidget.onInspectorRequest  = wi
+    }
+    if (archived instanceof ShapeLayer) {
+      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.opacityWidget.onInspectorRequest     = wi
+      archived.strokeWidthWidget.onInspectorRequest = wi
+      archived.scaleWidget.onInspectorRequest       = wi
+      if (archived instanceof PathLayer) archived.radiusWidget.onInspectorRequest = wi
     }
     if (archived instanceof TransformLayer)  archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof CompositeLayer)  archived.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
@@ -1020,10 +1077,11 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof DirectionLayer)  archived.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof NoiseLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.scaleWidget.onInspectorRequest  = wi
-      archived.speedWidget.onInspectorRequest  = wi
-      archived.detailWidget.onInspectorRequest = wi
-      archived.driftWidget.onInspectorRequest  = wi
+      archived.scaleWidget.onInspectorRequest   = wi
+      archived.speedWidget.onInspectorRequest   = wi
+      archived.detailWidget.onInspectorRequest  = wi
+      archived.driftWidget.onInspectorRequest   = wi
+      archived.opacityWidget.onInspectorRequest = wi
     }
   }
   widget.setVisible(true)

@@ -1,6 +1,7 @@
 import { Layer } from '../core/Layer.js'
 import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import {
   ValueType,
   SlotState,
@@ -253,8 +254,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _textHalfW = 50
   private _textHalfH = 20
 
-  // Opacity — computed each recompute from slot; 1.0 when unbound
-  private _opacity = 1.0
+  // Opacity — manual value persisted; overwritten by slot when active
+  private _manualOpacity = 1.0
+  private _opacity       = 1.0
+  private readonly _opacityWidget: SliderSlot
 
   // Direct in-place text editing — ephemeral UI state, not persisted.
   private _cursorPos:        number  = 0
@@ -279,6 +282,16 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._opacitySlot     = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this._lineSpacingSlot = new ParameterSlot(ValueType.Amount,    this, 'line spacing')
     this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot, this._lineSpacingSlot)
+    this._opacityWidget = new SliderSlot(
+      this._opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this._opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     this.debugName = 'TextLayer'
     graph.register(this)
   }
@@ -292,7 +305,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get sizeSlot():     ParameterSlot { return this._sizeSlot     }
   get maskSlot():     ParameterSlot { return this._maskSlot     }
   get rotationSlot(): ParameterSlot { return this._rotationSlot }
-  get opacitySlot():  ParameterSlot { return this._opacitySlot  }
+  get opacitySlot():   ParameterSlot { return this._opacitySlot  }
+  get opacityWidget(): SliderSlot    { return this._opacityWidget }
 
   get fontFamily():        string                       { return this._fontFamily        }
   get bold():              boolean                      { return this._bold              }
@@ -344,7 +358,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
     }
     if (slot === this._rotationSlot)    return { angle: this._rotation, magnitude: 1 }
-    if (slot === this._opacitySlot)     return this._opacity
+    if (slot === this._opacitySlot)     return this._manualOpacity
     if (slot === this._lineSpacingSlot) return (this._manualLineSpacing + 1) / 4
     return null
   }
@@ -840,6 +854,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       maskBorderPad:     this._maskBorderPad,
       localMaskRect:        this._localMaskRect,
       localMaskFittedSize:  this._localMaskFittedSize,
+      manualOpacity:        this._manualOpacity,
     }
   }
 
@@ -880,12 +895,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       }
     }
     if (typeof state.localMaskFittedSize === 'number') this._localMaskFittedSize = state.localMaskFittedSize
+    if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
   }
 
   protected recompute(): void {
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+      : this._manualOpacity
 
     this._position = this._positionSlot.isActive
       ? (this._positionSlot.source as PointSource).getPoint()
@@ -1257,6 +1273,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return true
     }
 
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+    }
+
     return false
   }
 
@@ -1299,6 +1319,10 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   handlePointerMove(point: Point): void {
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+      return
+    }
     if (this._lineSpacingSliderDrag) {
       this._setLineSpacingFromPointer(point.x)
       return
@@ -1340,6 +1364,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   handlePointerUp(): void {
+    this._opacityWidget.handlePointerUp()
     this._lineSpacingSliderDrag = false
     this._borderPadSliderDrag   = false
     this._drag = null
@@ -1394,6 +1419,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     if (boundingBoxContains(this._alignPillBounds(), point)) return this
     if (boundingBoxContains(this._spacingPillBounds(), point)) return this
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     return null
   }
 
@@ -1416,12 +1442,24 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._renderSpacingControls(ctx)
   }
 
-  // The _lineSpacingSlot is excluded from the standard slot group and rendered
-  // inline inside the paragraph pill (via _slotBounds registration below).
+  // _lineSpacingSlot is excluded from the standard group and registered against
+  // the spacing pill.  _opacitySlot is excluded and rendered as a SliderSlot pill.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standard = this.slots.filter(s => s !== this._lineSpacingSlot)
+    const standard = this.slots.filter(s => s !== this._lineSpacingSlot && s !== this._opacitySlot)
     this.renderSlotGroup(ctx, standard, this.panelBottom)
+
+    // Opacity SliderSlot pill — one row below the standard slot group
+    const ob = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(ob.x, ob.y, ob.width, ob.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this._opacitySlot, ob)
+    this._opacityWidget.render(ctx, ob)
+
     // Register the spacing pill as the drop-target for the line-spacing slot.
     const pb = this._spacingPillBounds()
     this._slotBounds.set(this._lineSpacingSlot, pb)
@@ -1437,6 +1475,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.stroke()
       ctx.restore()
     }
+  }
+
+  private _opacityPillBounds() {
+    const cb = this.canvasBounds
+    const standard = this.slots.filter(s => s !== this._lineSpacingSlot && s !== this._opacitySlot)
+    const standardH = standard.length * (30 + 4) - 4
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
   }
 
   override renderOverlay(ctx: Ctx2D): void {

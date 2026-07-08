@@ -17,6 +17,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapCoord, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft } from '../interaction/layout.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -65,12 +66,10 @@ const MASK_BTN_COL  = '#cfcf7e'   // Mask accent
 const POINT_BTN_W   = 55          // "Point"
 const POINT_BTN_COL = '#cf7ecf'   // Point type accent
 
-// Stroke/scale control pill, drawn directly below the canvas-space panel pill.
-const SLOT_H    = 30
-const SLOT_GAP  = 4
-const BTN_SZ    = SLOT_H - 6   // square toggle-button size
-const SW_LABEL_W = 78
-const SW_VALUE_W = 38
+// Style control pills, drawn below the canvas-space panel pill.
+const SLOT_H   = 30
+const SLOT_GAP = 4
+const BTN_SZ   = SLOT_H - 6   // square toggle-button size
 const MAX_STROKE_WIDTH = 80    // default; subclasses override _maxStrokeWidth/_minStrokeWidth
 const MAX_SCALE = 2            // Amount [0,1] -> scale [0, 2], 0.5 -> 1.0×
 
@@ -128,8 +127,10 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   get strokeWidth(): number { return this._strokeWidth }
   protected get _maxStrokeWidth(): number { return MAX_STROKE_WIDTH }
   protected get _minStrokeWidth(): number { return 0.5 }
-  protected _strokeSliderDrag = false
-  protected _scaleSliderDrag  = false
+
+  protected readonly _opacityWidget:     SliderSlot
+  protected readonly _strokeWidthWidget: SliderSlot
+  protected readonly _scaleWidget:       SliderSlot
 
   private _lastEventTime:  EventValue = null
   protected _toggleBounds: { x: number; y: number; width: number; height: number } | null = null
@@ -189,6 +190,25 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this.rotationSlot  = new ParameterSlot(ValueType.Direction, this, 'rotation')
     this.strokeWidthSlot = new ParameterSlot(ValueType.Amount,  this, 'stroke width')
     this.slots.push(this.positionSlot, this.colourSlot, this.opacitySlot, this.scaleSlot, this.fillModeSlot, this.rotationSlot, this.strokeWidthSlot)
+
+    this._opacityWidget = new SliderSlot(
+      this.opacitySlot, 'opacity', AM_COL,
+      () => this._opacity,
+      (v) => this._setOpacity(v),
+      () => this.markDirty(),
+    )
+    this._strokeWidthWidget = new SliderSlot(
+      this.strokeWidthSlot, 'stroke width', AM_COL,
+      () => Math.max(0, Math.min(1, this._strokeWidth / this._maxStrokeWidth)),
+      (v) => this._setStrokeWidth(v),
+      () => this.markDirty(),
+    )
+    this._scaleWidget = new SliderSlot(
+      this.scaleSlot, 'scale', AM_COL,
+      () => Math.max(0, Math.min(1, this._scale / MAX_SCALE)),
+      (v) => this._setScale(v),
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
@@ -253,6 +273,10 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return null
   }
 
+  get opacityWidget():     SliderSlot { return this._opacityWidget     }
+  get strokeWidthWidget(): SliderSlot { return this._strokeWidthWidget }
+  get scaleWidget():       SliderSlot { return this._scaleWidget       }
+
   getMask():  MaskValue  { return this._maskCanvas  }
   getImage(): ImageValue { return this._imageCanvas }
 
@@ -262,6 +286,24 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   // add coloured content.
   setFilled(filled: boolean): void {
     this._filled = filled
+    this.markDirty()
+  }
+
+  private _setOpacity(v: number): void {
+    if (this.opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this.opacitySlot)?.toggle()
+    this._opacity = v
+    this.markDirty()
+  }
+
+  private _setStrokeWidth(v: number): void {
+    if (this.strokeWidthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.strokeWidthSlot)?.toggle()
+    this._strokeWidth = Math.max(this._minStrokeWidth, v * this._maxStrokeWidth)
+    this.markDirty()
+  }
+
+  private _setScale(v: number): void {
+    if (this.scaleSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.scaleSlot)?.toggle()
+    this._scale = v * MAX_SCALE
     this.markDirty()
   }
 
@@ -383,15 +425,18 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     this._renderConvBtn(ctx, 'mask')
   }
 
-  // fillModeSlot, strokeWidthSlot, and scaleSlot are pulled out of the
-  // standard slot pill and rendered together in a second pill below the
-  // canvas-space panel (see _drawStrokePill).
+  // fillModeSlot, strokeWidthSlot, scaleSlot, and opacitySlot are pulled out
+  // of the standard slot pill and rendered in dedicated pills below it:
+  //   • opacity → 1-row SliderSlot pill
+  //   • fillMode + strokeWidth + scale → stroke pill
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot
+        && s !== this.scaleSlot && s !== this.opacitySlot
     )
     this.renderSlotGroup(ctx, standardSlots, this.panelBottom)
+    this._drawOpacityPill(ctx)
     this._drawStrokePill(ctx)
   }
 
@@ -399,110 +444,89 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     return 50 + this.bounds.height + 8
   }
 
-  protected _strokePillBounds(): BBox {
+  // Opacity pill — 1 SliderSlot row, sits between the standard slots and the stroke pill.
+  protected _opacityPillBounds(): BBox {
     const cb = this.canvasBounds
     const standardSlots = this.slots.filter(
-      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot && s !== this.scaleSlot
+      s => s !== this.fillModeSlot && s !== this.strokeWidthSlot
+        && s !== this.scaleSlot && s !== this.opacitySlot
     )
     const standardH = standardSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 5 * SLOT_H + 4 * SLOT_GAP }
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: SLOT_H }
   }
 
-  private _outlineRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
+  // Stroke pill — fillMode toggle + strokeWidth SliderSlot + scale SliderSlot (3 rows total).
+  protected _strokePillBounds(): BBox {
+    const op = this._opacityPillBounds()
+    return { x: op.x, y: op.y + op.height + 8, width: op.width, height: 3 * SLOT_H + 2 * SLOT_GAP }
   }
 
-  protected _strokeRowBounds(): BBox {
+  // Row bounds for each SliderSlot inside the stroke pill.
+  protected _strokeWidthRowBounds(): BBox {
     const pb = this._strokePillBounds()
     return { x: pb.x, y: pb.y + SLOT_H + SLOT_GAP, width: pb.width, height: SLOT_H }
   }
 
-  private _strokeBindRowBounds(): BBox {
+  protected _scaleWidgetRowBounds(): BBox {
     const pb = this._strokePillBounds()
     return { x: pb.x, y: pb.y + 2 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
   }
 
-  private _scaleRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y + 3 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
+  // Hit-test wrappers — kept as protected so TrackXxx subclasses can override to return false.
+  protected _opacitySliderHit(point: Point): boolean {
+    return this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null
   }
 
-  private _scaleBindRowBounds(): BBox {
-    const pb = this._strokePillBounds()
-    return { x: pb.x, y: pb.y + 4 * (SLOT_H + SLOT_GAP), width: pb.width, height: SLOT_H }
-  }
-
-  protected _strokeSliderGeom() {
-    const b = this._strokeRowBounds()
-    const midY = b.y + b.height / 2
-    const labelX = b.x + 12
-    const indX = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0 = labelX + SW_LABEL_W
-    const sldR = valueRight - SW_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
-  }
-
-  private _scaleSliderGeom() {
-    const b = this._scaleRowBounds()
-    const midY       = b.y + b.height / 2
-    const labelX     = b.x + 12
-    const indX       = b.x + b.width - 8
-    const valueRight = indX - 14
-    const sld0       = labelX + SW_LABEL_W
-    const sldR       = valueRight - SW_VALUE_W - 6
-    return { b, midY, labelX, sld0, sldR, valueRight, indX }
+  protected _strokeSliderHit(point: Point): boolean {
+    return this._strokeWidthWidget.hitZone(point, this._strokeWidthRowBounds()) !== null
   }
 
   protected _scaleSliderHit(point: Point): boolean {
-    return boundingBoxContains(this._scaleRowBounds(), point)
+    return this._scaleWidget.hitZone(point, this._scaleWidgetRowBounds()) !== null
   }
 
-  protected _setScaleFromPointer(px: number): void {
-    if (this.scaleSlot.state === SlotState.Bound) {
-      BindingLayer.findForSlot(this.scaleSlot)?.toggle()
-    }
-    const g = this._scaleSliderGeom()
-    const thumbR = 5
-    const lo = g.sld0 + thumbR
-    const hi = g.sldR - thumbR
-    const range = Math.max(1e-6, hi - lo)
-    const v = Math.max(0, Math.min(1, (px - lo) / range))
-    this._scale = v * MAX_SCALE
-    this.markDirty()
+  protected _drawOpacityPill(ctx: Ctx2D): void {
+    const b = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this.opacitySlot, b)
+    this._opacityWidget.render(ctx, b)
   }
 
   protected _drawStrokePill(ctx: Ctx2D): void {
-    // Row 1 — "outline mode" toggle.
-    this.renderSlotGroup(ctx, [this.fillModeSlot], this._outlineRowBounds().y)
+    const pb = this._strokePillBounds()
+
+    // Row 0 — "outline mode" toggle (fillModeSlot with binding row + circular button).
+    this.renderSlotGroup(ctx, [this.fillModeSlot], pb.y)
     this._drawOutlineToggle(ctx)
 
-    // Rows 2+3 — stroke-width slider + binding in one combined pill.
-    const sRow = this._strokeRowBounds()
+    // Rows 1+2 — stroke-width + scale SliderSlot widgets in a combined pill.
+    const pillY = pb.y + SLOT_H + SLOT_GAP
+    const pillH = 2 * SLOT_H + SLOT_GAP
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
     ctx.beginPath()
-    ctx.roundRect(sRow.x, sRow.y, sRow.width, 2 * SLOT_H + SLOT_GAP, 6)
+    ctx.roundRect(pb.x, pillY, pb.width, pillH, 6)
     ctx.fill()
     ctx.restore()
-    this._drawStrokeSlider(ctx, false)
-    this._renderBindingRow(ctx, this.strokeWidthSlot, this._strokeBindRowBounds().y)
 
-    // Rows 4+5 — scale slider + binding in one combined pill.
-    const scRow = this._scaleRowBounds()
-    ctx.save()
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(scRow.x, scRow.y, scRow.width, 2 * SLOT_H + SLOT_GAP, 6)
-    ctx.fill()
-    ctx.restore()
-    this._drawScaleSlider(ctx, false)
-    this._renderBindingRow(ctx, this.scaleSlot, this._scaleBindRowBounds().y)
+    const swRow = this._strokeWidthRowBounds()
+    const scRow = this._scaleWidgetRowBounds()
+
+    this._slotBounds.set(this.strokeWidthSlot, swRow)
+    this._slotBounds.set(this.scaleSlot,       scRow)
+
+    this._strokeWidthWidget.render(ctx, swRow)
+    this._scaleWidget.render(ctx, scRow)
   }
 
   private _drawOutlineToggle(ctx: Ctx2D): void {
-    const row = this._outlineRowBounds()
+    const pb  = this._strokePillBounds()
+    const row = { x: pb.x, y: pb.y, width: pb.width, height: SLOT_H }
     const midY = row.y + row.height / 2
     const btnX = row.x + row.width - BTN_SZ - 3
     const btnY = row.y + 3
@@ -549,89 +573,13 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.restore()
   }
 
-  private _drawStrokeSlider(ctx: Ctx2D, drawBackdrop = true): void {
-    const g = this._strokeSliderGeom()
-    const { x, y, width, height } = g.b
-
-    const active = this.strokeWidthSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01 = Math.max(0, Math.min(1, this._strokeWidth / this._maxStrokeWidth))
-
-    ctx.save()
-
-    if (drawBackdrop) {
-      ctx.fillStyle = 'rgba(0,0,0,0.28)'
-      ctx.beginPath()
-      ctx.roundRect(x, y, width, height, 6)
-      ctx.fill()
-    }
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('stroke width', g.labelX, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`${this._strokeWidth.toFixed(1)}px`, g.valueRight, g.midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
-    ctx.restore()
-  }
-
-  private _drawScaleSlider(ctx: Ctx2D, drawBackdrop = true): void {
-    const g = this._scaleSliderGeom()
-    const { x, y, width, height } = g.b
-
-    const active = this.scaleSlot.isActive
-    const colour = active ? AM_COL : ACCENT
-    const v01 = Math.max(0, Math.min(1, this._scale / MAX_SCALE))
-
-    ctx.save()
-
-    if (drawBackdrop) {
-      ctx.fillStyle = 'rgba(0,0,0,0.28)'
-      ctx.beginPath()
-      ctx.roundRect(x, y, width, height, 6)
-      ctx.fill()
-    }
-
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('scale', g.labelX, g.midY)
-
-    this._drawSlider(ctx, g.midY, g.sld0, g.sldR, v01, colour)
-
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.90)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`${this._scale.toFixed(2)}×`, g.valueRight, g.midY)
-
-    ctx.font      = '9px monospace'
-    ctx.fillStyle = active ? AM_COL : 'rgba(255,255,255,0.22)'
-    ctx.textAlign = 'right'
-    ctx.fillText(active ? '●' : '○', g.indX, g.midY)
-
-    ctx.restore()
-  }
-
   // Draw the label + drop-target box for a single Amount slot row at `y`,
   // without any backdrop, and register the row in _slotBounds for hit testing.
-  // Used to render binding rows inside a combined slider+binding pill.
+  // Used by PathLayer's radius pill to render its binding row.
   protected _renderBindingRow(ctx: Ctx2D, slot: ParameterSlot, y: number): void {
     const PANEL_X = this.canvasBounds.x
     const PANEL_W = this.canvasBounds.width
-    const LABEL_W = SW_LABEL_W   // 78, matches Layer.ts renderSlotGroup
+    const LABEL_W = 78   // matches Layer.ts renderSlotGroup
 
     this._slotBounds.set(slot, { x: PANEL_X, y, width: PANEL_W, height: SLOT_H })
 
@@ -716,24 +664,6 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     ctx.fill()
   }
 
-  protected _setStrokeWidthFromPointer(px: number): void {
-    if (this.strokeWidthSlot.state === SlotState.Bound) {
-      BindingLayer.findForSlot(this.strokeWidthSlot)?.toggle()
-    }
-    const g = this._strokeSliderGeom()
-    const thumbR = 5
-    const lo = g.sld0 + thumbR
-    const hi = g.sldR - thumbR
-    const range = Math.max(1e-6, hi - lo)
-    const v = Math.max(0, Math.min(1, (px - lo) / range))
-    this._strokeWidth = Math.max(this._minStrokeWidth, v * this._maxStrokeWidth)
-    this.markDirty()
-  }
-
-  protected _strokeSliderHit(point: Point): boolean {
-    return boundingBoxContains(this._strokeRowBounds(), point)
-  }
-
   // ----------------------------------------------------------
   // Hit testing
   // ----------------------------------------------------------
@@ -757,8 +687,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
       if (point.x >= b.x && point.x <= b.x + b.width &&
           point.y >= b.y && point.y <= b.y + b.height) return this
     }
-    if (this._strokeSliderHit(point)) return this
-    if (this._scaleSliderHit(point)) return this
+    if (this._opacitySliderHit(point)) return this
+    if (this._strokeSliderHit(point))  return this
+    if (this._scaleSliderHit(point))   return this
     return null
   }
 
@@ -808,17 +739,14 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
           return true
         }
       }
+      if (this._opacitySliderHit(point)) {
+        return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+      }
       if (this._strokeSliderHit(point)) {
-        this._strokeSliderDrag = true
-        this._setStrokeWidthFromPointer(point.x)
-        this.markDirty()
-        return true
+        return this._strokeWidthWidget.handlePointerDown(point, this._strokeWidthRowBounds())
       }
       if (this._scaleSliderHit(point)) {
-        this._scaleSliderDrag = true
-        this._setScaleFromPointer(point.x)
-        this.markDirty()
-        return true
+        return this._scaleWidget.handlePointerDown(point, this._scaleWidgetRowBounds())
       }
       return false
     }
@@ -877,12 +805,16 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   }
 
   handlePointerMove(point: Point): void {
-    if (this._strokeSliderDrag) {
-      this._setStrokeWidthFromPointer(point.x)
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
       return
     }
-    if (this._scaleSliderDrag) {
-      this._setScaleFromPointer(point.x)
+    if (this._strokeWidthWidget.isDragging) {
+      this._strokeWidthWidget.handlePointerMove(point, this._strokeWidthRowBounds())
+      return
+    }
+    if (this._scaleWidget.isDragging) {
+      this._scaleWidget.handlePointerMove(point, this._scaleWidgetRowBounds())
       return
     }
     if (this._dragHandle < 0) return
@@ -1063,8 +995,9 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
 
   handlePointerUp(): void {
     this._dragHandle = -1
-    this._strokeSliderDrag = false
-    this._scaleSliderDrag  = false
+    this._opacityWidget.handlePointerUp()
+    this._strokeWidthWidget.handlePointerUp()
+    this._scaleWidget.handlePointerUp()
     this._clearRotDwellTimer()
     this._clearSquareDwellTimer()
     this._edgeSnapX = null

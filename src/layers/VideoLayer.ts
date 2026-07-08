@@ -1,6 +1,7 @@
 import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
+import { SliderSlot }    from '../ui/SliderSlot.js'
 import {
   ValueType, SlotState,
   boundingBoxContains,
@@ -11,6 +12,7 @@ import {
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFaceDetect.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon } from '../ui/icons.js'
@@ -126,8 +128,10 @@ export class VideoLayer extends Layer implements ImageSource {
   readonly opacitySlot: ParameterSlot
   private _lastEventTime: EventValue = null
 
-  // Opacity — computed each recompute from slot; 1.0 when unbound
+  // Opacity — computed each recompute from slot; _manualOpacity when unbound
   private _opacity = 1.0
+  private _manualOpacity = 1.0
+  private readonly _opacityWidget: SliderSlot
 
   // ── Display transform ─────────────────────────────────────────
   private _cx              = 0
@@ -190,6 +194,17 @@ export class VideoLayer extends Layer implements ImageSource {
     this.opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
     this.slots.push(this.enableSlot, this.opacitySlot)
 
+    this._opacityWidget = new SliderSlot(
+      this.opacitySlot, 'opacity', AM_COL,
+      () => this._manualOpacity,
+      (v) => {
+        if (this.opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this.opacitySlot)?.toggle()
+        this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+
     this._video = document.createElement('video')
     this._video.playsInline = true
     this._video.muted       = true
@@ -230,6 +245,8 @@ export class VideoLayer extends Layer implements ImageSource {
 
   getImage(): ImageValue { return this._result }
 
+  get opacityWidget(): SliderSlot { return this._opacityWidget }
+
   override getSnapBounds() {
     if (this._displayW <= 0 || this._displayH <= 0) return null
     const halfW = this._displayW / 2, halfH = this._displayH / 2
@@ -240,7 +257,7 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this.opacitySlot) return this._opacity
+    if (slot === this.opacitySlot) return this._manualOpacity
     return null
   }
 
@@ -278,6 +295,7 @@ export class VideoLayer extends Layer implements ImageSource {
   override serializeState(): Record<string, unknown> {
     return {
       addTrackDone:    this._addTrackDone,
+      manualOpacity:   this._manualOpacity,
       sourceType:      this._sourceType,
       deviceIdx:       this._deviceIdx,
       frozen:          this._frozen,
@@ -326,6 +344,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
     if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
     if (typeof state.addTrackDone === 'boolean')    this._addTrackDone    = state.addTrackDone
+    if (typeof state.manualOpacity === 'number')    this._manualOpacity   = state.manualOpacity
 
     // Restart the camera stream after restoring deviceIdx so the correct
     // device is selected. Screen and file sources can't be auto-restarted.
@@ -342,7 +361,7 @@ export class VideoLayer extends Layer implements ImageSource {
   protected recompute(): void {
     this._opacity = this.opacitySlot.isActive
       ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
-      : 1.0
+      : this._manualOpacity
 
     // Rising edge on enable slot toggles freeze (stream) or play/pause (file).
     if (this.enableSlot.isActive) {
@@ -897,17 +916,17 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   override renderSlots(ctx: Ctx2D): void {
-    super.renderSlots(ctx)
+    this._slotBounds.clear()
+    const standard = this.slots.filter(s => s !== this.opacitySlot)
+    this.renderSlotGroup(ctx, standard, this.panelBottom)
 
+    // Toggle button drawn over the enableSlot row (index 0 in standard group)
     const SLOT_H   = 30
     const SLOT_GAP = 4
     const BTN_SZ   = SLOT_H - 6
 
-    const idx = this.slots.indexOf(this.enableSlot)
-    if (idx < 0) return
-
     const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
-    const y    = this.panelBottom + idx * (SLOT_H + SLOT_GAP)
+    const y    = this.panelBottom   // enableSlot is at index 0
     const midY = y + SLOT_H / 2
     const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
     const btnY = y + 3
@@ -939,6 +958,24 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.fillStyle    = isActive ? ACCENT : isSuspended ? 'rgba(255,255,255,0.35)' : ACCENT
     drawIcon(ctx, paused ? 'pause' : 'record', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
     ctx.restore()
+
+    // Opacity SliderSlot pill — below the standard slot group
+    const ob = this._opacityPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(ob.x, ob.y, ob.width, ob.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this.opacitySlot, ob)
+    this._opacityWidget.render(ctx, ob)
+  }
+
+  private _opacityPillBounds() {
+    const cb = this.canvasBounds
+    const standard = this.slots.filter(s => s !== this.opacitySlot)
+    const standardH = standard.length * (30 + 4) - 4
+    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
   }
 
   // ── Transform handles ─────────────────────────────────────────
@@ -1037,6 +1074,7 @@ export class VideoLayer extends Layer implements ImageSource {
       if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
       if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     }
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     return null
   }
 
@@ -1142,10 +1180,17 @@ export class VideoLayer extends Layer implements ImageSource {
         this._manualTransform = true; return true
       }
     }
+    if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
+      return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
+    }
     return false
   }
 
   handlePointerMove(point: Point): void {
+    if (this._opacityWidget.isDragging) {
+      this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+      return
+    }
     if (this._drag !== null) {
       if (this._drag.type === 'move') {
         const rawCx = this._drag.startCX + point.x - this._drag.startMouse.x
@@ -1179,6 +1224,7 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   handlePointerUp(): void {
+    this._opacityWidget.handlePointerUp()
     if (this._drag !== null) {
       this._drag = null
       this._edgeSnapX = null
