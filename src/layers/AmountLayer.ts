@@ -10,6 +10,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { SliderRegion, registerPromotionFactory } from '../regions/SliderRegion.js'
 import { BindingLayer } from './BindingLayer.js'
+import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
 // AmountLayer — a layer that holds and exposes an Amount value
@@ -42,6 +43,11 @@ export class AmountLayer extends Layer implements AmountSource {
   private readonly _slider: SliderRegion
 
   private _value: Amount
+
+  // "Calc" convenience button — creates a MathLayer below, pre-bound.
+  private _addCalcDone = false
+  private _onAddCalc: (() => void) | null = null
+  setOnAddCalc(fn: () => void): void { this._onAddCalc = fn }
 
   private static readonly PAD_X       = 10
   private static readonly PAD_Y       = 6
@@ -138,11 +144,12 @@ export class AmountLayer extends Layer implements AmountSource {
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { value: this._value }
+    return { value: this._value, addCalcDone: this._addCalcDone }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.value === 'number') this._value = state.value
+    if (typeof state.addCalcDone === 'boolean') this._addCalcDone = state.addCalcDone
   }
 
   private _syncSliderBounds(): void {
@@ -243,10 +250,58 @@ export class AmountLayer extends Layer implements AmountSource {
   }
 
   // ----------------------------------------------------------
+  // Convenience button — "Calc" (creates MathLayer below)
+  // ----------------------------------------------------------
+
+  private _calcBtnRect(): { x: number; y: number; w: number; h: number } {
+    const BTN_W = 54, BTN_H = 30, GAP = 14
+    const left  = contentLeft(Node.canvasWidth)
+    const x     = left + Math.max(0, (Node.viewportWidth - left - BTN_W) / 2)
+    const y     = Node.viewportHeight - BTN_H - GAP
+    return { x, y, w: BTN_W, h: BTN_H }
+  }
+
+  override renderOverlay(ctx: Ctx2D): void {
+    super.renderOverlay(ctx)
+    if (this._addCalcDone || this._onAddCalc === null) return
+    const { x, y, w, h } = this._calcBtnRect()
+    const midY = y + h / 2
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.55)'
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
+    ctx.fillStyle = '#4a8fe8cc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
+    ctx.save()
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.font = '11px monospace'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
+    ctx.fillText('Calc', x + 10, midY)
+    ctx.restore()
+    ctx.restore()
+  }
+
+  // ----------------------------------------------------------
   // Hit testing
   // ----------------------------------------------------------
 
   protected override hitTestSelf(point: Point) {
+    if (!this._addCalcDone && this._onAddCalc !== null) {
+      const { x, y, w, h } = this._calcBtnRect()
+      if (point.x >= x && point.x < x + w && point.y >= y && point.y < y + h) return this
+    }
     return this._slider.hitTest(point)
+  }
+
+  handlePointerDown(point: Point): boolean {
+    if (!this._addCalcDone && this._onAddCalc !== null) {
+      const { x, y, w, h } = this._calcBtnRect()
+      if (point.x >= x && point.x < x + w && point.y >= y && point.y < y + h) {
+        this._onAddCalc()
+        this._addCalcDone = true
+        this.markDirty()
+        return true
+      }
+    }
+    return false
   }
 }

@@ -207,8 +207,8 @@ const COLUMNS: ColDef[] = [
 //   SequenceLayer - inherited from original Palimpsest, but doesn't
 //     seem to have much utility here
 //   
-//   CalculateLayer - inherited from original Palimpsest, but doesn't
-//     seem to have much utility here
+//   MathLayer (Calculate) - Amount transformation pipeline; accessible via
+//     AmountLayer's convenience button
 //
 //   RotateLayer - functionality now provided by rotation of Angle
 //

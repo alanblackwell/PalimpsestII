@@ -37,6 +37,7 @@ import { TextLayer }         from '../layers/TextLayer.js'
 import { ClipLayer, isClippableImageLayer } from '../layers/ClipLayer.js'
 import type { ClipShapeLayer } from '../layers/ClipLayer.js'
 import { FilterLayer }       from '../layers/FilterLayer.js'
+import { MathLayer }         from '../layers/MathLayer.js'
 import { ShapeLayer }        from '../layers/ShapeLayer.js'
 import { ClipRectLayer }        from '../layers/ClipRectLayer.js'
 import { TrackRectLayer }       from '../layers/TrackRectLayer.js'
@@ -227,6 +228,10 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof LineLayer)   wireLineSnapPoint(newLayer)
   applyDefaultBindings(newLayer)
 
+  if (newLayer instanceof AmountLayer) {
+    wireCalcButton(newLayer)
+  }
+
   if (newLayer instanceof AnimPathLayer) {
     wireAnimPathLayer(newLayer)
 
@@ -296,6 +301,10 @@ function postInsertLayer(newLayer: Layer): void {
   }
 
   if (newLayer instanceof FilterLayer) {
+    newLayer.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+  }
+
+  if (newLayer instanceof MathLayer) {
     newLayer.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
   }
 
@@ -379,6 +388,20 @@ function postInsertLayer(newLayer: Layer): void {
 
     BindingLayer.create(maskHelper, newLayer.clipMaskSlot)
   }
+}
+
+// Wire an AmountLayer's "Calc" convenience button: creates a MathLayer below,
+// binds the AmountLayer as its input, and selects the new MathLayer.
+function wireCalcButton(layer: AmountLayer): void {
+  layer.setOnAddCalc(() => {
+    const math = new MathLayer()
+    Layer.assignDebugName(math)
+    math.bounds = { x: X, y: 24, width: W, height: 36 }
+    math.insertBelow(layer)
+    BindingLayer.create(layer, math.inputSlot)
+    postInsertLayer(math)
+    refreshStack(math)   // select the new Calc layer
+  })
 }
 
 // Wire an AnimPathLayer's bottom "Amount" convenience button: creates an
@@ -967,6 +990,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   let scanL: Layer | null = root
   while (scanL !== null) {
     if (scanL instanceof CollectionLayer)  scanL.setEjectCallback(() => refreshStack())
+    if (scanL instanceof AmountLayer)      wireCalcButton(scanL)
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
     if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
     if (scanL instanceof ImageLayer) { wireImageLayer(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
@@ -1009,6 +1033,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof TransformLayer)  scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (scanL instanceof CompositeLayer)  scanL.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (scanL instanceof FilterLayer)     scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+    if (scanL instanceof MathLayer)       scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
     if (scanL instanceof MotionBlurLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
       scanL.fadeWidget.onInspectorRequest  = wi
@@ -1027,6 +1052,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   }
   for (const archived of deletionLayer.archivedLayers) {
     if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
+    if (archived instanceof AmountLayer)     wireCalcButton(archived)
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
     if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
     if (archived instanceof ImageLayer)      { wireImageLayer(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
@@ -1069,6 +1095,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof TransformLayer)  archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof CompositeLayer)  archived.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     if (archived instanceof FilterLayer)     archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+    if (archived instanceof MathLayer)       archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
     if (archived instanceof MotionBlurLayer) {
       const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
       archived.fadeWidget.onInspectorRequest  = wi
