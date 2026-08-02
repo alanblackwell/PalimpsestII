@@ -18,9 +18,17 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 
 const ACCENT  = '#7ecf7e'   // Image type colour
 const STRIPE  = 4
-const BTN     = 24   // 20 to fit 6 buttons with adequate status text room
+const BTN     = 24   // small toggle buttons (edit/stack capture) in the lower pill
 const BTN_GAP = 4
-const BTN_M   = 6
+
+// Large buttons — mode/shutter/save/share, in a row across the top of the
+// panel. Sized to fit the ~260px canvas-space pill in one row on desktop;
+// wraps into extra rows on narrow (phone) canvases instead of shrinking.
+const LG_SZ     = 52
+const LG_GAP    = 6
+const LG_MARGIN = 10
+const LOWER_H   = 34   // lower pill: edit/stack toggles + status text
+const ROW_GAP   = 8
 
 // Edit-capture photo sequence timing (ms). On shutter click, the shutter
 // pulses for PULSE_MS while this layer is still selected, then the layer
@@ -690,14 +698,47 @@ export class CaptureLayer extends Layer implements ImageSource {
   // Pass-through: layers below have already been drawn onto ctx by
   // renderStack before renderSelf is called, so this layer draws nothing.
 
+  // ── Big-button grid layout ──────────────────────────────────────
+  //
+  // The 4 primary buttons (mode/shutter/save/share) are laid out as a row
+  // of large squares that wraps into extra rows if the panel is too narrow
+  // to fit them all at LG_SZ (phone canvases) rather than shrinking them.
+
+  private _bigGridRows(n: number, pillW: number): number {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    return Math.ceil(n / cols)
+  }
+
+  private _bigGridCells(n: number, pillX: number, pillW: number, top: number): BBox[] {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    const cells: BBox[] = []
+    for (let i = 0; i < n; i++) {
+      const r = Math.floor(i / cols), c = i % cols
+      cells.push({
+        x: pillX + LG_MARGIN + c * (LG_SZ + LG_GAP),
+        y: top  + r * (LG_SZ + LG_GAP),
+        width: LG_SZ, height: LG_SZ,
+      })
+    }
+    return cells
+  }
+
+  private _capturePillHeight(): number {
+    const rows = this._bigGridRows(4, this.canvasBounds.width)
+    const bigH = LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+    return bigH + ROW_GAP + LOWER_H
+  }
+
   // Push slot rows down to make room for the preview pill below the
   // control pills.
   override get panelBottom(): number {
-    return 50 + this.bounds.height + PREVIEW_GAP + PREVIEW_H + PREVIEW_GAP
+    return 50 + this._capturePillHeight() + PREVIEW_GAP + PREVIEW_H + PREVIEW_GAP
   }
 
   renderPanel(ctx: Ctx2D): void {
-    const h = this.bounds.height
+    const h = this._capturePillHeight()
     const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
     this._drawStripPill(ctx, this.bounds)
     this._drawCapturePill(ctx, { x: PANEL_X, y: 50, width: PANEL_W, height: h })
@@ -728,55 +769,32 @@ export class CaptureLayer extends Layer implements ImageSource {
   }
 
   private _drawCapturePill(ctx: Ctx2D, b: BBox): void {
-    const { x, y, width, height } = b
-    if (width <= 0 || height <= 0) return
+    const { x, y, width } = b
+    if (width <= 0) return
+
+    const rows  = this._bigGridRows(4, width)
+    const bigH  = LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+    const upperB: BBox = { x, y, width, height: bigH }
+    const lowerB: BBox = { x, y: y + bigH + ROW_GAP, width, height: LOWER_H }
 
     ctx.save()
 
+    // ── Upper pill — big mode/shutter/save/share buttons ────────────
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.roundRect(upperB.x, upperB.y, upperB.width, upperB.height, 8)
     ctx.fill()
-
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(x, y, STRIPE, height, [4, 0, 0, 4])
+    ctx.roundRect(upperB.x, upperB.y, STRIPE, upperB.height, [4, 0, 0, 4])
     ctx.fill()
 
-    const shareB:   BBox = { x: x + width - BTN_M - BTN,   y: y + (height - BTN) / 2, width: BTN, height: BTN }
-    const saveB:    BBox = { x: shareB.x  - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
-    const shutterB: BBox = { x: saveB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
-    const modeB:    BBox = { x: shutterB.x - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
-    const editB:    BBox = { x: modeB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
-    const stackB:   BBox = { x: editB.x   - BTN_GAP - BTN, y: shareB.y, width: BTN, height: BTN }
-    this._shareBtnB   = shareB
-    this._saveBtnB    = saveB
-    this._shutterBtnB = shutterB
+    const [modeB, shutterB, saveB, shareB] =
+      this._bigGridCells(4, upperB.x, upperB.width, upperB.y + LG_MARGIN) as [BBox, BBox, BBox, BBox]
     this._modeBtnB    = modeB
-    this._editBtnB    = editB
-    this._stackBtnB   = stackB
-
-    // Status text, clipped between the stripe and the stack-capture button.
-    const textL = x + STRIPE + 8
-    const textW = stackB.x - textL - 6
-    if (textW > 0) {
-      ctx.save()
-      ctx.beginPath()
-      ctx.rect(textL, y, textW, height)
-      ctx.clip()
-      ctx.fillStyle    = 'rgba(255,255,255,0.75)'
-      ctx.font         = '11px monospace'
-      ctx.textAlign    = 'left'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(this._status, textL, y + height / 2)
-      ctx.restore()
-    }
-
-    // Edit/display capture toggle — cursor dragging a handle.
-    this._drawEditIcon(ctx, editB, this._editCapture)
-
-    // Stack-widget capture toggle — small stack of overlapping rectangles.
-    this._drawStackIcon(ctx, stackB, this._stackCapture)
+    this._shutterBtnB = shutterB
+    this._saveBtnB    = saveB
+    this._shareBtnB   = shareB
 
     // Mode toggle — photo / movie.
     this._drawBtn(ctx, modeB, this._movieMode ? 'video-camera' : 'camera', ACCENT)
@@ -808,6 +826,43 @@ export class CaptureLayer extends Layer implements ImageSource {
     this._drawBtn(ctx, saveB, 'floppy-disk', hasResult ? ACCENT : 'rgba(255,255,255,0.20)')
     // Share — dimmed until there's something to share.
     this._drawShareIcon(ctx, shareB, hasResult)
+
+    // ── Lower pill — edit/stack-capture toggles + status text ───────
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(lowerB.x, lowerB.y, lowerB.width, lowerB.height, Math.min(lowerB.height / 2, 8))
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(lowerB.x, lowerB.y, STRIPE, lowerB.height, [4, 0, 0, 4])
+    ctx.fill()
+
+    const smallY  = lowerB.y + (lowerB.height - BTN) / 2
+    const editB:  BBox = { x: lowerB.x + STRIPE + 8,  y: smallY, width: BTN, height: BTN }
+    const stackB: BBox = { x: editB.x + BTN + BTN_GAP, y: smallY, width: BTN, height: BTN }
+    this._editBtnB  = editB
+    this._stackBtnB = stackB
+
+    // Edit/display capture toggle — cursor dragging a handle.
+    this._drawEditIcon(ctx, editB, this._editCapture)
+    // Stack-widget capture toggle — small stack of overlapping rectangles.
+    this._drawStackIcon(ctx, stackB, this._stackCapture)
+
+    // Status text, filling the rest of the lower pill.
+    const textL = stackB.x + BTN + 10
+    const textW = lowerB.x + lowerB.width - 8 - textL
+    if (textW > 0) {
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(textL, lowerB.y, textW, lowerB.height)
+      ctx.clip()
+      ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+      ctx.font         = '11px monospace'
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(this._status, textL, lowerB.y + lowerB.height / 2)
+      ctx.restore()
+    }
 
     ctx.restore()
   }

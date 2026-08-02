@@ -33,7 +33,11 @@ import { drawIcon } from '../ui/icons.js'
 //                            shape (scanline word-wrap).
 //
 // Typography controls (in-canvas panel):
-//   Font family cycle button · [B] bold · [I] italic · [−] size [+]
+//   Big row: [✎ edit/keyboard] [− size +] — the two most mobile-critical
+//   controls, enlarged and led by the keyboard button (see CLAUDE.md /
+//   VideoLayer, CaptureLayer for the same big-button-row convention).
+//   Row below: font family cycle button · [B] bold · [I] italic — left at
+//   their original size since they're reached less often on mobile.
 //
 // Text editing:
 //   [✎] opens a multiline overlay dialog with a Paste button.
@@ -45,13 +49,18 @@ const MIN_SIZE     = 12
 const MAX_SIZE     = 120
 const DEFAULT_SIZE = 48
 
-// Panel button geometry
-const BTN   = 20
-const BTN_M = 6
+// Big keyboard-edit + size-adjust row — top row, mobile-priority controls.
+// Target square size for the edit/size buttons, shrinking to KB_MIN on
+// narrow (phone) panels rather than wrapping.
+const KB_SZ      = 48
+const KB_MIN     = 36
+const KB_GAP     = 6
+const KB_MARGIN  = 8
+const KB_VALUE_W = 36   // width reserved for the "NNpx" readout between size buttons
 
-// Controls-row geometry (below the main pill)
+// Controls-row geometry (font/bold/italic row, and the align/spacing rows below it)
 const CTRL_H   = 28
-const CTRL_GAP = 4    // gap between pill bottom and controls row
+const CTRL_GAP = 4    // gap between rows
 
 // Maximum border-pad between mask edge and text (slider range 0–BORDER_PAD_MAX px)
 const BORDER_PAD_MAX = 100
@@ -1138,7 +1147,9 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Panel layout
   // ----------------------------------------------------------
 
-  private get _ctrlY():         number  { return 50 + this.bounds.height + CTRL_GAP }
+  private get _kbY():           number  { return 50 }
+  private get _kbRowH():        number  { return this._kbSquareSize(panelWidth(Node.canvasWidth)) + KB_MARGIN * 2 }
+  private get _ctrlY():         number  { return this._kbY + this._kbRowH + CTRL_GAP }
   private get _alignY():        number  { return this._ctrlY + CTRL_H + CTRL_GAP }
   private get _spacingY():      number  { return this._alignY + CTRL_H + CTRL_GAP }
   private get _hasMaskLayout(): boolean { return this._maskRows !== null || this._cachedMaskRows !== null }
@@ -1219,9 +1230,20 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     }
 
     // Pill controls — checked after handles
-    if (boundingBoxContains(this._editBtnBounds(), point)) {
-      this.openEditDialog()
-      return true
+    if (boundingBoxContains(this._kbRowBounds(), point)) {
+      if (boundingBoxContains(this._editBtnBounds(), point)) {
+        this.openEditDialog()
+        return true
+      }
+      if (boundingBoxContains(this._sizeMinusBounds(), point)) {
+        this.adjustSize(-4)
+        return true
+      }
+      if (boundingBoxContains(this._sizePlusBounds(), point)) {
+        this.adjustSize(+4)
+        return true
+      }
+      return false
     }
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) {
       if (boundingBoxContains(this._fontBtnBounds(), point)) {
@@ -1234,14 +1256,6 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       }
       if (boundingBoxContains(this._italicBtnBounds(), point)) {
         this.toggleItalic()
-        return true
-      }
-      if (boundingBoxContains(this._sizeMinusBounds(), point)) {
-        this.adjustSize(-4)
-        return true
-      }
-      if (boundingBoxContains(this._sizePlusBounds(), point)) {
-        this.adjustSize(+4)
         return true
       }
       return false
@@ -1415,7 +1429,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) return this
     if (!this._positionSlot.isActive && this._maskRows === null
         && ptDist(point, hp.move) <= HANDLE_HIT) return this
-    if (boundingBoxContains(this.canvasBounds, point)) return this
+    if (boundingBoxContains(this._kbRowBounds(), point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     if (boundingBoxContains(this._alignPillBounds(), point)) return this
     if (boundingBoxContains(this._spacingPillBounds(), point)) return this
@@ -1436,7 +1450,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   renderPanel(ctx: Ctx2D): void {
     this._updateEditHover()
-    this._renderPanelImpl(ctx)
+    this._renderKeyboardRow(ctx)
     this._renderControls(ctx)
     this._renderAlignControls(ctx)
     this._renderSpacingControls(ctx)
@@ -1535,12 +1549,16 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _renderMaskBtn(ctx: Ctx2D)  { this._renderConvBtn(ctx, 'mask')  }
   private _renderPtBtn(ctx: Ctx2D)    { this._renderConvBtn(ctx, 'point') }
 
-  // ── Main pill ─────────────────────────────────────────────────
+  // ── Big keyboard-edit + size row ────────────────────────────────
+  //
+  // The two most mobile-critical controls: opening the text-edit dialog
+  // (which focuses a real <textarea>, raising the OS keyboard) and
+  // adjusting font size. Laid out like VideoLayer/CaptureLayer's big
+  // source-button rows — the edit button leads on the left.
 
-  private _renderPanelImpl(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
+  private _renderKeyboardRow(ctx: Ctx2D): void {
+    const { x, y, width, height } = this._kbRowBounds()
     if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
 
     ctx.save()
 
@@ -1548,54 +1566,52 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     ctx.beginPath()
     ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
     ctx.fill()
-
     ctx.fillStyle = ACCENT
     ctx.beginPath()
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    // "T" glyph
-    ctx.font = 'bold 13px monospace'
-    ctx.fillStyle = ACCENT
-    ctx.textAlign = 'left'
+    const editB = this._editBtnBounds()
+    const smB   = this._sizeMinusBounds()
+    const spB   = this._sizePlusBounds()
+
+    this._drawBigIconBtn(ctx, editB, 'pencil')
+    this._drawBigGlyphBtn(ctx, smB, '−')
+    this._drawBigGlyphBtn(ctx, spB, '+')
+
+    const szLabel = `${Math.round(this._size)}px`
+    ctx.font         = `${Math.max(10, Math.round(smB.height * 0.24))}px monospace`
+    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
+    ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText('T', x + 10, midY)
-
-    // Text preview
-    const editB  = this._editBtnBounds()
-    const prevR  = editB.x - 8
-    const prevL  = x + 26
-    ctx.font      = '11px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.80)'
-    ctx.fillText(this._truncate(ctx, `"${this._text}"`, prevR - prevL - 72), prevL, midY)
-
-    // Slot indicators (right-to-left: rot, mask, sz, col, pos, α)
-    const slots = [
-      { slot: this._positionSlot, label: 'pos',  accent: ACCENT },
-      { slot: this._colourSlot,   label: 'col',  accent: ACCENT },
-      { slot: this._sizeSlot,     label: 'sz',   accent: ACCENT },
-      { slot: this._maskSlot,     label: 'mask', accent: ACCENT },
-      { slot: this._rotationSlot, label: 'rot',  accent: DIR_ACCENT },
-      { slot: this._opacitySlot,  label: 'α',    accent: AM_COL },
-    ]
-    let dx = editB.x - 6
-    ctx.font = '9px monospace'
-    for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label, accent } = slots[i]!
-      const active = slot.isActive
-      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 6
-    }
-
-    this._drawBtn(ctx, editB, '✎', 'rgba(255,255,255,0.60)')
+    ctx.fillText(szLabel, smB.x + smB.width + (spB.x - smB.x - smB.width) / 2, smB.y + smB.height / 2)
 
     ctx.restore()
+  }
+
+  private _drawBigIconBtn(
+    ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }, icon: 'pencil',
+  ): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.round(Math.min(b.width, b.height) * 0.5))
+  }
+
+  private _drawBigGlyphBtn(
+    ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }, glyph: string,
+  ): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.font         = `${Math.max(16, Math.round(b.height * 0.5))}px monospace`
+    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(glyph, b.x + b.width / 2, b.y + b.height / 2)
   }
 
   // ── Font controls row ─────────────────────────────────────────
@@ -1648,28 +1664,6 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const ib = this._italicBtnBounds()
     this._drawToggleBtn(ctx, bb, 'B', this._bold,   midY, 'bold 11px monospace')
     this._drawToggleBtn(ctx, ib, 'I', this._italic, midY, 'italic 11px monospace')
-
-    // Thin divider
-    const divX = ib.x + ib.width + 4
-    ctx.strokeStyle = 'rgba(255,255,255,0.15)'
-    ctx.lineWidth   = 1
-    ctx.beginPath()
-    ctx.moveTo(divX, y + 4)
-    ctx.lineTo(divX, y + h - 4)
-    ctx.stroke()
-
-    // Size -/value/+
-    const sm = this._sizeMinusBounds()
-    const sp = this._sizePlusBounds()
-    this._drawBtn(ctx, sm, '−', 'rgba(255,255,255,0.60)')
-    this._drawBtn(ctx, sp, '+', 'rgba(255,255,255,0.60)')
-
-    const szLabel = `${Math.round(this._size)}px`
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(szLabel, sm.x + sm.width + (sp.x - sm.x - sm.width) / 2, midY)
 
     ctx.restore()
   }
@@ -2184,6 +2178,33 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Geometry helpers
   // ----------------------------------------------------------
 
+  // Big keyboard-edit + size row — square button size shrinks to KB_MIN on
+  // narrow panels (rather than wrapping) so it always fits in one row.
+  private _kbSquareSize(pillWidth: number): number {
+    const available = pillWidth - 2 * KB_MARGIN - KB_GAP - KB_VALUE_W
+    return Math.max(KB_MIN, Math.min(KB_SZ, Math.floor(available / 3)))
+  }
+
+  private _kbRowBounds() {
+    return { x: contentLeft(Node.canvasWidth), y: this._kbY,
+             width: panelWidth(Node.canvasWidth), height: this._kbRowH }
+  }
+
+  private _editBtnBounds() {
+    const sq = this._kbSquareSize(panelWidth(Node.canvasWidth))
+    return { x: contentLeft(Node.canvasWidth) + KB_MARGIN, y: this._kbY + KB_MARGIN, width: sq, height: sq }
+  }
+
+  private _sizeMinusBounds() {
+    const eb = this._editBtnBounds()
+    return { x: eb.x + eb.width + KB_GAP, y: eb.y, width: eb.width, height: eb.height }
+  }
+
+  private _sizePlusBounds() {
+    const mb = this._sizeMinusBounds()
+    return { x: mb.x + mb.width + KB_VALUE_W, y: mb.y, width: mb.width, height: mb.height }
+  }
+
   private _ctrlDims() {
     return { x: contentLeft(Node.canvasWidth), y: this._ctrlY, w: panelWidth(Node.canvasWidth), h: CTRL_H }
   }
@@ -2193,11 +2214,6 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     return { x, y, width: w, height: h }
   }
 
-  private _editBtnBounds() {
-    const { x, y, width, height } = this.canvasBounds
-    return { x: x + width - BTN_M - BTN, y: y + (height - BTN) / 2, width: BTN, height: BTN }
-  }
-
   // Controls row sub-bounds (all centred vertically in the row).
   private _ctrlBtn(offsetX: number, w: number) {
     const y   = this._ctrlY
@@ -2205,13 +2221,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     return { x: contentLeft(Node.canvasWidth) + offsetX, y: y + 4, width: w, height: bh }
   }
 
-  //  6          84        108       130  (divider)  134       162      192
-  //  [font name ▾ ]  [B]   [I]       |  [−]  size  [+]
+  //  6          84        108       130
+  //  [font name ▾ ]  [B]   [I]
   private _fontBtnBounds()   { return this._ctrlBtn(6,   84) }
   private _boldBtnBounds()   { return this._ctrlBtn(94,  20) }
   private _italicBtnBounds() { return this._ctrlBtn(118, 20) }
-  private _sizeMinusBounds() { return this._ctrlBtn(146, 20) }
-  private _sizePlusBounds()  { return this._ctrlBtn(192, 20) }
 
   // Alignment pill helpers — H+V justify buttons in one row.
   //  H:  8 [L]  30 [C]  52 [R]  74 [J]  | 96 divider |  V: 100 [T]  122 [C]  144 [B]  166 [J]
@@ -2528,23 +2542,6 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       x: halfW + Math.random() * Math.max(0, vw - 2 * halfW),
       y: halfH + Math.random() * Math.max(0, vh - 2 * halfH),
     }
-  }
-
-  private _drawBtn(
-    ctx: Ctx2D,
-    b: { x: number; y: number; width: number; height: number },
-    label: string,
-    colour: string,
-  ): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 3)
-    ctx.fill()
-    ctx.font         = '12px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
   }
 
   private _drawToggleBtn(

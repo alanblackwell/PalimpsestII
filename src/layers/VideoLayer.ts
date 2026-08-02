@@ -15,8 +15,8 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFaceDetect.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
-import { drawIcon } from '../ui/icons.js'
-import { contentLeft } from '../interaction/layout.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -25,12 +25,23 @@ const ROT_ACCENT = '#7ecfcf'   // Direction type colour for rotation handle
 const AM_COL     = '#4a8fe8'   // Amount type accent
 const STRIPE     = 4
 
-// Source-selector button row  [🎥][⊞][📁]
+// Small selector buttons — desktop's lower pill has none of these (the big
+// row above covers camera/screen/file); mobile's lower pill uses this size
+// for its two secondary screen/file buttons.
 const SRC_W   = 28   // each button width (square)
 const SRC_GAP = 3    // gap between buttons
 const SRC_L   = STRIPE + 6   // left margin of first button within pill
 
-// Camera navigation buttons
+// Large source-selector buttons — desktop: one row of 3 (camera/screen/
+// file); mobile: one per detected camera, wrapping into extra rows.
+const LG_SZ     = 72   // square size of a big button
+const LG_GAP    = 6    // gap between big buttons
+const LG_MARGIN = 10   // margin inside the pill around the big-button grid
+const LOWER_H   = 36   // height of the secondary-controls pill below
+const ROW_GAP   = 8    // gap between the big-button pill and the lower pill
+
+// Camera navigation buttons (desktop only — mobile selects cameras directly
+// via their own big buttons)
 const NAV_SZ  = 20
 const NAV_M   = 4    // margin inside the right section
 
@@ -167,6 +178,7 @@ export class VideoLayer extends Layer implements ImageSource {
   // ── UI hit-test bounds (set during render, read during interaction) ──
   private _toggleBounds:      BBox | null = null
   private _camBtnB:           BBox | null = null
+  private _camDeviceBtnB:     BBox[] = []   // mobile: one cell per camera
   private _screenBtnB:        BBox | null = null
   private _fileBtnB:          BBox | null = null
   private _fitBtnB:           BBox | null = null
@@ -229,6 +241,10 @@ export class VideoLayer extends Layer implements ImageSource {
     this._previewVideo.addEventListener('seeked', () => this._capturePreviewFrame())
 
     graph.register(this)
+
+    // Populate the device list up front (no permission prompt) so mobile can
+    // render one big button per camera before the user has picked a source.
+    void this._refreshDeviceList()
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') return
@@ -442,6 +458,39 @@ export class VideoLayer extends Layer implements ImageSource {
 
   // ── Camera source ─────────────────────────────────────────────
 
+  // Silent enumeration — never prompts for permission. Pre-permission this
+  // typically yields correct device *count* but blank labels/deviceIds in
+  // most browsers; labels/ids fill in once permission has been granted, so
+  // this is also called again after a stream starts successfully.
+  private async _refreshDeviceList(): Promise<void> {
+    if (!navigator.mediaDevices?.enumerateDevices) return
+    try {
+      const all  = await navigator.mediaDevices.enumerateDevices()
+      const cams = all.filter(d => d.kind === 'videoinput')
+      if (cams.length === 0) return
+      const curId = this._devices[this._deviceIdx]?.deviceId
+      this._devices = cams
+      if (curId) {
+        const idx = cams.findIndex(d => d.deviceId === curId)
+        if (idx >= 0) this._deviceIdx = idx
+      }
+      this.markDirty()
+    } catch { /* enumeration unavailable — keep existing device list */ }
+  }
+
+  // Mobile: tapping a specific camera's big button selects and starts that
+  // device directly, rather than stepping through prev/next.
+  private async _selectCameraDevice(idx: number): Promise<void> {
+    this._stopCurrentSource()
+    this._sourceType = 'camera'
+    this._deviceIdx  = idx
+    if (this._devices.length === 0 || !this._devices[idx]) {
+      await this._startCamera()
+      return
+    }
+    await this._startCameraStream()
+  }
+
   private async _startCamera(): Promise<void> {
     this._stopCurrentSource()
     this._sourceType = 'camera'
@@ -496,6 +545,7 @@ export class VideoLayer extends Layer implements ImageSource {
       this._status = 'live'
       this.markDirty()
       void this._autoDetectMirror()
+      void this._refreshDeviceList()
     } catch {
       this._status = 'camera error'
       this.markDirty()
@@ -883,6 +933,85 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
+  // ── Big source-button grid layout ───────────────────────────────
+  //
+  // Desktop: always 3 buttons (camera/screen/file) in one row. Mobile: one
+  // button per detected camera (min 1), wrapping into extra rows as needed.
+  // Screen-share and file selection move into the smaller lower pill on
+  // mobile, since they're less common sources there.
+
+  private _bigButtonCount(): number {
+    return Node.isMobileDevice ? Math.max(1, this._devices.length) : 3
+  }
+
+  private _bigGridRows(n: number, pillW: number): number {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    return Math.ceil(n / cols)
+  }
+
+  private _bigGridCells(n: number, pillX: number, pillW: number, top: number): BBox[] {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    const cells: BBox[] = []
+    for (let i = 0; i < n; i++) {
+      const r = Math.floor(i / cols), c = i % cols
+      cells.push({
+        x: pillX + LG_MARGIN + c * (LG_SZ + LG_GAP),
+        y: top  + r * (LG_SZ + LG_GAP),
+        width: LG_SZ, height: LG_SZ,
+      })
+    }
+    return cells
+  }
+
+  private _sourcePillHeight(): number {
+    const rows = this._bigGridRows(this._bigButtonCount(), panelWidth(Node.canvasWidth))
+    const bigH = LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+    return bigH + ROW_GAP + LOWER_H
+  }
+
+  override get canvasBounds() {
+    return { ...super.canvasBounds, height: this._sourcePillHeight() }
+  }
+
+  override get panelBottom(): number {
+    return 50 + this._sourcePillHeight() + 8
+  }
+
+  // Short label for a mobile camera-grid button: real label (trimmed) once
+  // known, otherwise a numbered placeholder pre-permission.
+  private _camLabel(i: number): string {
+    if (this._devices.length === 0) return 'Camera'
+    const label = this._devices[i]?.label
+    if (!label) return `Cam ${i + 1}`
+    const trimmed = label.replace(/\s*\(.*?\)\s*/g, '').trim()
+    return trimmed.length > 9 ? trimmed.slice(0, 8) + '…' : trimmed
+  }
+
+  private _drawBigBtn(ctx: Ctx2D, b: BBox, icon: IconName, label: string, active: boolean): void {
+    ctx.save()
+    ctx.fillStyle = active ? ACCENT + '40' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    if (active) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1.5
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.75, b.y + 0.75, b.width - 1.5, b.height - 1.5, 6)
+      ctx.stroke()
+    }
+    ctx.fillStyle = active ? '#ffffff' : 'rgba(255,255,255,0.65)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height * 0.40, Math.round(b.width * 0.40))
+    ctx.font         = `${Math.max(9, Math.round(b.width * 0.13))}px monospace`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = active ? '#ffffff' : 'rgba(255,255,255,0.55)'
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height - Math.max(10, b.height * 0.16))
+    ctx.restore()
+  }
+
   renderPanel(ctx: Ctx2D): void {
     this._drawStripPill(ctx, this.bounds)
     this._drawSourcePill(ctx, this.canvasBounds)
@@ -1057,6 +1186,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._drag !== null) return this
     if (this._stallRestartBounds !== null && boundingBoxContains(this._stallRestartBounds, point)) return this
     if (this._camBtnB     !== null && boundingBoxContains(this._camBtnB,     point)) return this
+    for (const bb of this._camDeviceBtnB) if (boundingBoxContains(bb, point)) return this
     if (this._screenBtnB  !== null && boundingBoxContains(this._screenBtnB,  point)) return this
     if (this._fileBtnB    !== null && boundingBoxContains(this._fileBtnB,    point)) return this
     if (this._prevBtnB    !== null && boundingBoxContains(this._prevBtnB,    point)) return this
@@ -1089,6 +1219,12 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._camBtnB !== null && boundingBoxContains(this._camBtnB, point)) {
       if (this._sourceType !== 'camera') void this._startCamera()
       return true
+    }
+    for (let i = 0; i < this._camDeviceBtnB.length; i++) {
+      if (boundingBoxContains(this._camDeviceBtnB[i]!, point)) {
+        void this._selectCameraDevice(i)
+        return true
+      }
     }
     if (this._screenBtnB !== null && boundingBoxContains(this._screenBtnB, point)) {
       if (this._sourceType === 'screen') {
@@ -1316,55 +1452,71 @@ export class VideoLayer extends Layer implements ImageSource {
   }
 
   private _drawSourcePill(ctx: Ctx2D, b: BBox): void {
-    const { x, y, width, height } = b
-    if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
+    const { x, y, width } = b
+    if (width <= 0) return
+    const mobile = Node.isMobileDevice
+
+    const n    = this._bigButtonCount()
+    const rows = this._bigGridRows(n, width)
+    const bigH = LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+    const upperB: BBox = { x, y, width, height: bigH }
+    const lowerB: BBox = { x, y: y + bigH + ROW_GAP, width, height: LOWER_H }
 
     ctx.save()
 
+    // ── Upper pill — big source-selector buttons ──────────────────
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.roundRect(upperB.x, upperB.y, upperB.width, upperB.height, 8)
     ctx.fill()
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(x, y, STRIPE, height, [4, 0, 0, 4])
+    ctx.roundRect(upperB.x, upperB.y, STRIPE, upperB.height, [4, 0, 0, 4])
     ctx.fill()
 
-    // Source selector buttons
-    const srcTypes: SourceType[] = ['camera', 'screen', 'file']
-    const btnY = y + (height - SRC_W) / 2
+    const cells = this._bigGridCells(n, upperB.x, upperB.width, upperB.y + LG_MARGIN)
 
-    this._camBtnB = this._screenBtnB = this._fileBtnB = null
-    for (let i = 0; i < 3; i++) {
-      const bx  = x + SRC_L + i * (SRC_W + SRC_GAP)
-      const bb: BBox = { x: bx, y: btnY, width: SRC_W, height: SRC_W }
-      if (i === 0) this._camBtnB    = bb
-      if (i === 1) this._screenBtnB = bb
-      if (i === 2) this._fileBtnB   = bb
-
-      const active = this._sourceType === srcTypes[i]
-      ctx.fillStyle = active ? ACCENT + '40' : 'rgba(255,255,255,0.08)'
-      ctx.beginPath()
-      ctx.roundRect(bx, btnY, SRC_W, SRC_W, 4)
-      ctx.fill()
-      if (active) {
-        ctx.strokeStyle = ACCENT
-        ctx.lineWidth   = 1
-        ctx.beginPath()
-        ctx.roundRect(bx + 0.5, btnY + 0.5, SRC_W - 1, SRC_W - 1, 4)
-        ctx.stroke()
+    if (mobile) {
+      this._camBtnB       = null
+      this._camDeviceBtnB = cells
+      for (let i = 0; i < n; i++) {
+        const active = this._sourceType === 'camera' && this._deviceIdx === i
+        this._drawBigBtn(ctx, cells[i]!, 'video-camera', this._camLabel(i), active)
       }
-      ctx.fillStyle    = active ? '#ffffff' : 'rgba(255,255,255,0.55)'
-      const icName = (['video-camera', 'monitor', 'folder-open'] as const)[i]!
-      drawIcon(ctx, icName, bx + SRC_W / 2, btnY + SRC_W / 2, SRC_W - 10)
+    } else {
+      this._camDeviceBtnB = []
+      const specs: [SourceType, IconName, string][] = [
+        ['camera', 'video-camera', 'Camera'],
+        ['screen', 'monitor',      'Screen'],
+        ['file',   'folder-open',  'File'],
+      ]
+      for (let i = 0; i < 3; i++) {
+        const [type, icon, label] = specs[i]!
+        const bb = cells[i]!
+        if (type === 'camera') this._camBtnB    = bb
+        if (type === 'screen') this._screenBtnB = bb
+        if (type === 'file')   this._fileBtnB   = bb
+        this._drawBigBtn(ctx, bb, icon, label, this._sourceType === type)
+      }
     }
+
+    // ── Lower pill — secondary controls ────────────────────────────
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(lowerB.x, lowerB.y, lowerB.width, lowerB.height, Math.min(lowerB.height / 2, 8))
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(lowerB.x, lowerB.y, STRIPE, lowerB.height, [4, 0, 0, 4])
+    ctx.fill()
+
+    const midY = lowerB.y + lowerB.height / 2
 
     // Fit/fill and mirror toggle buttons — far right, always visible
     const FIT_W = 28
     const FIT_M = 4
-    const fitX  = x + width - FIT_M - FIT_W
-    const fitY  = y + (height - SRC_W) / 2
+    const fitX  = lowerB.x + lowerB.width - FIT_M - FIT_W
+    const fitY  = lowerB.y + (lowerB.height - SRC_W) / 2
     this._fitBtnB = { x: fitX, y: fitY, width: FIT_W, height: SRC_W }
 
     ctx.fillStyle = this._fillMode ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
@@ -1402,32 +1554,77 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.fillStyle = this._mirrored ? ACCENT : 'rgba(255,255,255,0.45)'
     drawIcon(ctx, 'arrows-left-right', mirX + MIR_W / 2, fitY + SRC_W / 2, SRC_W - 10)
 
-    // Right section — source-specific controls (narrowed to leave room for both right buttons)
-    const rightX = x + SRC_L + 3 * (SRC_W + SRC_GAP) + 4
-    const rightW = mirX - 4 - rightX
+    // Left side of the lower pill: on mobile, small screen/file selector
+    // buttons (deprioritised — camera has its own big buttons above); on
+    // desktop, straight into source-specific status/controls.
+    let leftX = lowerB.x + SRC_L
+
+    if (mobile) {
+      const smallSpecs: [SourceType, IconName][] = [['screen', 'monitor'], ['file', 'folder-open']]
+      this._screenBtnB = this._fileBtnB = null
+      for (let i = 0; i < smallSpecs.length; i++) {
+        const [type, icon] = smallSpecs[i]!
+        const bx = leftX + i * (SRC_W + SRC_GAP)
+        const bb: BBox = { x: bx, y: fitY, width: SRC_W, height: SRC_W }
+        if (type === 'screen') this._screenBtnB = bb
+        if (type === 'file')   this._fileBtnB   = bb
+
+        const active = this._sourceType === type
+        ctx.fillStyle = active ? ACCENT + '40' : 'rgba(255,255,255,0.08)'
+        ctx.beginPath()
+        ctx.roundRect(bx, fitY, SRC_W, SRC_W, 4)
+        ctx.fill()
+        if (active) {
+          ctx.strokeStyle = ACCENT
+          ctx.lineWidth   = 1
+          ctx.beginPath()
+          ctx.roundRect(bx + 0.5, fitY + 0.5, SRC_W - 1, SRC_W - 1, 4)
+          ctx.stroke()
+        }
+        ctx.fillStyle = active ? '#ffffff' : 'rgba(255,255,255,0.55)'
+        drawIcon(ctx, icon, bx + SRC_W / 2, fitY + SRC_W / 2, SRC_W - 10)
+      }
+      leftX = leftX + smallSpecs.length * (SRC_W + SRC_GAP) + 4
+    }
+
+    // Remaining middle section — source-specific controls/status
+    const rightW = mirX - 4 - leftX
 
     if (rightW > 4) {
       ctx.save()
       ctx.beginPath()
-      ctx.rect(rightX, y, rightW, height)
+      ctx.rect(leftX, lowerB.y, rightW, lowerB.height)
       ctx.clip()
 
       ctx.font         = '10px monospace'
       ctx.textBaseline = 'middle'
 
       if (this._sourceType === 'camera') {
-        this._drawCameraControls(ctx, rightX, rightW, y, height, midY)
+        if (mobile) {
+          // Cameras are selected directly via the big buttons above —
+          // just report current status here, no prev/next nav.
+          const d    = this._devices[this._deviceIdx]
+          const name = this._status !== 'live'
+            ? this._status
+            : (d?.label || `Camera ${this._deviceIdx + 1}`)
+          ctx.fillStyle = 'rgba(255,255,255,0.80)'
+          ctx.textAlign = 'left'
+          ctx.fillText(name, leftX + 4, midY)
+          this._prevBtnB = this._nextBtnB = this._loadBtnB = null
+        } else {
+          this._drawCameraControls(ctx, leftX, rightW, lowerB.y, lowerB.height, midY)
+        }
       } else if (this._sourceType === 'screen') {
         ctx.fillStyle = 'rgba(255,255,255,0.80)'
         ctx.textAlign = 'left'
-        ctx.fillText('screen share', rightX + 4, midY)
+        ctx.fillText('screen share', leftX + 4, midY)
         this._prevBtnB = this._nextBtnB = this._loadBtnB = null
       } else if (this._sourceType === 'file') {
-        this._drawFileControls(ctx, rightX, rightW, y, height, midY)
+        this._drawFileControls(ctx, leftX, rightW, lowerB.y, lowerB.height, midY)
       } else {
         ctx.fillStyle = 'rgba(255,255,255,0.30)'
         ctx.textAlign = 'left'
-        ctx.fillText('select a source', rightX + 4, midY)
+        ctx.fillText('select a source', leftX + 4, midY)
         this._prevBtnB = this._nextBtnB = this._loadBtnB = null
       }
 
