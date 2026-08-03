@@ -33,8 +33,8 @@ import {
 //
 // drawShape    — renders the spline fill (called by ShapeLayer.renderSelf)
 // samplePerimeter — samples a point on the spline at t ∈ [0, 1)
-// renderPanel  — overrides to show spline control-point handles
-//                instead of the bbox handles used by Rect/Ellipse
+// renderOverlay — overrides to show spline control-point handles
+//                 instead of the bbox handles used by Rect/Ellipse
 
 // ------------------------------------------------------------------
 // Catmull-Rom spline (Hermite form with parameterised handle length)
@@ -121,7 +121,6 @@ function defaultPoints(cx: number, cy: number): Point[] {
 // ------------------------------------------------------------------
 
 const ACCENT     = '#e8a04a'
-const DIR_ACCENT = '#7ecfcf'
 const AM_COL     = '#4a8fe8'
 const CP_R       = 6
 const HIT_R      = 14
@@ -445,11 +444,6 @@ export class PathLayer extends ShapeLayer {
   // Rendering — override to show spline handles, not bbox handles
   // ----------------------------------------------------------
 
-  override renderPanel(ctx: Ctx2D): void {
-    this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, this.canvasBounds)
-  }
-
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
     drawSnapGuides(ctx, this._pathEdgeSnapX, this._pathEdgeSnapY, Node.canvasWidth, Node.canvasHeight)
@@ -765,52 +759,6 @@ export class PathLayer extends ShapeLayer {
       ? Math.min(n - 1, Math.floor(bestT * n))
       : Math.min(n - 2, Math.floor(bestT * (n - 1)))
     return { insertAt: segIndex + 1, pos: bestPos }
-  }
-
-  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
-    const { x, y, width, height } = b
-    if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
-    const c    = this._colour
-
-    ctx.save()
-
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
-    ctx.beginPath()
-    ctx.arc(x + 16, midY, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-    ctx.lineWidth   = 1
-    ctx.stroke()
-
-    ctx.font         = '11px monospace'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
-    ctx.textAlign    = 'left'
-    ctx.fillText(`${this._points.length} pts`, x + 28, midY)
-
-    // Angle (right side), with rotation-slot indicator dot
-    const deg = ((this._angle * 180 / Math.PI) % 360 + 360) % 360
-    const rotActive = this.rotationSlot.isActive
-    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.50)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`∠ ${deg.toFixed(0)}°`, x + width - 8, midY)
-    const angleW = ctx.measureText(`∠ ${deg.toFixed(0)}°`).width
-    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.22)'
-    ctx.font = '9px monospace'
-    ctx.fillText(rotActive ? '●' : '○', x + width - 12 - angleW, midY)
-
-    ctx.restore()
   }
 
   // Suppress orange spline outline in stroke mode — brush rendering is the visual.

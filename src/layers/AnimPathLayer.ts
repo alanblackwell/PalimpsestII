@@ -260,11 +260,6 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._renderAddButton(ctx)
   }
 
-  renderPanel(ctx: Ctx2D): void {
-    this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, this.canvasBounds)
-  }
-
   // Three-pill slot layout:
   //   Pill 1 — shape slot (standard renderSlotGroup)
   //   Pill 2 — rate slider + phase slot binding row (combined)
@@ -550,40 +545,4 @@ export class AnimPathLayer extends Layer implements PointSource {
     ctx.restore()
   }
 
-  private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
-    const { x, y, width, height } = b
-    if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
-
-    ctx.save()
-
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    ctx.font         = '11px monospace'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle    = this._running ? 'rgba(255,255,255,0.80)' : 'rgba(255,255,255,0.40)'
-    ctx.textAlign    = 'left'
-    ctx.fillText('AnimPath', x + 12, midY)
-
-    // CW/CCW indicator icon
-    ctx.fillStyle = ACCENT
-    drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise',
-      x + width - 30, midY, 13)
-
-    const px = Math.round(this._currentPoint.x)
-    const py = Math.round(this._currentPoint.y)
-    ctx.fillStyle = 'rgba(255,255,255,0.45)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`(${px}, ${py})`, x + width - 44, midY)
-
-    ctx.restore()
-  }
 }

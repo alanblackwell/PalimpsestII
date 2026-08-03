@@ -776,6 +776,28 @@ none of these are worth the effort on that basis:
 - ClockLayer — play/pause + reset, already reasonably spaced with only 2
   buttons; no real problem to fix.
 
+## Status/readout pill removal pass (in progress)
+
+Many layers draw a narrow, read-only "status" pill above the value-binding
+controls (shape dimensions, rotation angle, current coordinates, etc.) that
+restates information the user is already controlling elsewhere and doesn't
+help operate the layer. Full candidate list, review status, and per-item
+notes: `spec/status-pill-candidates.md` — that file is the source of truth
+for what's left; work through it top to bottom, one layer at a time, each
+confirmed with the user before removing.
+
+**Done**: ShapeLayer (Rect/Ellipse) — removed `width × height` / `∠ angle°`
+pill; PathLayer — removed `"N pts"` / `∠ angle°` pill; AnimPathLayer —
+removed the `"AnimPath"` label/CW-CCW-icon/coordinates pill (the real CW/CCW
+toggle lives in `renderSlots`, untouched). All three: deleted the `_drawPill`
+method and the `renderPanel` override that only called it (falls back to
+`Layer`'s no-op default), plus the orphaned `DIR_ACCENT` constant where it
+was now unused.
+
+**Remaining** (see the spec file for line numbers and exact treatment):
+AnimationPathLayer, ClockLayer, DeletionLayer, DirectionLayer, ColourLayer,
+RotateLayer, TempoLayer, TraceLayer, PointLayer, TransformLayer.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase

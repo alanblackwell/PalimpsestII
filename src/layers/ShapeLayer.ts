@@ -31,14 +31,13 @@ import { SliderSlot } from '../ui/SliderSlot.js'
 //     (anchored resize — the opposite edge/corner stays fixed in canvas
 //     space, so the centre shifts as the box is resized), four corners
 //     (anchored resize), one rotation handle (upper-right of bounding box)
-//   • renderSelf  — draws shape content via abstract drawShape()
-//   • renderPanel — strip pill + canvas panel pill + handle overlays
+//   • renderSelf    — draws shape content via abstract drawShape()
+//   • renderOverlay — handle overlays (drag handles, snap guides, conv buttons)
 //   • PointSource output — center of the shape
 //
 // Subclasses implement drawShape() and samplePerimeter().
 
 const ACCENT     = '#e8a04a'   // warm amber — shape type colour
-const DIR_ACCENT = '#7ecfcf'   // Direction type colour
 const AM_COL     = '#4a8fe8'   // Amount type accent (stroke-width slot)
 const HANDLE_R  = 5           // handle square/circle half-size (px)
 const HIT_R     = 12          // pointer hit radius (px)
@@ -410,11 +409,6 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
   renderSelf(ctx: Ctx2D): void {
     this.drawShape(ctx, this._cx, this._cy,
       this._width * this._scale, this._height * this._scale, this._angle, this._colour, this._opacity, this._filled, this._strokeWidth)
-  }
-
-  renderPanel(ctx: Ctx2D): void {
-    this._drawPill(ctx, this.bounds)
-    this._drawPill(ctx, this.canvasBounds)
   }
 
   override renderOverlay(ctx: Ctx2D): void {
@@ -1160,60 +1154,6 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
         }
       }
     }
-
-    ctx.restore()
-  }
-
-  private _drawPill(ctx: Ctx2D, b: BBox): void {
-    const { x, y, width, height } = b
-    if (width <= 0 || height <= 0) return
-
-    const midY = y + height / 2
-    const c    = this._colour
-
-    ctx.save()
-
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    // Accent stripe
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    // Colour swatch
-    ctx.fillStyle = `rgba(${Math.round(c.r*255)},${Math.round(c.g*255)},${Math.round(c.b*255)},${c.a})`
-    ctx.beginPath()
-    ctx.arc(x + 16, midY, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(255,255,255,0.25)'
-    ctx.lineWidth   = 1
-    ctx.stroke()
-
-    // Dimensions (scaled)
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.80)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(
-      `${Math.round(this._width * this._scale)} × ${Math.round(this._height * this._scale)}`,
-      x + 28, midY,
-    )
-
-    // Angle (right side), with rotation-slot indicator dot
-    const deg = ((this._angle * 180 / Math.PI) % 360 + 360) % 360
-    const rotActive = this.rotationSlot.isActive
-    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.50)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`∠ ${deg.toFixed(0)}°`, x + width - 8, midY)
-    const angleW = ctx.measureText(`∠ ${deg.toFixed(0)}°`).width
-    ctx.fillStyle = rotActive ? DIR_ACCENT : 'rgba(255,255,255,0.22)'
-    ctx.font = '9px monospace'
-    ctx.fillText(rotActive ? '●' : '○', x + width - 12 - angleW, midY)
 
     ctx.restore()
   }
