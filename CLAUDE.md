@@ -661,7 +661,7 @@ palette (deep purple → hot pink → neon lime → electric yellow). Both the C
 fallback (`FilterLayer.ts`) and the WebGL path (`FilterGL.ts`) use identical
 palettes and blend logic.
 
-## Big-button mobile touch-target pass (in progress)
+## Big-button mobile touch-target pass (wound down)
 
 Ongoing multi-session effort to replace small/cramped panel buttons with
 larger ones sized for touch, started from VideoLayer/CaptureLayer's
@@ -700,13 +700,21 @@ Clear now snapshots undo state before wiping (same as a brush stroke), so
 `[↺]` undoes a clear, not just the last stroke; `[↺]` falls back to a full
 reset (clear + unbind all shape slots) once there's nothing left to undo.
 
-**Remaining**:
-- SequencerLayer — `[−] value [+]` stepper (20×20), same shape as
-  CountLayer's before this pass.
-- Lower priority / more specialized: BindingMapLayer's 24×24 toggle/delete
-  pairs (repeated per row in a node-diagram, not a single top-of-panel
-  strip); ClockLayer's play/pause + reset (already reasonably spaced, only
-  2 buttons).
+**Deliberately skipped** — the point of this pass was mobile usability, and
+none of these are worth the effort on that basis:
+- SequencerLayer — its `[−] value [+]` stepper (20×20) has the same small
+  shape CountLayer had before this pass, but the layer isn't in
+  `MenuLayer`'s button list and hasn't been since before this effort started
+  (`MenuLayer.ts` even has a comment calling it low-utility) — it's only
+  reachable by loading an old saved session that already contains one, so a
+  touch-target fix has no live audience. Still registered in
+  `LAYER_CLASSES` so old saves keep loading.
+- BindingMapLayer — 24×24 toggle/delete pairs, repeated per row in a
+  node-diagram. The diagram-editing interaction itself isn't practically
+  usable on a phone screen regardless of button size, so resizing the
+  buttons wouldn't move the needle.
+- ClockLayer — play/pause + reset, already reasonably spaced with only 2
+  buttons; no real problem to fix.
 
 ## Known issues / pre-existing tech debt
 
