@@ -58,6 +58,17 @@ Abstract base. Key statics:
   maintained by `InteractionSystem` (set on pointermove/pointerdown, cleared on
   pointerleave). Lets any layer's `recompute()`/simulation read "where is the
   mouse right now" without prop plumbing.
+- `Node.shiftKey: boolean` — live Shift-key state, maintained by
+  `InteractionSystem` (keydown/keyup on `Shift`, plus a `window.blur` fallback
+  so it can't get stuck `true` after an alt-tab). Lets any layer implement the
+  standard "hold Shift to constrain a drag to horizontal/vertical" convention
+  by reading it inside `handlePointerMove` — no changes to the
+  `handlePointerDown/Move/Up` signatures needed. Used by `MaskLayer`'s brush
+  stroke (`_moveConstrained`), which also adds a polyline-style pivot: moving
+  substantially perpendicular to the current constrained line (more than a
+  brush-scaled threshold) plants a corner and continues as a new segment
+  locked to the perpendicular axis, rather than jumping/re-snapping through
+  the original anchor.
 - `Node.geometricMode: boolean` — global toggle between **geometric mode** (plain
   canvas primitives, graph-paper background, shapes forced to stroke) and **artistic
   mode** (torn-paper fills, brush strokes, Lichtenstein halftone). Toggled by the
@@ -668,17 +679,28 @@ just resized.
 per camera on mobile), CaptureLayer (shutter/mode/save/share), TextLayer
 (edit/size row only — align row deliberately left small, not very
 touch-critical for this layer), MaskLayer (removed the debug status strip;
-tool buttons themselves not yet resized), ImageLayer (File/Paste/Camera
-acquire row, replaced by a live camera preview with a red shutter +
-flip-camera control once Camera is tapped), NoiseLayer (style-picker
-thumbnails replacing the type-cycle/seed-stepper row; each button shows a
-live-generated-but-static preview of that style), CountLayer/"Index"
-(−/+/reset), TileLayer (Tile/Fit buttons with live mode previews; margin
-converted from a −/+ stepper to a bindable Amount slot + slider, matching
-opacity).
+paint/erase tool buttons enlarged to a two-row layout — see below), ImageLayer
+(File/Paste/Camera acquire row, replaced by a live camera preview with a red
+shutter + flip-camera control once Camera is tapped), NoiseLayer
+(style-picker thumbnails replacing the type-cycle/seed-stepper row; each
+button shows a live-generated-but-static preview of that style),
+CountLayer/"Index" (−/+/reset), TileLayer (Tile/Fit buttons with live mode
+previews; margin converted from a −/+ stepper to a bindable Amount slot +
+slider, matching opacity).
+
+MaskLayer's tools panel is now two rows: row 1 is a 4-button grid of
+touch-sized paint/erase/clear/undo buttons (`TOOL_SZ`-style constants),
+wrapping into extra rows on narrow panels rather than shrinking — same
+tradeoff as CaptureLayer's mode/shutter/save/share row, not CountLayer's
+shrink-to-floor. Row 2 holds brush presets (three round-shape size swatches
+plus a square-brush and a slanted-line/calligraphy-brush swatch — `BrushShape
+= 'round' | 'square' | 'line'`, `_applyBrush`'s stamp function switches on
+it) and the brush-size slider, which flexes to fill the remaining row width.
+Clear now snapshots undo state before wiping (same as a brush stroke), so
+`[↺]` undoes a clear, not just the last stroke; `[↺]` falls back to a full
+reset (clear + unbind all shape slots) once there's nothing left to undo.
 
 **Remaining**:
-- MaskLayer — paint/erase toggles (28×28), clear/reset pair (18×24).
 - SequencerLayer — `[−] value [+]` stepper (20×20), same shape as
   CountLayer's before this pass.
 - Lower priority / more specialized: BindingMapLayer's 24×24 toggle/delete

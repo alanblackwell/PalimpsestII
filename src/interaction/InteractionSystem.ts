@@ -172,6 +172,8 @@ export class InteractionSystem {
   private readonly _onLeave:  (e: PointerEvent) => void
   private readonly _onWheel:  (e: WheelEvent) => void
   private readonly _onKey:    (e: KeyboardEvent) => void
+  private readonly _onKeyUp:  (e: KeyboardEvent) => void
+  private readonly _onBlur:   () => void
   private readonly _onPaste:  (e: ClipboardEvent) => void
   private _motionPermissionRequested = false
   private _getDisplayMode:   () => boolean = () => false
@@ -203,6 +205,11 @@ export class InteractionSystem {
     this._onLeave  = () => { Node.pointerCanvas = null }
     this._onWheel  = e => this._handleWheel(e)
     this._onKey    = e => this._handleKey(e)
+    // Shift-to-constrain (e.g. MaskLayer's brush drag) needs the key-up edge
+    // too, plus a window-blur fallback in case Shift is released while the
+    // browser tab is unfocused (alt-tab), which never fires a keyup here.
+    this._onKeyUp  = e => { if (e.key === 'Shift') Node.shiftKey = false }
+    this._onBlur   = () => { Node.shiftKey = false }
     this._onPaste  = e => this._handlePaste(e)
     this._onContext = e => this._handleContextMenu(e)
 
@@ -215,7 +222,9 @@ export class InteractionSystem {
     canvas.addEventListener('contextmenu',   this._onContext)
     // Key/paste events on document so they fire even before the canvas is clicked.
     document.addEventListener('keydown',     this._onKey)
+    document.addEventListener('keyup',       this._onKeyUp)
     document.addEventListener('paste',       this._onPaste)
+    window.addEventListener('blur',          this._onBlur)
 
     // Pinch-to-zoom applies translate()/scale() directly to the canvas
     // element; transform-origin 0,0 keeps the math in _point() simple.
@@ -360,7 +369,9 @@ export class InteractionSystem {
     this._canvas.removeEventListener('wheel',         this._onWheel)
     this._canvas.removeEventListener('contextmenu',   this._onContext)
     document.removeEventListener('keydown',           this._onKey)
+    document.removeEventListener('keyup',             this._onKeyUp)
     document.removeEventListener('paste',             this._onPaste)
+    window.removeEventListener('blur',                this._onBlur)
   }
 
   // ----------------------------------------------------------
@@ -1013,6 +1024,8 @@ export class InteractionSystem {
   }
 
   private _handleKey(e: KeyboardEvent): void {
+    if (e.key === 'Shift') Node.shiftKey = true
+
     // Let text inputs (textarea, input, contenteditable) handle their own keys.
     if (e.target instanceof HTMLElement &&
         e.target.closest('textarea, input, select, [contenteditable]')) return

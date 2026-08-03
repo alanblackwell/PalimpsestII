@@ -12,6 +12,8 @@ import { graph } from '../dataflow/Graph.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
 
+type BBox = { x: number; y: number; width: number; height: number }
+
 // ------------------------------------------------------------
 // MaskLayer — compositing mask editor
 // ------------------------------------------------------------
@@ -22,15 +24,33 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 //   1. Shape slots  — up to 4 MaskSource inputs (e.g. RectLayer,
 //                     EllipseLayer) dropped onto the slot rows.
 //   2. Painted layer — freehand strokes drawn directly on the canvas.
+//      Hold Shift while dragging to constrain the stroke to a horizontal or
+//      vertical line (standard axis-constrain convention, driven by
+//      `Node.shiftKey`). Moving substantially perpendicular to the current
+//      line — more than a brush-scaled threshold, so it reads as an
+//      intentional turn rather than wobble — plants a corner and continues
+//      as a new segment locked to the perpendicular axis, like a polyline.
+//      See `_moveConstrained`.
 //
 // The final mask is the union of all active shapes plus the painted layer.
 //
-// Controls (panel above the slot rows at x=300):
-//   [✏]        — paint tool icon (white / include); click to enable, click again to idle
-//   [⌫]        — erase tool icon (remove painted areas); same toggle; switches modes
-//   sz ──●──   — brush-size slider (4–100 px), drag to adjust
-//   [✕]        — clear all freehand paint
-//   [↺]        — clear paint and unbind all shape slots
+// Controls (panel above the slot rows at x=300), in two rows:
+//   Row 1 — big touch-sized buttons, wrapping into extra rows on narrow
+//   (phone) panels rather than shrinking (same tradeoff as CaptureLayer's
+//   mode/shutter/save/share row):
+//     [✏]        — paint tool icon (white / include); click to enable, click again to idle
+//     [⌫]        — erase tool icon (remove painted areas); same toggle; switches modes
+//     [✕]        — clear all freehand paint (undoable via [↺])
+//     [↺]        — undo: one-level undo of the last stroke *or* the last
+//                  clear, whichever happened most recently; falls back to a
+//                  full reset (clear paint + unbind all shape slots) if
+//                  there's nothing left to undo
+//   Row 2 — brush shape/size presets + size slider:
+//     [●][●][●][■][╱] — presets: three round sizes (small/medium/large),
+//                  a square brush, and a slanted-line (calligraphy) brush;
+//                  click to jump to that shape + size
+//     ──●──      — brush-size slider (4–100 px), drag to adjust; applies to
+//                  whichever shape is currently selected
 //
 // Below the 4-shape-slot pill, a second pill holds the "invert" slot
 // (Event) and its manual [⏺/⏸] toggle button. Either the rising edge of
@@ -47,11 +67,41 @@ const EV_ACCENT     = '#e0e060'
 const BRUSH_MIN     =  4
 const BRUSH_MAX     = 100
 const BRUSH_DEFAULT = 20
+const LINE_BRUSH_ANGLE = -Math.PI / 4   // slant of the "line" brush shape
+
+// Shift-constrain tuning. AXIS_LOCK_EPS is the minimum movement before an
+// initial direction is committed to (avoids locking onto 1px of jitter
+// right at the start of a segment). AXIS_PIVOT_MIN is the minimum
+// perpendicular deviation from the current constrained line that counts as
+// an intentional turn rather than brush wobble — scaled up by brush size so
+// a fat brush doesn't pivot from movement smaller than its own stroke.
+const AXIS_LOCK_EPS  =  4
+const AXIS_PIVOT_MIN = 24
+
+type BrushShape = 'round' | 'square' | 'line'
+type BrushPreset = { shape: BrushShape; size: number }
+const BRUSH_PRESETS: BrushPreset[] = [
+  { shape: 'round',  size: 8  },
+  { shape: 'round',  size: 24 },
+  { shape: 'round',  size: 56 },
+  { shape: 'square', size: 24 },
+  { shape: 'line',   size: 24 },
+]
+
 const N_SHAPES      =  4
 
-// Tools-panel geometry (drawn at the canvas-space panel x, above the slot rows)
-const TOOLS_H   = 44
-const TOOLS_GAP =  6
+// Tools-panel geometry (drawn at the canvas-space panel x, above the slot rows).
+// Row 1 — big paint/erase/clear/undo touch buttons; row 2 — brush presets + slider.
+const TOOL_SZ      = 52   // target square size for the row-1 buttons
+const TOOL_GAP     =  8   // gap between row-1 buttons
+const TOOL_MARGIN  = 10   // margin inside row 1 around the button grid
+const ROW_GAP      =  8   // gap between row 1 and row 2
+const ROW2_H       = 40   // row 2 pill height
+const ROW2_MARGIN  = 10   // margin inside row 2
+const GROUP_GAP    = 10   // gap between the presets group and the slider
+const SWATCH_SZ    = 22   // brush-preset buttons
+const SWATCH_GAP   =  4
+const TOOLS_GAP    =  6
 
 // Invert pill — sits below the shape-slot pill
 const PILL_GAP  =  8   // vertical gap between the shape-slot pill and the invert pill
@@ -76,10 +126,20 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private _activeTool:    'paint' | 'erase' | null = null
   private _brushSize      = BRUSH_DEFAULT
+  private _brushShape:    BrushShape = 'round'
   private _isDrawing      = false
   private _sliderDragging = false
   private _lastPoint:   Point | null = null
   private _cursorPoint: Point | null = null
+
+  // Shift-constrain state. `_axisAnchor` is the point the current
+  // constrained segment runs through; `_lockedAxis` is which axis it's
+  // locked to ('x' = horizontal line, y fixed; 'y' = vertical line, x
+  // fixed). Both reset to null whenever constrain mode is (re-)entered, so
+  // the anchor/axis are re-derived from the current drawing position —
+  // see `_moveConstrained`.
+  private _axisAnchor: Point | null = null
+  private _lockedAxis: 'x' | 'y' | null = null
 
   // Invert toggle
   private _inverted = false
@@ -205,6 +265,7 @@ export class MaskLayer extends Layer implements MaskSource {
       painted:    this._painted,
       erased:     this._erased,
       brushSize:  this._brushSize,
+      brushShape: this._brushShape,
       inverted:   this._inverted,
       activeTool: this._activeTool,
     }
@@ -212,6 +273,9 @@ export class MaskLayer extends Layer implements MaskSource {
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.brushSize === 'number') this._brushSize = state.brushSize
+    if (state.brushShape === 'round' || state.brushShape === 'square' || state.brushShape === 'line') {
+      this._brushShape = state.brushShape
+    }
     if (typeof state.inverted === 'boolean') this._inverted = state.inverted
     if (state.activeTool === 'paint' || state.activeTool === 'erase' || state.activeTool === null) {
       this._activeTool = state.activeTool
@@ -238,8 +302,29 @@ export class MaskLayer extends Layer implements MaskSource {
     return 50
   }
 
+  // Row-1 button grid — paint/erase/clear/undo, wrapping into extra rows on
+  // narrow (phone) panels rather than shrinking, same tradeoff as
+  // CaptureLayer's mode/shutter/save/share row.
+  private _row1Cols(pillWidth: number): number {
+    const availCols = Math.max(1, Math.floor((pillWidth - 2 * TOOL_MARGIN + TOOL_GAP) / (TOOL_SZ + TOOL_GAP)))
+    return Math.min(availCols, 4)
+  }
+
+  private _row1Rows(pillWidth: number): number {
+    return Math.ceil(4 / this._row1Cols(pillWidth))
+  }
+
+  private _row1Height(): number {
+    const rows = this._row1Rows(panelWidth(Node.canvasWidth))
+    return TOOL_MARGIN * 2 + rows * TOOL_SZ + (rows - 1) * TOOL_GAP
+  }
+
+  private get _row2Y(): number {
+    return this._toolsY + this._row1Height() + ROW_GAP
+  }
+
   override get panelBottom(): number {
-    return this._toolsY + TOOLS_H + TOOLS_GAP
+    return this._row2Y + ROW2_H + TOOLS_GAP
   }
 
   // ----------------------------------------------------------
@@ -333,42 +418,104 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   private _drawToolsPanel(ctx: Ctx2D): void {
-    const ty  = this._toolsY
-    const px  = this._panelX
-    const tw  = panelWidth(Node.canvasWidth)
-    const midY = ty + TOOLS_H / 2
+    const px    = this._panelX
+    const tw    = panelWidth(Node.canvasWidth)
+    const row1H = this._row1Height()
+    const row2Y = this._row2Y
 
     ctx.save()
 
+    // ── Row 1 — big paint / erase / clear / undo touch buttons ──
     ctx.fillStyle = 'rgba(0,0,0,0.40)'
     ctx.beginPath()
-    ctx.roundRect(px, ty, tw, TOOLS_H, 6)
+    ctx.roundRect(px, this._toolsY, tw, row1H, 6)
     ctx.fill()
-
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(px, ty, 4, TOOLS_H, [4, 0, 0, 4])
+    ctx.roundRect(px, this._toolsY, 4, row1H, [4, 0, 0, 4])
     ctx.fill()
 
-    // Tool buttons (icon-only; square)
     this._drawToolBtn(ctx, this._paintBtnBounds(), 'pencil', this._activeTool === 'paint')
     this._drawToolBtn(ctx, this._eraseBtnBounds(), 'eraser', this._activeTool === 'erase')
+    this._drawToolBtn(ctx, this._clearBtnBounds(), 'x', false, 'rgba(255,180,180,0.70)')
+    this._drawToolBtn(ctx, this._undoBtnBounds(), 'arrow-counter-clockwise', false, 'rgba(255,255,255,0.50)')
 
-    // "sz" label
-    ctx.fillStyle    = 'rgba(255,255,255,0.35)'
-    ctx.font         = '9px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('sz', px + 128, midY)
+    // ── Row 2 — brush shape/size presets + size slider ──────────
+    ctx.fillStyle = 'rgba(0,0,0,0.40)'
+    ctx.beginPath()
+    ctx.roundRect(px, row2Y, tw, ROW2_H, 6)
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(px, row2Y, 4, ROW2_H, [4, 0, 0, 4])
+    ctx.fill()
 
-    // Brush-size slider
+    this._drawBrushPresets(ctx)
     this._drawSlider(ctx)
 
-    // [✕] clear and [↺] reset
-    this._drawBtn(ctx, this._clearBtnBounds(), 'x', 'rgba(255,180,180,0.70)')
-    this._drawBtn(ctx, this._resetBtnBounds(), 'arrow-counter-clockwise', 'rgba(255,255,255,0.50)')
-
     ctx.restore()
+  }
+
+  private _drawBrushPresets(ctx: Ctx2D): void {
+    for (let i = 0; i < BRUSH_PRESETS.length; i++) {
+      const preset = BRUSH_PRESETS[i]!
+      const b      = this._presetBtnBounds(i)
+      const active = this._brushShape === preset.shape && this._brushSize === preset.size
+
+      ctx.fillStyle = active ? 'rgba(207,207,126,0.22)' : 'rgba(255,255,255,0.07)'
+      ctx.beginPath()
+      ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+      ctx.fill()
+      if (active) {
+        ctx.strokeStyle = ACCENT
+        ctx.lineWidth   = 1
+        ctx.beginPath()
+        ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
+        ctx.stroke()
+      }
+
+      ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
+      this._drawPresetGlyph(ctx, preset, b)
+    }
+  }
+
+  // Draws a small representative swatch for a brush preset — a filled
+  // circle/square/slanted bar scaled by the preset's size, matching the
+  // stamp shape `_applyBrush` actually paints with.
+  private _drawPresetGlyph(ctx: Ctx2D, preset: BrushPreset, b: BBox): void {
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height / 2
+    const r  = 2 + (preset.size - BRUSH_MIN) / (BRUSH_MAX - BRUSH_MIN) * (b.width / 2 - 4)
+
+    switch (preset.shape) {
+      case 'square':
+        ctx.beginPath()
+        ctx.rect(cx - r, cy - r, r * 2, r * 2)
+        ctx.fill()
+        break
+      case 'line': {
+        const { len: rawLen, width: w } = MaskLayer._lineDims(r)
+        const len = Math.min(rawLen, b.width - 4)
+        ctx.save()
+        ctx.translate(cx, cy)
+        ctx.rotate(LINE_BRUSH_ANGLE)
+        ctx.beginPath()
+        ctx.rect(-len / 2, -w / 2, len, w)
+        ctx.fill()
+        ctx.restore()
+        break
+      }
+      default:
+        ctx.beginPath()
+        ctx.arc(cx, cy, r, 0, Math.PI * 2)
+        ctx.fill()
+    }
+  }
+
+  // Dimensions of a "line" brush stamp for a given radius — shared by the
+  // paint stamp, the preset swatch, and the hover cursor so they all agree.
+  private static _lineDims(r: number): { len: number; width: number } {
+    return { len: r * 2.2, width: Math.max(2, r * 0.4) }
   }
 
   private _drawSlider(ctx: Ctx2D): void {
@@ -427,6 +574,7 @@ export class MaskLayer extends Layer implements MaskSource {
     const pt = this._cursorPoint ?? Node.pointerCanvas
     if (pt === null) return
     const { x, y } = pt
+    const r = this._brushSize / 2
     ctx.save()
     ctx.strokeStyle = this._activeTool === 'paint'
       ? 'rgba(255,255,255,0.80)'
@@ -435,9 +583,22 @@ export class MaskLayer extends Layer implements MaskSource {
         : 'rgba(200,200,200,0.50)'
     ctx.lineWidth   = 1.5
     ctx.setLineDash([3, 3])
-    ctx.beginPath()
-    ctx.arc(x, y, this._brushSize / 2, 0, Math.PI * 2)
-    ctx.stroke()
+    switch (this._brushShape) {
+      case 'square':
+        ctx.strokeRect(x - r, y - r, r * 2, r * 2)
+        break
+      case 'line': {
+        const { len, width: w } = MaskLayer._lineDims(r)
+        ctx.translate(x, y)
+        ctx.rotate(LINE_BRUSH_ANGLE)
+        ctx.strokeRect(-len / 2, -w / 2, len, w)
+        break
+      }
+      default:
+        ctx.beginPath()
+        ctx.arc(x, y, r, 0, Math.PI * 2)
+        ctx.stroke()
+    }
     ctx.restore()
   }
 
@@ -469,8 +630,11 @@ export class MaskLayer extends Layer implements MaskSource {
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
     if (boundingBoxContains(this._sliderBounds(),   point)) return this
+    for (let i = 0; i < BRUSH_PRESETS.length; i++) {
+      if (boundingBoxContains(this._presetBtnBounds(i), point)) return this
+    }
     if (boundingBoxContains(this._clearBtnBounds(), point)) return this
-    if (boundingBoxContains(this._resetBtnBounds(), point)) return this
+    if (boundingBoxContains(this._undoBtnBounds(),  point)) return this
     // In idle mode, claim any content-area click (x >= contentLeft, i.e. not
     // hidden by the stack widget) so handlePointerDown can auto-enable paint.
     if (point.x >= contentLeft(Node.canvasWidth)) return this
@@ -501,11 +665,19 @@ export class MaskLayer extends Layer implements MaskSource {
       this._applySlider(point.x)
       return true
     }
+    for (let i = 0; i < BRUSH_PRESETS.length; i++) {
+      if (boundingBoxContains(this._presetBtnBounds(i), point)) {
+        const preset = BRUSH_PRESETS[i]!
+        this._brushShape = preset.shape
+        this._brushSize  = preset.size
+        this.markDirty(); return true
+      }
+    }
     if (boundingBoxContains(this._clearBtnBounds(), point)) {
       this._clearPaint(); return true
     }
-    if (boundingBoxContains(this._resetBtnBounds(), point)) {
-      this._handleResetBtn(); return true
+    if (boundingBoxContains(this._undoBtnBounds(), point)) {
+      this._handleUndoBtn(); return true
     }
     if (this._invertToggleBounds !== null && boundingBoxContains(this._invertToggleBounds, point)) {
       this._handleInvertToggle(); return true
@@ -524,6 +696,8 @@ export class MaskLayer extends Layer implements MaskSource {
       this._isDrawing   = true
       this._lastPoint   = null
       this._cursorPoint = point
+      this._axisAnchor  = null
+      this._lockedAxis  = null
       this._applyBrush(point)
       return true
     }
@@ -536,8 +710,17 @@ export class MaskLayer extends Layer implements MaskSource {
       this._applySlider(point.x)
       return
     }
-    this._cursorPoint = point
-    if (this._isDrawing) this._applyBrush(point)
+    if (this._isDrawing && Node.shiftKey) {
+      this._moveConstrained(point)
+    } else {
+      // Not currently constraining — clear any axis lock so the next time
+      // Shift is (re-)engaged mid-stroke, the anchor is re-derived from
+      // wherever drawing actually is, not a stale earlier position.
+      this._axisAnchor = null
+      this._lockedAxis = null
+      this._cursorPoint = point
+      if (this._isDrawing) this._applyBrush(point)
+    }
     this.markDirty()
   }
 
@@ -546,6 +729,56 @@ export class MaskLayer extends Layer implements MaskSource {
     this._isDrawing      = false
     this._lastPoint      = null
     this._cursorPoint    = null  // revert to Node.pointerCanvas for hover
+    this._axisAnchor     = null
+    this._lockedAxis     = null
+  }
+
+  // Standard Shift-to-constrain, extended with a "polyline" pivot: the
+  // stroke locks to a horizontal or vertical line through `_axisAnchor`.
+  // If the drag moves substantially perpendicular to that line (more than
+  // `_axisPivotDistance()`, i.e. clearly not just brush wobble), a corner
+  // is planted at the point on the current line closest to the drag, and a
+  // new segment continues from there, locked to the perpendicular axis.
+  private _moveConstrained(point: Point): void {
+    // Entering constrained mode fresh (stroke start, or Shift just
+    // re-engaged) anchors at the last drawn point so the constrained line
+    // continues smoothly from there, and re-derives the initial direction.
+    if (this._axisAnchor === null) {
+      this._axisAnchor = this._lastPoint ?? point
+      this._lockedAxis = null
+    }
+
+    let anchor = this._axisAnchor
+    let axis   = this._lockedAxis
+    const dx = point.x - anchor.x
+    const dy = point.y - anchor.y
+
+    if (axis === null) {
+      if (Math.abs(dx) < AXIS_LOCK_EPS && Math.abs(dy) < AXIS_LOCK_EPS) {
+        this._cursorPoint = anchor
+        return
+      }
+      axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'
+    } else {
+      const perp = axis === 'x' ? Math.abs(dy) : Math.abs(dx)
+      if (perp > this._axisPivotDistance()) {
+        const corner = axis === 'x' ? { x: point.x, y: anchor.y } : { x: anchor.x, y: point.y }
+        this._applyBrush(corner)
+        anchor = corner
+        axis   = axis === 'x' ? 'y' : 'x'
+      }
+    }
+
+    this._axisAnchor = anchor
+    this._lockedAxis = axis
+
+    const constrained = axis === 'x' ? { x: point.x, y: anchor.y } : { x: anchor.x, y: point.y }
+    this._cursorPoint = constrained
+    this._applyBrush(constrained)
+  }
+
+  private _axisPivotDistance(): number {
+    return Math.max(AXIS_PIVOT_MIN, this._brushSize)
   }
 
   // ----------------------------------------------------------
@@ -567,11 +800,34 @@ export class MaskLayer extends Layer implements MaskSource {
     this._ensureCanvases()
     const r = this._brushSize / 2
 
+    const stampAt = (ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, cx: number, cy: number) => {
+      switch (this._brushShape) {
+        case 'square':
+          ctx.beginPath()
+          ctx.rect(cx - r, cy - r, r * 2, r * 2)
+          ctx.fill()
+          break
+        case 'line': {
+          const { len, width: w } = MaskLayer._lineDims(r)
+          ctx.save()
+          ctx.translate(cx, cy)
+          ctx.rotate(LINE_BRUSH_ANGLE)
+          ctx.beginPath()
+          ctx.rect(-len / 2, -w / 2, len, w)
+          ctx.fill()
+          ctx.restore()
+          break
+        }
+        default:
+          ctx.beginPath()
+          ctx.arc(cx, cy, r, 0, Math.PI * 2)
+          ctx.fill()
+      }
+    }
+
     const _stroke = (ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D) => {
       if (this._lastPoint === null) {
-        ctx.beginPath()
-        ctx.arc(point.x, point.y, r, 0, Math.PI * 2)
-        ctx.fill()
+        stampAt(ctx, point.x, point.y)
       } else {
         const dx    = point.x - this._lastPoint.x
         const dy    = point.y - this._lastPoint.y
@@ -580,13 +836,7 @@ export class MaskLayer extends Layer implements MaskSource {
         const steps = Math.ceil(dist / step)
         for (let i = 0; i <= steps; i++) {
           const t = i / Math.max(1, steps)
-          ctx.beginPath()
-          ctx.arc(
-            this._lastPoint.x + dx * t,
-            this._lastPoint.y + dy * t,
-            r, 0, Math.PI * 2,
-          )
-          ctx.fill()
+          stampAt(ctx, this._lastPoint.x + dx * t, this._lastPoint.y + dy * t)
         }
       }
       ctx.globalCompositeOperation = 'source-over'
@@ -630,8 +880,10 @@ export class MaskLayer extends Layer implements MaskSource {
     this.markDirty()
   }
 
-  // [↺] button: undo last stroke on first press; full reset on second press.
-  private _handleResetBtn(): void {
+  // [↺] button: undo the last stroke or clear on first press; falls back to
+  // a full reset (clear + unbind shape slots) once there's nothing left to
+  // undo.
+  private _handleUndoBtn(): void {
     if (this._undoPainted !== null) {
       this.undoLastStroke()
     } else {
@@ -639,13 +891,15 @@ export class MaskLayer extends Layer implements MaskSource {
     }
   }
 
+  // Saves undo state before wiping, same as a brush stroke, so [↺] can
+  // restore the pre-clear paint.
   private _clearPaint(): void {
+    this._undoPainted = MaskLayer._cloneCanvas(this._painted)
+    this._undoErased  = MaskLayer._cloneCanvas(this._erased)
     const pctx = this._painted.getContext('2d')!
     pctx.clearRect(0, 0, this._painted.width, this._painted.height)
     const ectx = this._erased.getContext('2d')!
     ectx.clearRect(0, 0, this._erased.width, this._erased.height)
-    this._undoPainted = null
-    this._undoErased  = null
     this.markDirty()
   }
 
@@ -702,41 +956,53 @@ export class MaskLayer extends Layer implements MaskSource {
   // Left edge of the canvas-space tools/slot panel — matches Layer.canvasBounds.
   private get _panelX(): number { return contentLeft(Node.canvasWidth) }
 
-  private _paintBtnBounds() {
-    const ty = this._toolsY
-    return { x: this._panelX + 8, y: ty + 8, width: 28, height: 28 }
+  // Row-1 grid cell for button index i (0=paint, 1=erase, 2=clear, 3=undo) —
+  // wraps into extra rows on narrow panels, same as CaptureLayer's grid.
+  private _row1BtnBounds(i: number): BBox {
+    const cols = this._row1Cols(panelWidth(Node.canvasWidth))
+    const r = Math.floor(i / cols), c = i % cols
+    return {
+      x: this._panelX + TOOL_MARGIN + c * (TOOL_SZ + TOOL_GAP),
+      y: this._toolsY + TOOL_MARGIN + r * (TOOL_SZ + TOOL_GAP),
+      width: TOOL_SZ, height: TOOL_SZ,
+    }
   }
 
-  private _eraseBtnBounds() {
-    const ty = this._toolsY
-    return { x: this._panelX + 44, y: ty + 8, width: 28, height: 28 }
+  private _paintBtnBounds(): BBox { return this._row1BtnBounds(0) }
+  private _eraseBtnBounds(): BBox { return this._row1BtnBounds(1) }
+  private _clearBtnBounds(): BBox { return this._row1BtnBounds(2) }
+  private _undoBtnBounds():  BBox { return this._row1BtnBounds(3) }
+
+  private _presetBtnBounds(i: number): BBox {
+    const y = this._row2Y + (ROW2_H - SWATCH_SZ) / 2
+    const x = this._panelX + ROW2_MARGIN + i * (SWATCH_SZ + SWATCH_GAP)
+    return { x, y, width: SWATCH_SZ, height: SWATCH_SZ }
   }
 
-  // Slider track area (pointer hit zone).
-  private _sliderBounds() {
-    const ty = this._toolsY
-    return { x: this._panelX + 142, y: ty + 6, width: 72, height: 32 }
-  }
-
-  private _clearBtnBounds() {
-    const ty = this._toolsY
-    return { x: this._panelX + 222, y: ty + 10, width: 18, height: 24 }
-  }
-
-  private _resetBtnBounds() {
-    const ty = this._toolsY
-    return { x: this._panelX + 244, y: ty + 10, width: 18, height: 24 }
+  // Slider track area (pointer hit zone) — fills whatever space is left
+  // to the right of the presets group.
+  private _sliderBounds(): BBox {
+    const tw       = panelWidth(Node.canvasWidth)
+    const presetsW = BRUSH_PRESETS.length * SWATCH_SZ + (BRUSH_PRESETS.length - 1) * SWATCH_GAP
+    const leftX    = this._panelX + ROW2_MARGIN + presetsW + GROUP_GAP
+    const rightX   = this._panelX + tw - ROW2_MARGIN
+    const width    = Math.max(30, rightX - leftX)
+    return { x: leftX, y: this._row2Y, width, height: ROW2_H }
   }
 
   // ----------------------------------------------------------
   // Drawing helpers
   // ----------------------------------------------------------
 
+  // `active` draws the highlighted (currently-selected-tool) state; `colour`
+  // overrides the inactive icon colour for buttons that aren't a toggle
+  // (clear/undo — always drawn inactive, but with their own icon tint).
   private _drawToolBtn(
     ctx: Ctx2D,
-    b: { x: number; y: number; width: number; height: number },
+    b: BBox,
     icon: IconName,
     active: boolean,
+    colour = 'rgba(255,255,255,0.55)',
   ): void {
     ctx.fillStyle = active ? 'rgba(207,207,126,0.22)' : 'rgba(255,255,255,0.07)'
     ctx.beginPath()
@@ -749,21 +1015,7 @@ export class MaskLayer extends Layer implements MaskSource {
       ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 4)
       ctx.stroke()
     }
-    ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.55)'
-    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
-  }
-
-  private _drawBtn(
-    ctx: Ctx2D,
-    b: { x: number; y: number; width: number; height: number },
-    icon: IconName,
-    colour: string,
-  ): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
-    ctx.fill()
-    ctx.fillStyle = colour
+    ctx.fillStyle = active ? ACCENT : colour
     drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 }

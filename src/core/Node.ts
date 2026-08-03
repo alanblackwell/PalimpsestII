@@ -72,6 +72,12 @@ export abstract class Node {
   // pointer is outside the canvas. Read by PointLayer's "track" wander mode.
   static pointerCanvas: Point | null = null
 
+  // True while the Shift key is held, updated by InteractionSystem's
+  // keydown/keyup listeners. Read by any layer wanting the standard
+  // "hold Shift to constrain a drag to horizontal/vertical" convention
+  // (e.g. MaskLayer's brush stroke).
+  static shiftKey = false
+
   // Current canvas dimensions — updated by Evaluator on construction and resize.
   // Layers that produce full-canvas outputs (e.g. MaskLayer, ShapeLayer mask)
   // use these to size their OffscreenCanvases.
