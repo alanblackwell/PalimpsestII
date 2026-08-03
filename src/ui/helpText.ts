@@ -326,8 +326,8 @@ const HELP: Record<string, HelpEntry> = {
   Tile: {
     title: 'Tile layer',
     paragraphs: [
-      'Tiles or fits its Image input across the canvas. The source\'s non-transparent content is auto-cropped to a bounding box, then either repeated (tile mode) or scaled to cover the canvas, centred (fit mode) — toggle with the Tile/Fit button.',
-      'In tile mode, the margin stepper (−/+) sets the gap between adjacent tiles in pixels; negative values (the default) overlap tiles slightly to avoid hairline seams. Opacity is adjustable via the slider below the slot rows.',
+      'Tiles or fits its Image input across the canvas. The source\'s non-transparent content is auto-cropped to a bounding box, then either repeated (tile mode) or scaled to cover the canvas, centred (fit mode) — pick a mode with the two big preview buttons, each showing a live thumbnail of what it currently produces.',
+      'In tile mode, the margin slider (below the slot rows, bindable like opacity) sets the gap between adjacent tiles in pixels; negative values (the default) overlap tiles slightly to avoid hairline seams.',
       'Useful for creating repeating patterns or background textures from any image source; the source image is auto-bound and moved to Background on creation.',
     ],
   },

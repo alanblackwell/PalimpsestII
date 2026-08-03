@@ -235,7 +235,7 @@ export class MaskLayer extends Layer implements MaskSource {
   // ----------------------------------------------------------
 
   private get _toolsY(): number {
-    return 50 + this.bounds.height + 8
+    return 50
   }
 
   override get panelBottom(): number {
@@ -251,7 +251,6 @@ export class MaskLayer extends Layer implements MaskSource {
   renderPanel(ctx: Ctx2D): void {
     this._drawMaskOverlay(ctx)
     this._renderBeforeUI(ctx)
-    this._drawStripPill(ctx)
     this._drawToolsPanel(ctx)
     if (this._activeTool !== null && (this._cursorPoint ?? Node.pointerCanvas) !== null) {
       this._drawBrushCursor(ctx)
@@ -330,47 +329,6 @@ export class MaskLayer extends Layer implements MaskSource {
     // Punch through the wash where the mask is opaque (included areas).
     ctx.globalCompositeOperation = 'destination-out'
     ctx.drawImage(this._offscreen, 0, 0)
-    ctx.restore()
-  }
-
-  private _drawStripPill(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
-    if (width <= 0 || height <= 0) return
-    const midY = y + height / 2
-
-    ctx.save()
-
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    ctx.fillStyle    = 'rgba(255,255,255,0.70)'
-    ctx.font         = '11px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('Mask', x + 12, midY)
-
-    // Slot indicator dots
-    let dx = x + width - 10
-    ctx.font = '9px monospace'
-    for (let i = this._shapeSlots.length - 1; i >= 0; i--) {
-      const active = this._shapeSlots[i]!.isActive
-      ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 10
-      ctx.fillStyle = 'rgba(255,255,255,0.30)'
-      ctx.fillText(`s${i + 1}`, dx, midY)
-      dx -= ctx.measureText(`s${i + 1}`).width + 6
-    }
-
     ctx.restore()
   }
 
@@ -508,7 +466,6 @@ export class MaskLayer extends Layer implements MaskSource {
       return this
     }
     if (this._sliderDragging) return this
-    if (boundingBoxContains(this.canvasBounds, point))      return this
     if (boundingBoxContains(this._paintBtnBounds(), point)) return this
     if (boundingBoxContains(this._eraseBtnBounds(), point)) return this
     if (boundingBoxContains(this._sliderBounds(),   point)) return this

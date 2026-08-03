@@ -1,4 +1,5 @@
 import { Layer } from '../core/Layer.js'
+import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
@@ -69,11 +70,13 @@ import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 //             (0 = frozen).
 //
 // Other input slots:
-//   scaleSlot    (Amount)    — "scale": maps [0, 1] → frequency [0.5, 16].
+//   scaleSlot    (Amount)    — "scale": maps [0, 1] → frequency [16, 0.5]
+//                               (inverted — higher scale = bigger features,
+//                               matching the intuitive sense of the word).
 //                               For static/colour this sets the grid
-//                               granularity (cell size from ~32px down to 1px).
-//                               Manual control: slider, 0–1 (the value shown
-//                               is the resolved frequency).
+//                               granularity (cell size from ~1px up to ~32px
+//                               as scale increases). Manual control: slider,
+//                               0–1 (the value shown is the resolved frequency).
 //   detailSlot   (Amount)    — "warp": algorithm-specific detail/strength
 //                               (crack thickness, ripple density, warp
 //                               displacement, organic mix). Manual slider, 0–1.
@@ -86,18 +89,21 @@ import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 //                               output is read from the noise texture.
 //
 // Manual controls:
-//   [◀] / [▶]     — cycle noise type
-//   seed  [−][+]  — integer seed (0–99), shifts the hash domain
+//   Style row — one big button per noise type, each showing a live
+//   thumbnail preview (rendered with the same algorithm at low res, using
+//   the layer's current seed/scale/speed/detail/drift). Tapping a
+//   different style's button switches to it; tapping the already-active
+//   style's button picks a fresh random seed (no separate seed control).
 //   scale/speed/warp/drift — one slider per row, FilterLayer-style
 //
 // Touching any of scale/speed/warp/drift while its slot is bound suspends
 // that binding (same slider-override pattern as AmountLayer/FilterLayer),
 // handing manual control back to the user at the current effective value.
 //
-// Visual layout (5 rows, height ≈ 161 px):
+// Visual layout:
 //
 //   ┌──────────────────────────────────────────────────────────────┐
-//   │ ▌ [◀] cracks [▶]   seed [−] 7 [+]              time ●   pos ○ │
+//   │ ▌ [▦]static [▦]colour [▦]cracks [▦]ripples [▦]warp [▦]organic │
 //   │   scale  ───────●───────────────────────────────  3.00    ○  │
 //   │   speed  ───●────────────────────────────────────  0.15    ○  │
 //   │   warp   ─────────────────●──────────────────────  0.50    ●  │
@@ -313,7 +319,10 @@ const GL_NOISE_SIZE = 1024     // internal noise texture resolution (GPU path)
 const DEFAULT_FREQ  = 3.0
 const MIN_FREQ      = 0.5
 const MAX_FREQ      = 16.0
-const DEFAULT_SCALE = (DEFAULT_FREQ - MIN_FREQ) / (MAX_FREQ - MIN_FREQ)
+// scaleAmt -> frequency is inverted (scaleAmt=0 -> MAX_FREQ, scaleAmt=1 ->
+// MIN_FREQ) so that turning "scale" up makes noise features bigger, matching
+// the intuitive sense of the word — see recompute().
+const DEFAULT_SCALE = (MAX_FREQ - DEFAULT_FREQ) / (MAX_FREQ - MIN_FREQ)
 
 // elapsed seconds × speedAmount[0,1] × SPEED_SCALE → evolveTime
 const SPEED_SCALE = 0.3
@@ -329,20 +338,23 @@ const STATIC_UPDATE_FRACTION = 0.15
 // Fixed anisotropy strength used when driftSlot is unbound.
 const MANUAL_DRIFT_MAGNITUDE = 0.5
 
-// Panel layout
-const ROW_H   = 33   // row 1: type cycler / seed
-const ROW_GAP = 4
-const PAD     = 4
-const BTN_W   = 18
-const BTN_H   = 22
+// Style row — one big thumbnail button per noise type. The panel is a
+// fixed 460px wide (see canvasBounds override below), so this lays out as
+// a single row of NOISE_TYPES.length buttons rather than a responsive
+// wrapping grid.
+const STYLE_MARGIN = 10   // margin inside the pill around the button row
+const STYLE_GAP    = 6    // gap between buttons
+const STYLE_BTN_W  = 68
+const THUMB_PAD    = 5    // padding between button edge and thumbnail swatch
+const THUMB_SIZE   = STYLE_BTN_W - 2 * THUMB_PAD
+const THUMB_TIME   = 1.0  // fixed nominal time for thumbnails — still images, not live
+const LABEL_H      = 16   // label strip below the thumbnail
+const STYLE_BTN_H  = THUMB_PAD + THUMB_SIZE + LABEL_H + THUMB_PAD
 
 // SliderSlot rows (scale/speed/warp/drift) use Layer's standard slot dimensions
 const SLOT_H   = 30   // matches Layer.renderSlotGroup
 const SLOT_GAP = 4
 const SLOT_PAD = 3
-
-// Panel height = PAD*2 + ROW_H = 41 (header row only; sliders are in renderSlots).
-// MenuLayer's BUTTONS entry for 'Noise' overrides bounds.height to this value.
 
 type BBox = { x: number; y: number; width: number; height: number }
 
@@ -365,11 +377,32 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   private _seed:       number = 0
   private _amountOut:  number = 0
 
-  // 256×256 noise texture (returned as ImageValue)
+  // 256×256 (or GL_NOISE_SIZE for the GPU path) noise texture — the native
+  // compute resolution, NOT necessarily the canvas size.
   private _noiseCanvas: OffscreenCanvas
 
+  // Full-canvas-sized composite, stretched from _noiseCanvas every recompute
+  // — this, not _noiseCanvas directly, is what getImage()/renderSelf use.
+  // Every other ImageSource in the app exposes a canvas-sized image (see
+  // ImageLayer._offscreen, VideoLayer._result); NoiseLayer used to expose
+  // _noiseCanvas directly, which only filled the full output for algorithm
+  // types using the GL_NOISE_SIZE (1024) GPU path — static/colour (always
+  // CPU, 256×256) and the CPU fallback path only filled the canvas's
+  // top-left corner when a downstream consumer drew the image at native
+  // pixel size instead of stretching it.
+  private _outputCanvas: OffscreenCanvas = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
+
+  // Small per-style preview swatches for the style-selector buttons — one
+  // per NOISE_TYPES entry, still images regenerated only when seed/scale/
+  // detail/drift change (see _updateThumbnails).
+  private readonly _thumbCanvases: OffscreenCanvas[] =
+    NOISE_TYPES.map(() => new OffscreenCanvas(THUMB_SIZE, THUMB_SIZE))
+
+  // Style-button bounds, set during renderPanel, used for hit-testing.
+  private _styleBtnB: BBox[] = []
+
   // Manual values, used while the corresponding slot is unbound.
-  private _scale:      number = DEFAULT_SCALE   // [0, 1] -> frequency [MIN_FREQ, MAX_FREQ]
+  private _scale:      number = DEFAULT_SCALE   // [0, 1] -> frequency [MAX_FREQ, MIN_FREQ] (inverted)
   private _speed:      number   // [0, 1]
   private _detail:     number = 0.5
   private _driftAngle: number   // radians
@@ -480,13 +513,22 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // ----------------------------------------------------------
 
   getAmount(): Amount     { return this._amountOut   }
-  getImage():  ImageValue { return this._noiseCanvas }
+  getImage():  ImageValue { return this._outputCanvas }
 
-  // Wider than the default 260px canvas pill, to fit the type-cycle/seed row
-  // plus four full-width slider rows. Height comes from `this.bounds.height`
-  // (set by MenuLayer's BUTTONS entry — see PANEL_H below).
+  // Wider than the default 260px canvas pill, to fit six style buttons in
+  // one row plus four full-width slider rows below. Height is computed from
+  // the style row's own layout, independent of `this.bounds.height` (the
+  // widget-column card height, which stays at the standard default).
   override get canvasBounds(): { x: number; y: number; width: number; height: number } {
-    return { ...super.canvasBounds, width: 460 }
+    return { ...super.canvasBounds, width: 460, height: this._styleRowH() }
+  }
+
+  override get panelBottom(): number {
+    return 50 + this._styleRowH() + 8
+  }
+
+  private _styleRowH(): number {
+    return STYLE_MARGIN * 2 + STYLE_BTN_H
   }
 
   // ----------------------------------------------------------
@@ -519,19 +561,23 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   }
 
   // ----------------------------------------------------------
-  // Cycling / seed / manual parameters
+  // Style selection / seed / manual parameters
   // ----------------------------------------------------------
 
-  cycleNext(): void { this._noiseIndex = (this._noiseIndex + 1) % NOISE_TYPES.length; this.markDirty() }
-  cyclePrev(): void { this._noiseIndex = (this._noiseIndex - 1 + NOISE_TYPES.length) % NOISE_TYPES.length; this.markDirty() }
-  incrSeed():  void {
-    this._seed = (this._seed + 1) % 100
-    for (let i = 0; i < MAX_DROPS; i++) this._drops[i] = dropParams(i, this._seed)
-    this._reshuffleStatic()
-    this.markDirty()
+  // Tapping a style button: switch to it if it's not already active;
+  // otherwise (pressing the already-selected style again) pick a fresh
+  // random seed — replaces the old separate seed [−]/[+] control.
+  selectStyle(idx: number): void {
+    if (idx === this._noiseIndex) {
+      this._reseed()
+    } else {
+      this._noiseIndex = idx
+      this.markDirty()
+    }
   }
-  decrSeed():  void {
-    this._seed = (this._seed - 1 + 100) % 100
+
+  private _reseed(): void {
+    this._seed = Math.floor(Math.random() * 100)
     for (let i = 0; i < MAX_DROPS; i++) this._drops[i] = dropParams(i, this._seed)
     this._reshuffleStatic()
     this.markDirty()
@@ -580,7 +626,8 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     const scaleAmt = this._scaleSlot.isActive
       ? (this._scaleSlot.source as AmountSource).getAmount() as Amount
       : this._scale
-    this._frequency = MIN_FREQ + scaleAmt * (MAX_FREQ - MIN_FREQ)
+    // Inverted: higher "scale" -> lower frequency -> bigger noise features.
+    this._frequency = MAX_FREQ - scaleAmt * (MAX_FREQ - MIN_FREQ)
 
     this._speedAmt = this._speedSlot.isActive
       ? (this._speedSlot.source as AmountSource).getAmount() as Amount
@@ -600,6 +647,8 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
       : { x: 128, y: 128 }
 
     this._generateTexture()
+    this._updateOutputCanvas()
+    this._updateThumbnails()
 
     const type = NOISE_TYPES[this._noiseIndex]!
     if (type === 'static' || type === 'colour') {
@@ -658,12 +707,12 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    const r1 = this._row1()
-    if (boundingBoxContains(r1.prev,  point)) { this.cyclePrev(); return true }
-    if (boundingBoxContains(r1.next,  point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(r1.label, point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(r1.seedDecr, point)) { this.decrSeed(); return true }
-    if (boundingBoxContains(r1.seedIncr, point)) { this.incrSeed(); return true }
+    for (let i = 0; i < this._styleBtnB.length; i++) {
+      if (boundingBoxContains(this._styleBtnB[i]!, point)) {
+        this.selectStyle(i)
+        return true
+      }
+    }
 
     const rows = this._slotRows()
     if (this._scaleWidget.handlePointerDown(point,  rows.scaleRow))  return true
@@ -718,11 +767,9 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // ----------------------------------------------------------
 
   renderSelf(ctx: Ctx2D): void {
-    const cw = (ctx as CanvasRenderingContext2D).canvas?.width  ?? this._noiseCanvas.width
-    const ch = (ctx as CanvasRenderingContext2D).canvas?.height ?? this._noiseCanvas.height
     ctx.save()
     ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
-    ctx.drawImage(this._noiseCanvas as CanvasImageSource, 0, 0, cw, ch)
+    ctx.drawImage(this._outputCanvas as CanvasImageSource, 0, 0)
     ctx.restore()
   }
 
@@ -746,7 +793,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
 
-    this._renderRow1(ctx)
+    this._renderStyleGrid(ctx)
 
     ctx.restore()
   }
@@ -797,61 +844,56 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     return { x: cb.x, y: this.panelBottom + pillH + 8 + standardH + 8 + SLOT_PAD, width: cb.width, height: SLOT_H }
   }
 
-  private _renderRow1(ctx: Ctx2D): void {
-    const { x, width } = this.canvasBounds
-    const r1 = this._row1()
+  private _renderStyleGrid(ctx: Ctx2D): void {
+    const { x, y } = this.canvasBounds
+    const top = y + STYLE_MARGIN
 
-    this._drawNavBtn(ctx, r1.prev, '◀', r1.midY)
-
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.beginPath()
-    ctx.roundRect(r1.label.x, r1.label.y, r1.label.width, r1.label.height, 3)
-    ctx.fill()
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(NOISE_TYPES[this._noiseIndex]!, r1.label.x + r1.label.width / 2, r1.midY)
-
-    this._drawNavBtn(ctx, r1.next, '▶', r1.midY)
-
-    // Seed
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.50)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('seed', r1.seedLabelX, r1.midY)
-    this._drawBtn(ctx, r1.seedDecr, '−', 'rgba(255,255,255,0.65)')
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-    ctx.textAlign    = 'center'
-    ctx.fillText(String(this._seed), r1.seedValueX + 10, r1.midY)
-    this._drawBtn(ctx, r1.seedIncr, '+', 'rgba(255,255,255,0.65)')
-
-    // Indicators
-    this._drawIndicators(ctx, [
-      { slot: this._opacitySlot,  label: 'α',    accent: AM_COL },
-      { slot: this._timeSlot,     label: 'time' },
-      { slot: this._positionSlot, label: 'pos'  },
-    ], x + width - 8, r1.midY)
+    this._styleBtnB = []
+    for (let i = 0; i < NOISE_TYPES.length; i++) {
+      const bx = x + STYLE_MARGIN + i * (STYLE_BTN_W + STYLE_GAP)
+      const b: BBox = { x: bx, y: top, width: STYLE_BTN_W, height: STYLE_BTN_H }
+      this._styleBtnB.push(b)
+      this._renderStyleBtn(ctx, NOISE_TYPES[i]!, i, b)
+    }
   }
 
+  private _renderStyleBtn(ctx: Ctx2D, id: NoiseId, idx: number, b: BBox): void {
+    const active = idx === this._noiseIndex
 
-  private _drawIndicators(ctx: Ctx2D, items: Array<{ slot: ParameterSlot; label: string; accent?: string }>, rightX: number, midY: number): void {
-    let dx = rightX
-    ctx.font         = '9px monospace'
-    ctx.textBaseline = 'middle'
-    for (let i = items.length - 1; i >= 0; i--) {
-      const { slot, label, accent = ACCENT } = items[i]!
-      const active = slot.isActive
-      ctx.fillStyle = active ? accent : 'rgba(255,255,255,0.22)'
-      ctx.textAlign = 'right'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 8
+    ctx.save()
+    ctx.fillStyle = active ? ACCENT + '33' : 'rgba(255,255,255,0.06)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    if (active) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1.5
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.75, b.y + 0.75, b.width - 1.5, b.height - 1.5, 6)
+      ctx.stroke()
     }
+
+    // Thumbnail swatch
+    const tx = b.x + THUMB_PAD
+    const ty = b.y + THUMB_PAD
+    ctx.save()
+    ctx.beginPath()
+    ctx.roundRect(tx, ty, THUMB_SIZE, THUMB_SIZE, 3)
+    ctx.clip()
+    ctx.drawImage(this._thumbCanvases[idx]! as CanvasImageSource, tx, ty, THUMB_SIZE, THUMB_SIZE)
+    ctx.restore()
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)'
+    ctx.lineWidth   = 1
+    ctx.strokeRect(tx + 0.5, ty + 0.5, THUMB_SIZE - 1, THUMB_SIZE - 1)
+
+    // Label
+    ctx.font         = '9px monospace'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = active ? '#ffffff' : 'rgba(255,255,255,0.65)'
+    ctx.fillText(id, b.x + b.width / 2, ty + THUMB_SIZE + LABEL_H / 2)
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -909,6 +951,21 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
     const imgData = new ImageData(data, size, size)
     this._noiseCanvas.getContext('2d')!.putImageData(imgData, 0, 0)
+  }
+
+  // Stretches _noiseCanvas (native compute resolution — varies by type/path)
+  // up to the actual canvas size, so getImage()/renderSelf always expose a
+  // full-canvas image regardless of which noise type generated it.
+  private _updateOutputCanvas(): void {
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    if (this._outputCanvas.width !== w || this._outputCanvas.height !== h) {
+      this._outputCanvas.width  = w
+      this._outputCanvas.height = h
+    }
+    const ctx = this._outputCanvas.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    ctx.drawImage(this._noiseCanvas as CanvasImageSource, 0, 0, w, h)
   }
 
   // 'static'/'colour' — re-roll a random subset of grid cells. Grid size
@@ -979,54 +1036,66 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // Private helpers
   // ----------------------------------------------------------
 
-  private _drawNavBtn(ctx: Ctx2D, b: BBox, label: string, midY: number): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 3)
-    ctx.fill()
-    ctx.font         = '9px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.55)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, midY)
+  // ----------------------------------------------------------
+  // Style thumbnails
+  // ----------------------------------------------------------
+
+  // Refreshes all six preview swatches from the current seed/scale/detail/
+  // drift — so each button shows what tapping it would produce. Thumbnails
+  // are deliberately still images, not a live mirror of the animated
+  // output (that reads as distracting flicker at this size): a fixed
+  // nominal time is used instead of the live evolveTime, and — since
+  // static/colour have no time input at all, only fresh Math.random() calls
+  // — regeneration only happens when the signature below actually changes
+  // (reseed, or a scale/detail/drift slider move), not every frame.
+  private _thumbSig = ''
+
+  private _updateThumbnails(): void {
+    const sig = `${this._seed}|${this._frequency}|${this._detailEff}|${this._drift.angle}|${this._drift.magnitude}`
+    if (sig === this._thumbSig) return
+    this._thumbSig = sig
+    for (let i = 0; i < NOISE_TYPES.length; i++) {
+      this._renderThumbnailFor(NOISE_TYPES[i]!, this._thumbCanvases[i]!)
+    }
   }
 
-  private _drawBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.07)'
-    ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
-    ctx.fill()
-    ctx.font         = '13px monospace'
-    ctx.fillStyle    = colour
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
-  }
+  private _renderThumbnailFor(type: NoiseId, canvas: OffscreenCanvas): void {
+    const size = THUMB_SIZE
+    const data = new Uint8ClampedArray(size * size * 4)
 
-  // Row 1: [◀] type [▶]   seed [−] N [+]            time/pos/scale indicators
-  private _row1() {
-    const { x, y } = this.canvasBounds
-    const ry   = y + PAD
-    const midY = ry + ROW_H / 2
-    const by   = ry + (ROW_H - BTN_H) / 2
+    if (type === 'static' || type === 'colour') {
+      const colour = type === 'colour'
+      for (let i = 0; i < size * size; i++) {
+        const idx = i * 4
+        if (colour) {
+          data[idx]     = Math.round(Math.random() * 255)
+          data[idx + 1] = Math.round(Math.random() * 255)
+          data[idx + 2] = Math.round(Math.random() * 255)
+        } else {
+          const v = Math.round(Math.random() * 255)
+          data[idx] = data[idx + 1] = data[idx + 2] = v
+        }
+        data[idx + 3] = 255
+      }
+    } else {
+      const freq = this._frequency
+      for (let py = 0; py < size; py++) {
+        const ny = (py / size) * freq
+        for (let px = 0; px < size; px++) {
+          const nx = (px / size) * freq
+          const v  = sampleNoise(
+            type, nx, ny, this._seed,
+            THUMB_TIME, this._drift, this._detailEff, this._drops, freq,
+          )
+          const c   = Math.round(Math.max(0, Math.min(1, v)) * 255)
+          const idx = (py * size + px) * 4
+          data[idx] = data[idx + 1] = data[idx + 2] = c
+          data[idx + 3] = 255
+        }
+      }
+    }
 
-    let cx = x + 8
-    const prev = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 4
-    const label = { x: cx, y: by, width: 56, height: BTN_H }
-    cx += 56 + 4
-    const next = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 14
-
-    const seedLabelX = cx
-    cx += 26
-    const seedDecr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-    cx += BTN_W + 2
-    const seedValueX = cx
-    cx += 20
-    const seedIncr = { x: cx, y: by, width: BTN_W, height: BTN_H }
-
-    return { y: ry, midY, prev, label, next, seedLabelX, seedDecr, seedValueX, seedIncr }
+    canvas.getContext('2d')!.putImageData(new ImageData(data, size, size), 0, 0)
   }
 
 }

@@ -15,8 +15,8 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
-import { drawIcon } from '../ui/icons.js'
-import { contentLeft } from '../interaction/layout.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
+import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
@@ -25,6 +25,11 @@ import { SliderSlot } from '../ui/SliderSlot.js'
 //
 // Implements ImageSource so downstream layers can consume the
 // loaded bitmap via getImage().
+//
+// Acquire-image panel: while no bitmap is loaded, the top of the panel
+// shows three big buttons — File, Paste, Camera — for getting an image in.
+// Once a bitmap is loaded these are hidden entirely; to load a different
+// image the user creates a new ImageLayer rather than replacing this one.
 //
 // Input slots:
 //   positionSlot  (Point)  — canvas anchor (centre of image).
@@ -41,14 +46,16 @@ import { SliderSlot } from '../ui/SliderSlot.js'
 //   Handles glow brightly (shadowBlur) for visibility over any content.
 
 const ACCENT     = '#7ecf7e'
-const DIR_ACCENT = '#7ecfcf'
 const AM_COL     = '#4a8fe8'
 const MIN_SCALE  = 0.05
 const MAX_SCALE  = 4.0
 
-// Panel button geometry
-const BTN   = 24
-const BTN_M = 6
+// Acquire-image big-button row — shown only while no bitmap is loaded, in
+// place of the old thin status pill. Sized like VideoLayer's source-picker
+// row (three buttons: file / paste / camera).
+const LG_SZ     = 72
+const LG_GAP    = 6
+const LG_MARGIN = 10
 
 // Handle geometry
 const HANDLE_R   = 7    // circle handle radius (px)
@@ -69,6 +76,8 @@ const CONV_BTN_H   = 30
 const CONV_BTN_W   = 60
 const CONV_BTN_GAP = 14   // gap from bottom edge of viewport
 const CONV_BTN_SEP = 8    // gap between the two buttons
+
+type BBox = { x: number; y: number; width: number; height: number }
 
 type DragState =
   | { type: 'move';   startMouse: Point; startPos: Point }
@@ -93,6 +102,23 @@ export class ImageLayer extends Layer implements ImageSource {
   private _natW:       number          = 0
   private _natH:       number          = 0
   private _dragOver:   boolean         = false
+
+  // Acquire-image big buttons — set during renderPanel while _bitmap is
+  // null, used for hit-testing; not relevant once an image is loaded.
+  private _fileBtnB:   BBox | null = null
+  private _pasteBtnB:  BBox | null = null
+  private _cameraBtnB: BBox | null = null
+
+  // Live camera preview — active between tapping "Camera" and either
+  // taking the shot (shutter) or cancelling. Ephemeral: never persisted.
+  private _cameraMode:      boolean            = false
+  private _cameraStream:    MediaStream | null = null
+  private _cameraVideo:     HTMLVideoElement | null = null
+  private _cameraDevices:   MediaDeviceInfo[]  = []
+  private _cameraDeviceIdx  = 0
+  private _shutterBtnB:        BBox | null = null
+  private _flipBtnB:           BBox | null = null
+  private _cameraCancelBtnB:   BBox | null = null
 
   // Direct-manipulation state (persist across recompute when slot is unbound)
   private _rotation:       number       = 0
@@ -192,25 +218,30 @@ export class ImageLayer extends Layer implements ImageSource {
   // Image loading
   // ----------------------------------------------------------
 
+  // Common landing point for every acquisition path (file, paste, camera):
+  // swaps in the new bitmap and, on mobile, fits it to the viewport so it's
+  // fully visible in the current orientation. The default position
+  // (viewport centre) already centres it — only the scale needs setting.
+  private _adoptBitmap(bitmap: ImageBitmap, filename: string): void {
+    this._bitmap?.close()
+    this._bitmap   = bitmap
+    this._filename = filename
+    this._natW     = bitmap.width
+    this._natH     = bitmap.height
+    if (Node.isMobileDevice && bitmap.width > 0 && bitmap.height > 0) {
+      const fitScale = Math.min(
+        Node.viewportWidth  / bitmap.width,
+        Node.viewportHeight / bitmap.height,
+      )
+      this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale))
+    }
+    this.markDirty()
+  }
+
   async loadFile(file: File): Promise<void> {
     try {
       const bitmap = await createImageBitmap(file)
-      this._bitmap?.close()
-      this._bitmap   = bitmap
-      this._filename = file.name
-      this._natW     = bitmap.width
-      this._natH     = bitmap.height
-      // On mobile, fit the image to the viewport so it is fully visible in the
-      // current orientation. The default position (viewport centre) already
-      // centres it; we only need to set the scale.
-      if (Node.isMobileDevice && bitmap.width > 0 && bitmap.height > 0) {
-        const fitScale = Math.min(
-          Node.viewportWidth  / bitmap.width,
-          Node.viewportHeight / bitmap.height,
-        )
-        this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale))
-      }
-      this.markDirty()
+      this._adoptBitmap(bitmap, file.name)
     } catch {
       // Unsupported format or decode error — leave previous bitmap intact.
     }
@@ -228,6 +259,122 @@ export class ImageLayer extends Layer implements ImageSource {
       if (file) this.loadFile(file)
     }
     input.click()
+  }
+
+  // Reads the system clipboard for an image and adopts it. Requires a user
+  // gesture (called from the Paste button's click handler) and may prompt
+  // for clipboard-read permission.
+  private async _pasteFromClipboard(): Promise<void> {
+    if (!navigator.clipboard?.read) return
+    try {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith('image/'))
+        if (type === undefined) continue
+        const blob   = await item.getType(type)
+        const bitmap = await createImageBitmap(blob)
+        this._adoptBitmap(bitmap, 'Pasted image')
+        return
+      }
+    } catch {
+      // Permission denied, or nothing image-like on the clipboard — no-op.
+    }
+  }
+
+  // ── Live camera preview + capture ──────────────────────────────
+  //
+  // Tapping "Camera" on the acquire row opens a live preview — replacing
+  // the acquire row with a shutter + flip-camera control — rather than
+  // snapping immediately, so the user can see and frame the shot first.
+
+  private async _startCameraPreview(): Promise<void> {
+    if (this._cameraDevices.length === 0) {
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices()
+        this._cameraDevices = all.filter(d => d.kind === 'videoinput')
+      } catch {
+        // Enumeration unavailable — fall through and request the default camera.
+      }
+    }
+    await this._openCameraStream()
+  }
+
+  private async _openCameraStream(): Promise<void> {
+    this._stopCameraStream()
+    const device = this._cameraDevices[this._cameraDeviceIdx]
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: device?.deviceId ? { deviceId: { exact: device.deviceId } } : true,
+        audio: false,
+      })
+      const video = document.createElement('video')
+      video.playsInline = true
+      video.muted        = true
+      video.srcObject     = stream
+      await video.play()
+      this._cameraStream = stream
+      this._cameraVideo  = video
+      this._cameraMode   = true
+      this.markDirty()
+      void this._refreshCameraDeviceList()
+    } catch {
+      // Permission denied, no camera, or the flip target vanished — fall
+      // back to the acquire row rather than leaving a blank preview.
+      this._cameraMode = false
+      this.markDirty()
+    }
+  }
+
+  // Silent re-enumeration after permission is granted: device labels/ids
+  // are blank pre-permission in most browsers, so the flip button and
+  // device cycling need this to identify cameras properly.
+  private async _refreshCameraDeviceList(): Promise<void> {
+    try {
+      const all  = await navigator.mediaDevices.enumerateDevices()
+      const cams = all.filter(d => d.kind === 'videoinput')
+      if (cams.length === 0) return
+      const curId = this._cameraDevices[this._cameraDeviceIdx]?.deviceId
+      this._cameraDevices = cams
+      if (curId) {
+        const idx = cams.findIndex(d => d.deviceId === curId)
+        if (idx >= 0) this._cameraDeviceIdx = idx
+      }
+      this.markDirty()
+    } catch {
+      // Ignore — keep the existing device list.
+    }
+  }
+
+  private _flipCamera(): void {
+    if (this._cameraDevices.length < 2) return
+    this._cameraDeviceIdx = (this._cameraDeviceIdx + 1) % this._cameraDevices.length
+    void this._openCameraStream()
+  }
+
+  private _stopCameraStream(): void {
+    if (this._cameraStream !== null) {
+      this._cameraStream.getTracks().forEach(t => t.stop())
+      this._cameraStream = null
+    }
+    this._cameraVideo = null
+  }
+
+  private _cancelCameraPreview(): void {
+    this._stopCameraStream()
+    this._cameraMode = false
+    this.markDirty()
+  }
+
+  private async _captureShutter(): Promise<void> {
+    const video = this._cameraVideo
+    if (video === null || video.videoWidth === 0) return
+    const vw = video.videoWidth, vh = video.videoHeight
+    const canvas = new OffscreenCanvas(vw, vh)
+    canvas.getContext('2d')!.drawImage(video, 0, 0, vw, vh)
+    const bitmap = await createImageBitmap(canvas)
+    this._stopCameraStream()
+    this._cameraMode = false
+    this._adoptBitmap(bitmap, 'Camera capture')
   }
 
   setDragOver(v: boolean): void {
@@ -262,6 +409,14 @@ export class ImageLayer extends Layer implements ImageSource {
     }
 
     this._updateOffscreen()
+
+    // Keep recomputing every frame while the live camera preview is active,
+    // so renderSelf (which reads the <video> element directly) stays fresh.
+    if (this._cameraMode) {
+      queueMicrotask(() => {
+        if (this._cameraMode) this.forceDirty()
+      })
+    }
   }
 
   private _updateOffscreen(): void {
@@ -322,65 +477,94 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    // Convenience buttons take priority over handles
-    if (this._convBtnHitTest(point, 'clip')) {
-      this._onAddClip?.()
-      return true
-    }
-    if (this._convBtnHitTest(point, 'filter')) {
-      this._addFilterDone = true
-      this._onAddFilter?.()
-      return true
-    }
+    // Live camera preview replaces the convenience buttons / handles /
+    // acquire row while active — but the opacity slot row below is still
+    // reachable, so this falls through rather than returning early.
+    if (this._cameraMode) {
+      if (this._shutterBtnB !== null && boundingBoxContains(this._shutterBtnB, point)) {
+        void this._captureShutter()
+        return true
+      }
+      if (this._flipBtnB !== null && boundingBoxContains(this._flipBtnB, point)) {
+        this._flipCamera()
+        return true
+      }
+      if (this._cameraCancelBtnB !== null && boundingBoxContains(this._cameraCancelBtnB, point)) {
+        this._cancelCameraPreview()
+        return true
+      }
+    } else {
+      // Convenience buttons take priority over handles
+      if (this._convBtnHitTest(point, 'clip')) {
+        this._onAddClip?.()
+        return true
+      }
+      if (this._convBtnHitTest(point, 'filter')) {
+        this._addFilterDone = true
+        this._onAddFilter?.()
+        return true
+      }
 
-    const hp = this._handlePos()
+      const hp = this._handlePos()
 
-    // Rotate handle — suspends rotationSlot binding (if any) and takes manual control
-    if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
-      if (this._rotationSlot.state === SlotState.Bound) {
-        BindingLayer.findForSlot(this._rotationSlot)?.toggle()
+      // Rotate handle — suspends rotationSlot binding (if any) and takes manual control
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) {
+        if (this._rotationSlot.state === SlotState.Bound) {
+          BindingLayer.findForSlot(this._rotationSlot)?.toggle()
+        }
+        this._rotSnapper.reset()
+        this._drag = {
+          type: 'rotate',
+          center:     { ...this._position },
+          startAngle: Math.atan2(point.y - this._position.y, point.x - this._position.x),
+          startRot:   this._rotation,
+        }
+        return true
       }
-      this._rotSnapper.reset()
-      this._drag = {
-        type: 'rotate',
-        center:     { ...this._position },
-        startAngle: Math.atan2(point.y - this._position.y, point.x - this._position.x),
-        startRot:   this._rotation,
-      }
-      return true
-    }
 
-    // Scale handle — suspends scaleSlot binding (if any) and takes manual control
-    if (ptDist(point, hp.scale) <= HANDLE_HIT) {
-      if (this._scaleSlot.state === SlotState.Bound) {
-        BindingLayer.findForSlot(this._scaleSlot)?.toggle()
+      // Scale handle — suspends scaleSlot binding (if any) and takes manual control
+      if (ptDist(point, hp.scale) <= HANDLE_HIT) {
+        if (this._scaleSlot.state === SlotState.Bound) {
+          BindingLayer.findForSlot(this._scaleSlot)?.toggle()
+        }
+        this._drag = {
+          type:       'scale',
+          center:     { ...this._position },
+          startDist:  Math.max(1, ptDist(point, this._position)),
+          startScale: this._scale,
+        }
+        return true
       }
-      this._drag = {
-        type:       'scale',
-        center:     { ...this._position },
-        startDist:  Math.max(1, ptDist(point, this._position)),
-        startScale: this._scale,
-      }
-      return true
-    }
 
-    // Move handle — suspends positionSlot binding (if any) and takes manual control
-    if (ptDist(point, hp.move) <= HANDLE_HIT) {
-      if (this._positionSlot.state === SlotState.Bound) {
-        BindingLayer.findForSlot(this._positionSlot)?.toggle()
+      // Move handle — suspends positionSlot binding (if any) and takes manual control
+      if (ptDist(point, hp.move) <= HANDLE_HIT) {
+        if (this._positionSlot.state === SlotState.Bound) {
+          BindingLayer.findForSlot(this._positionSlot)?.toggle()
+        }
+        this._drag = {
+          type:       'move',
+          startMouse: { ...point },
+          startPos:   { ...this._position },
+        }
+        return true
       }
-      this._drag = {
-        type:       'move',
-        startMouse: { ...point },
-        startPos:   { ...this._position },
-      }
-      return true
-    }
 
-    // Load button — checked after handles so a handle visually on top of it wins
-    if (boundingBoxContains(this._loadBtnBounds(), point)) {
-      this.openFilePicker()
-      return true
+      // Acquire-image buttons — only present (and only hit-tested) while no
+      // bitmap is loaded; checked after handles so a handle on top always wins.
+      if (this._bitmap === null) {
+        if (this._fileBtnB !== null && boundingBoxContains(this._fileBtnB, point)) {
+          this.openFilePicker()
+          return true
+        }
+        if (this._pasteBtnB !== null && boundingBoxContains(this._pasteBtnB, point)) {
+          void this._pasteFromClipboard()
+          return true
+        }
+        if (this._cameraBtnB !== null && boundingBoxContains(this._cameraBtnB, point)) {
+          void this._startCameraPreview()
+          return true
+        }
+      }
     }
 
     if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
@@ -489,16 +673,29 @@ export class ImageLayer extends Layer implements ImageSource {
   protected override hitTestSelf(point: { x: number; y: number }) {
     // Capture all events while dragging
     if (this._drag !== null) return this
-    // Convenience buttons (drawn over canvas, not clipped)
-    if (this._convBtnHitTest(point, 'clip'))   return this
-    if (this._convBtnHitTest(point, 'filter')) return this
-    // Transform handles take priority over the panel pill
-    const hp = this._handlePos()
-    if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
-    if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
-    if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
-    // Panel strip (load button, etc.)
-    if (boundingBoxContains(this.canvasBounds, point)) return this
+
+    if (this._cameraMode) {
+      // Live preview replaces convenience buttons / handles / acquire row.
+      if (this._shutterBtnB      !== null && boundingBoxContains(this._shutterBtnB,      point)) return this
+      if (this._flipBtnB         !== null && boundingBoxContains(this._flipBtnB,         point)) return this
+      if (this._cameraCancelBtnB !== null && boundingBoxContains(this._cameraCancelBtnB, point)) return this
+    } else {
+      // Convenience buttons (drawn over canvas, not clipped)
+      if (this._convBtnHitTest(point, 'clip'))   return this
+      if (this._convBtnHitTest(point, 'filter')) return this
+      // Transform handles take priority over the panel pill
+      const hp = this._handlePos()
+      if (ptDist(point, hp.move)   <= HANDLE_HIT) return this
+      if (ptDist(point, hp.scale)  <= HANDLE_HIT) return this
+      if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
+      // Acquire-image buttons — only present while no bitmap is loaded.
+      if (this._bitmap === null) {
+        if (this._fileBtnB   !== null && boundingBoxContains(this._fileBtnB,   point)) return this
+        if (this._pasteBtnB  !== null && boundingBoxContains(this._pasteBtnB,  point)) return this
+        if (this._cameraBtnB !== null && boundingBoxContains(this._cameraBtnB, point)) return this
+      }
+    }
+
     if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     return null
   }
@@ -511,88 +708,237 @@ export class ImageLayer extends Layer implements ImageSource {
     this._renderCanvas(ctx)
   }
 
+  // Room for the acquire row / camera controls (if shown) pushes the
+  // standard slot rows down; once a bitmap is loaded there's no panel pill
+  // at all, so rows start right at the top.
+  override get panelBottom(): number {
+    if (this._cameraMode) return 50 + this._cameraRowH() + 8
+    return this._bitmap === null ? 50 + this._acquireRowH() + 8 : 50
+  }
+
   renderPanel(ctx: Ctx2D): void {
-    this._renderPanelImpl(ctx)
+    if (this._cameraMode) this._renderCameraControls(ctx)
+    else if (this._bitmap === null) this._renderAcquireRow(ctx)
   }
 
   override renderOverlay(ctx: Ctx2D): void {
+    if (this._cameraMode) return   // live preview replaces handles + convenience buttons
     this._renderHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
     this._renderConvBtn(ctx, 'clip')
     this._renderConvBtn(ctx, 'filter')
   }
 
-  // ── Stack panel ─────────────────────────────────────────────
+  // ── Acquire-image row (File / Paste / Camera) ────────────────
 
-  private _renderPanelImpl(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
-    if (width <= 0 || height <= 0) return
+  private _bigGridRows(n: number, pillW: number): number {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    return Math.ceil(n / cols)
+  }
 
-    const midY = y + height / 2
+  private _bigGridCells(n: number, pillX: number, pillW: number, top: number): BBox[] {
+    const availCols = Math.max(1, Math.floor((pillW - 2 * LG_MARGIN + LG_GAP) / (LG_SZ + LG_GAP)))
+    const cols = Math.min(availCols, n)
+    const cells: BBox[] = []
+    for (let i = 0; i < n; i++) {
+      const r = Math.floor(i / cols), c = i % cols
+      cells.push({
+        x: pillX + LG_MARGIN + c * (LG_SZ + LG_GAP),
+        y: top  + r * (LG_SZ + LG_GAP),
+        width: LG_SZ, height: LG_SZ,
+      })
+    }
+    return cells
+  }
+
+  private _acquireRowH(): number {
+    const rows = this._bigGridRows(3, panelWidth(Node.canvasWidth))
+    return LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+  }
+
+  private _renderAcquireRow(ctx: Ctx2D): void {
+    const pillX = contentLeft(Node.canvasWidth)
+    const pillW = panelWidth(Node.canvasWidth)
+    if (pillW <= 0) return
+    const h = this._acquireRowH()
 
     ctx.save()
 
-    // Background pill
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.roundRect(pillX, 50, pillW, h, 8)
     ctx.fill()
-
-    // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.roundRect(pillX, 50, 4, h, [4, 0, 0, 4])
     ctx.fill()
 
-    // Filename / placeholder
-    const loadB = this._loadBtnBounds()
-    const textL = x + 12
-    ctx.font         = '11px monospace'
-    ctx.textAlign    = 'left'
+    const cells = this._bigGridCells(3, pillX, pillW, 50 + LG_MARGIN)
+    this._fileBtnB   = cells[0]!
+    this._pasteBtnB  = cells[1]!
+    this._cameraBtnB = cells[2]!
+
+    this._drawBigIconBtn(ctx, this._fileBtnB, 'folder-open', 'File')
+    this._drawBigClipboardBtn(ctx, this._pasteBtnB, 'Paste')
+    this._drawBigIconBtn(ctx, this._cameraBtnB, 'camera', 'Camera')
+
+    ctx.restore()
+  }
+
+  // ── Live camera preview controls (Shutter / Flip / Cancel) ────
+
+  private _cameraRowH(): number {
+    const n = this._cameraDevices.length > 1 ? 2 : 1
+    const rows = this._bigGridRows(n, panelWidth(Node.canvasWidth))
+    return LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+  }
+
+  private _renderCameraControls(ctx: Ctx2D): void {
+    const pillX = contentLeft(Node.canvasWidth)
+    const pillW = panelWidth(Node.canvasWidth)
+    if (pillW <= 0) return
+    const n = this._cameraDevices.length > 1 ? 2 : 1
+    const h = this._cameraRowH()
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(pillX, 50, pillW, h, 8)
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(pillX, 50, 4, h, [4, 0, 0, 4])
+    ctx.fill()
+
+    const cells = this._bigGridCells(n, pillX, pillW, 50 + LG_MARGIN)
+    this._shutterBtnB = cells[0]!
+    this._flipBtnB    = n > 1 ? cells[1]! : null
+
+    this._drawShutterBtn(ctx, this._shutterBtnB)
+    if (this._flipBtnB !== null) this._drawBigIconBtn(ctx, this._flipBtnB, 'swap', 'Flip')
+
+    // Small cancel button — far right of the pill, same row as the grid.
+    const CANCEL_SZ = 28
+    const cancelB: BBox = {
+      x: pillX + pillW - 6 - CANCEL_SZ,
+      y: 50 + (h - CANCEL_SZ) / 2,
+      width: CANCEL_SZ, height: CANCEL_SZ,
+    }
+    this._cameraCancelBtnB = cancelB
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.beginPath()
+    ctx.roundRect(cancelB.x, cancelB.y, CANCEL_SZ, CANCEL_SZ, 4)
+    ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.70)'
+    drawIcon(ctx, 'x', cancelB.x + CANCEL_SZ / 2, cancelB.y + CANCEL_SZ / 2, CANCEL_SZ - 10)
+
+    ctx.restore()
+  }
+
+  // Bright red dished disc, distinct from CaptureLayer's neutral shutter —
+  // this is a one-shot "take the photo now" action, not a persistent
+  // record control.
+  private _drawShutterBtn(ctx: Ctx2D, b: BBox): void {
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height * 0.42
+    const r  = b.width * 0.26
+
+    const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r)
+    grad.addColorStop(0, '#ff6b5e')
+    grad.addColorStop(1, '#d81f1f')
+    ctx.beginPath()
+    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+    ctx.fillStyle = grad
+    ctx.fill()
+    ctx.lineWidth   = 2
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'
+    ctx.stroke()
+
+    ctx.font         = `${Math.max(9, Math.round(b.width * 0.13))}px monospace`
+    ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+    ctx.fillText('Shutter', b.x + b.width / 2, b.y + b.height - Math.max(10, b.height * 0.16))
+    ctx.restore()
+  }
 
-    if (this._bitmap === null) {
-      ctx.fillStyle = 'rgba(255,255,255,0.30)'
-      ctx.fillText('no image loaded', textL, midY)
-    } else {
-      ctx.fillStyle = 'rgba(255,255,255,0.85)'
-      ctx.fillText(this._filename, textL, midY - 6)
-      ctx.fillStyle = 'rgba(255,255,255,0.45)'
-      ctx.font      = '10px monospace'
-      ctx.fillText(`${this._natW} × ${this._natH}`, textL, midY + 6)
-    }
+  private _drawBigIconBtn(ctx: Ctx2D, b: BBox, icon: IconName, label: string): void {
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.fillStyle = 'rgba(255,255,255,0.75)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height * 0.40, Math.round(b.width * 0.40))
+    ctx.font         = `${Math.max(9, Math.round(b.width * 0.13))}px monospace`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.60)'
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height - Math.max(10, b.height * 0.16))
+    ctx.restore()
+  }
 
-    // Slot indicators — pos / α / sc / rot
-    const slots = [
-      { slot: this._positionSlot, label: 'pos', accent: ACCENT },
-      { slot: this._opacitySlot,  label: 'α',   accent: ACCENT },
-      { slot: this._scaleSlot,    label: 'sc',  accent: ACCENT },
-      { slot: this._rotationSlot, label: 'rot', accent: DIR_ACCENT },
-    ]
-    let dx = loadB.x - 6
-    ctx.font = '9px monospace'
-    for (let i = slots.length - 1; i >= 0; i--) {
-      const { slot, label, accent } = slots[i]!
-      const active = slot.isActive
-      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 6
-    }
+  // No dedicated Phosphor icon exists for "paste" — hand-drawn clipboard
+  // glyph, matching the bespoke-icon convention used elsewhere (e.g.
+  // CaptureLayer's edit/stack/share icons).
+  private _drawBigClipboardBtn(ctx: Ctx2D, b: BBox, label: string): void {
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
 
-    // [📁] load button
-    this._drawBtn(ctx, loadB, 'rgba(255,255,255,0.75)')
+    const cx = b.x + b.width / 2
+    const cy = b.y + b.height * 0.38
+    const bw = b.width * 0.34
+    const bh = b.width * 0.42
+    const colour = 'rgba(255,255,255,0.75)'
 
+    ctx.strokeStyle = colour
+    ctx.fillStyle   = colour
+    ctx.lineWidth   = Math.max(1.5, b.width * 0.03)
+    ctx.beginPath()
+    ctx.roundRect(cx - bw / 2, cy - bh / 2, bw, bh, 3)
+    ctx.stroke()
+
+    // Clip tab at the top edge
+    const tw = bw * 0.5, th = bh * 0.16
+    ctx.beginPath()
+    ctx.roundRect(cx - tw / 2, cy - bh / 2 - th * 0.6, tw, th, 2)
+    ctx.fill()
+
+    // Two lines suggesting text/image content
+    ctx.beginPath()
+    ctx.moveTo(cx - bw * 0.28, cy - bh * 0.05)
+    ctx.lineTo(cx + bw * 0.28, cy - bh * 0.05)
+    ctx.moveTo(cx - bw * 0.28, cy + bh * 0.20)
+    ctx.lineTo(cx + bw * 0.10, cy + bh * 0.20)
+    ctx.stroke()
+
+    ctx.font         = `${Math.max(9, Math.round(b.width * 0.13))}px monospace`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.60)'
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height - Math.max(10, b.height * 0.16))
     ctx.restore()
   }
 
   // ── Canvas image ─────────────────────────────────────────────
 
   private _renderCanvas(ctx: Ctx2D): void {
+    if (this._cameraMode) {
+      this._renderCameraPreview(ctx)
+      return
+    }
+
     const { x: px, y: py } = this._position
 
     ctx.save()
@@ -641,6 +987,19 @@ export class ImageLayer extends Layer implements ImageSource {
       ctx.fillText('Drop image here', cw / 2, ch / 2)
       ctx.restore()
     }
+  }
+
+  // Live feed, letterboxed to fit the canvas — drawn straight from the
+  // <video> element every frame; no offscreen buffering is needed since
+  // this never feeds getImage() (the bitmap stays null until captured).
+  private _renderCameraPreview(ctx: Ctx2D): void {
+    const video = this._cameraVideo
+    if (video === null || video.videoWidth === 0) return
+    const vw = video.videoWidth, vh = video.videoHeight
+    const cw = Node.canvasWidth, ch = Node.canvasHeight
+    const scale = Math.min(cw / vw, ch / vh)
+    const dw = vw * scale, dh = vh * scale
+    ctx.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
   }
 
   // ── Transform handles ────────────────────────────────────────
@@ -751,28 +1110,6 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.strokeStyle = 'rgba(0,0,0,0.65)'
     ctx.lineWidth   = 1.5
     ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2)
-  }
-
-  // ----------------------------------------------------------
-  // Private helpers
-  // ----------------------------------------------------------
-
-  private _loadBtnBounds() {
-    const { x, y, width, height } = this.canvasBounds
-    return { x: x + width - BTN_M - BTN, y: y + (height - BTN) / 2, width: BTN, height: BTN }
-  }
-
-  private _drawBtn(
-    ctx: Ctx2D,
-    b: { x: number; y: number; width: number; height: number },
-    colour: string,
-  ): void {
-    ctx.fillStyle = 'rgba(255,255,255,0.08)'
-    ctx.beginPath()
-    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
-    ctx.fill()
-    ctx.fillStyle = colour
-    drawIcon(ctx, 'folder-open', b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
 
   // ----------------------------------------------------------

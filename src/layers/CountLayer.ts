@@ -26,20 +26,32 @@ import { drawIcon } from '../ui/icons.js'
 //
 // A [↺] reset button always zeros the counter.
 //
-// Visual layout:
+// The canvas-space pill uses big buttons (same size/style as TextLayer's
+// edit/size row): [−] and [+] lead at the left with the count between them,
+// [↺] reset sits at the right edge. The widget-column strip (this.bounds)
+// keeps the original small layout below — it's non-interactive (hit-testing
+// only ever looks at the canvas-space pill) and normally hidden behind the
+// StackWidget, so it doesn't need enlarging.
 //
 //   ┌──────────────────────────────────────────────────────┐
-//   │ ▌  [−]   42   [+]                              [↺]  │
+//   │ ▌  [ − ]     42     [ + ]                      [ ↺ ] │
 //   └──────────────────────────────────────────────────────┘
-//
-// Height should be 36 px (same as AmountLayer).
 
 const ACCENT = '#a0a0a0'   // Count type colour
 
-// Button geometry
+// Small strip-pill button geometry (widget-column strip only).
 const BTN   = 24   // button size in px
 const BTN_M = 6    // margin from right edge
 const BTN_G = 6    // gap between buttons
+
+// Big canvas-space buttons — same target size as TextLayer's edit/size row.
+const BIG_SZ      = 48   // target square size
+const BIG_MIN     = 36   // floor when the panel is narrow
+const BIG_GAP     = 6
+const BIG_MARGIN  = 8
+const BIG_VALUE_W = 40   // width reserved for the count value between −/+
+
+type BBox = { x: number; y: number; width: number; height: number }
 
 export class CountLayer extends Layer implements CountSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Count])
@@ -51,7 +63,6 @@ export class CountLayer extends Layer implements CountSource {
 
   // Last seen event timestamp — used to detect new pulses.
   private _lastEventTime: EventValue = null
-  private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
 
   constructor(initial: Count = 0) {
     super()
@@ -74,6 +85,18 @@ export class CountLayer extends Layer implements CountSource {
   // ----------------------------------------------------------
 
   get eventSlot(): ParameterSlot { return this._eventSlot }
+
+  // Canvas-space pill is taller than the default strip height, to fit the
+  // big −/+/reset buttons. Independent of `this.bounds.height` (the
+  // widget-column strip, which keeps its own small layout — see _drawPill).
+  override get canvasBounds(): { x: number; y: number; width: number; height: number } {
+    const base = super.canvasBounds
+    return { ...base, height: BIG_MARGIN * 2 + this._bigSquareSize(base.width) }
+  }
+
+  override get panelBottom(): number {
+    return 50 + this.canvasBounds.height + 8
+  }
 
   // ----------------------------------------------------------
   // Controls
@@ -128,16 +151,15 @@ export class CountLayer extends Layer implements CountSource {
   // ----------------------------------------------------------
 
   handlePointerDown(point: Point): boolean {
-    const b = this._cpBounds ?? this.bounds
-    if (boundingBoxContains(this._decrBtnBounds(b), point)) {
+    if (boundingBoxContains(this._bigDecrBtnBounds(), point)) {
       this.decrement()
       return true
     }
-    if (boundingBoxContains(this._incrBtnBounds(b), point)) {
+    if (boundingBoxContains(this._bigIncrBtnBounds(), point)) {
       this.increment()
       return true
     }
-    if (boundingBoxContains(this._resetBtnBounds(b), point)) {
+    if (boundingBoxContains(this._bigResetBtnBounds(), point)) {
       this.reset()
       return true
     }
@@ -145,8 +167,7 @@ export class CountLayer extends Layer implements CountSource {
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
-    return (this._cpBounds && boundingBoxContains(this._cpBounds, point))
-      ? this : null
+    return boundingBoxContains(this.canvasBounds, point) ? this : null
   }
 
   // ----------------------------------------------------------
@@ -156,9 +177,7 @@ export class CountLayer extends Layer implements CountSource {
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
     this._drawPill(ctx, this.bounds)
-    const cp = this.canvasBounds
-    this._cpBounds = cp
-    this._drawPill(ctx, cp)
+    this._drawBigPill(ctx, this.canvasBounds)
   }
 
   private _drawPill(ctx: Ctx2D, b: { x: number; y: number; width: number; height: number }): void {
@@ -204,8 +223,93 @@ export class CountLayer extends Layer implements CountSource {
     ctx.restore()
   }
 
+  // ── Canvas-space pill — big buttons ─────────────────────────
+
+  private _drawBigPill(ctx: Ctx2D, b: BBox): void {
+    const { x, y, width, height } = b
+    if (width <= 0 || height <= 0) return
+
+    ctx.save()
+
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath()
+    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
+    ctx.fill()
+    ctx.fillStyle = ACCENT
+    ctx.beginPath()
+    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
+    ctx.fill()
+
+    const decrB  = this._bigDecrBtnBounds()
+    const incrB  = this._bigIncrBtnBounds()
+    const resetB = this._bigResetBtnBounds()
+
+    this._drawBigGlyphBtn(ctx, decrB, '−',
+      this._count > 0 ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.30)')
+    this._drawBigGlyphBtn(ctx, incrB, '+', 'rgba(255,255,255,0.85)')
+
+    // Count value — centred between the two stepper buttons
+    const valCx = decrB.x + decrB.width + (incrB.x - decrB.x - decrB.width) / 2
+    ctx.font         = `${Math.max(12, Math.round(decrB.height * 0.32))}px monospace`
+    ctx.fillStyle    = this._eventSlot.isActive
+      ? 'rgba(160,160,160,0.95)'
+      : 'rgba(255,255,255,0.90)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(String(this._count), valCx, decrB.y + decrB.height / 2)
+
+    this._drawBigIconBtn(ctx, resetB, 'rgba(255,255,255,0.65)')
+
+    ctx.restore()
+  }
+
+  private _drawBigGlyphBtn(ctx: Ctx2D, b: BBox, glyph: string, colour: string): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.font         = `${Math.max(16, Math.round(b.height * 0.5))}px monospace`
+    ctx.fillStyle    = colour
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(glyph, b.x + b.width / 2, b.y + b.height / 2)
+  }
+
+  private _drawBigIconBtn(ctx: Ctx2D, b: BBox, colour: string): void {
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.fillStyle = colour
+    drawIcon(ctx, 'arrow-counter-clockwise', b.x + b.width / 2, b.y + b.height / 2, Math.round(Math.min(b.width, b.height) * 0.5))
+  }
+
+  // Square size for the big buttons — shrinks to BIG_MIN on narrow panels
+  // rather than wrapping, same tradeoff as TextLayer's edit/size row.
+  private _bigSquareSize(pillWidth: number): number {
+    const available = pillWidth - 2 * BIG_MARGIN - BIG_GAP - BIG_VALUE_W
+    return Math.max(BIG_MIN, Math.min(BIG_SZ, Math.floor(available / 3)))
+  }
+
+  private _bigDecrBtnBounds(): BBox {
+    const cb = this.canvasBounds
+    const sq = this._bigSquareSize(cb.width)
+    return { x: cb.x + BIG_MARGIN, y: cb.y + (cb.height - sq) / 2, width: sq, height: sq }
+  }
+
+  private _bigIncrBtnBounds(): BBox {
+    const db = this._bigDecrBtnBounds()
+    return { x: db.x + db.width + BIG_GAP + BIG_VALUE_W, y: db.y, width: db.width, height: db.height }
+  }
+
+  private _bigResetBtnBounds(): BBox {
+    const cb = this.canvasBounds
+    const sq = this._bigSquareSize(cb.width)
+    return { x: cb.x + cb.width - BIG_MARGIN - sq, y: cb.y + (cb.height - sq) / 2, width: sq, height: sq }
+  }
+
   // ----------------------------------------------------------
-  // Private helpers
+  // Private helpers — small widget-column strip only
   // ----------------------------------------------------------
 
   private _drawBtn(
