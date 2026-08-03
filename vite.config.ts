@@ -13,6 +13,8 @@ export default defineConfig({
     keepNames: true,
   },
   server: {
+    port: 5173,
+    strictPort: true,
     headers: {
       // Required if SharedArrayBuffer is ever needed; harmless otherwise
       'Cross-Origin-Opener-Policy': 'same-origin',
