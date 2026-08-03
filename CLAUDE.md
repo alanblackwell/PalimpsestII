@@ -319,6 +319,66 @@ order — but invisible: no `LayerStackWidget` thumbnail, and
   never into the stack); the mask-tracker `MaskLayer` below each
   `Clip<Shape>` layer (next section).
 
+### Feedback slots — permitting a well-defined cycle
+
+`ParameterSlot`'s 4th constructor arg (`feedback: boolean`, default `false`)
+marks a slot whose binding is allowed to close a cycle in the dependency
+graph. Two effects, both in `Node.ts`/`Graph.ts`:
+
+- `Node.evaluate()` skips feedback slots in its eager "pull dependencies
+  first" walk (`if (slot.isActive && !slot.feedback) slot.source!.evaluate()`),
+  so the consumer reads whatever value the source last computed (on its own
+  schedule elsewhere in the tree — stack position or `BackgroundLayer`) rather
+  than forcing a fresh, potentially re-entrant evaluation. This is what
+  prevents infinite recursion in `evaluate()` once a cycle exists.
+- `Graph.bind()` skips the reachability/cycle check entirely for feedback
+  slots (self-binding is still always rejected). This matters because the
+  check only ever looks at *existing* regular edges — marking a slot
+  `feedback` doesn't help if the other edges in the loop were bound first and
+  already make the source reachable, so the exemption has to apply at bind
+  time, not just to future BFS walks past an edge that's already there.
+- `Node.forceDirty()` (used by self-perpetuating layers, see below) forces
+  only `this`; propagation to dependents goes through the guarded
+  `markDirty()` (`if (this._dirty) return`), not another `forceDirty()` — so
+  a cyclic dependent graph can't recurse forever there either.
+
+Canonical use: `FlashLayer.triggerSlot` (Event, feedback) lets a flash's own
+implied repetition tempo (see next section) drive a repeating `EventLayer`
+that retriggers the same flash — `Flash → TempoLayer.rateSlot → TempoLayer
+(phase) → EventLayer.rateSlot → EventLayer (event) → Flash.triggerSlot`. The
+flash's *output* (`getRate()`) only depends on its `lengthSlot`, never on
+whether it's currently flashing, so the loop is value-safe; the feedback flag
+just gives it a well-defined one-frame delay instead of infinite recursion.
+`EventLayer`'s `imageASlot`/`imageBSlot` are the original feedback-slot
+precedent (collision detection feeding back into the images being watched).
+
+### Rate → phase adapter (`tryBindRateIntoPhase`) and `adapterCompatible`
+
+`AnimPathLayer.phaseSlot` and `RotateLayer.phaseSlot` are `Amount`-typed
+(a cycling `[0,1)` phase, not a raw Hz value) but every new instance already
+gets an auto-created hidden `TempoLayer` bound there (`createHiddenRate` /
+`ensurePhaseSource` in `main.ts`) — so a `Rate`-only source (e.g.
+`FlashLayer`, via its tempo-from-length output) can't bind to `phaseSlot`
+directly, but there's almost always a `TempoLayer` already sitting there to
+redirect into.
+
+- `TempoLayer` has a `rateSlot` (`Rate`) that overrides its internal Hz
+  slider when bound (suspend-on-touch, like any other manual/slot pair).
+- `interaction.setBoundCallback` in `main.ts` calls
+  `tryBindRateIntoPhase(source, slot)` before the normal
+  `BindingLayer.create`: if the drop target is a `phaseSlot` and the source
+  produces `Rate` but not `Amount`, it finds (or creates via
+  `createHiddenRate`) the hidden `TempoLayer` driving that phase and binds
+  the source into *its* `rateSlot` instead of `phaseSlot` itself.
+- `Layer.adapterCompatible(slot, sourceTypes)` (default `false`, overridden
+  by `AnimPathLayer`/`RotateLayer`) is the display-side counterpart:
+  `renderSlotGroup` (and `AnimPathLayer`'s bespoke phase-row rendering, which
+  doesn't go through `renderSlotGroup`) checks it to highlight an
+  otherwise-incompatible drop target **amber** (`"drop to convert"`) instead
+  of green, so the adapter path is visible during drag rather than just
+  silently rejecting the drop. Keep the two conditions in sync when adding a
+  new adapter case.
+
 ### `Clip<Shape>` layer family
 
 `ClipRectLayer`, `ClipEllipseLayer`, `ClipPathLayer`, `ClipTextLayer`, and

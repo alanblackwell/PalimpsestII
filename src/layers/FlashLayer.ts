@@ -2,31 +2,50 @@ import { Layer }         from '../core/Layer.js'
 import { Node }          from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   boundingBoxContains,
   type EventValue, type EventSource,
   type ImageValue, type ImageSource,
+  type Amount, type AmountSource,
+  type Rate, type RateSource,
   type Point, type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { EventLayer }    from './EventLayer.js'
 import { drawIcon }      from '../ui/icons.js'
+import { SliderSlot }    from '../ui/SliderSlot.js'
 
 // ------------------------------------------------------------
 // FlashLayer — brief image burst triggered by an event
 // ------------------------------------------------------------
 //
 // Inputs:
-//   triggerSlot (Event) — each new event starts a flash
-//   imageSlot   (Image) — content rendered during the flash
+//   triggerSlot (Event)  — each new event starts a flash. Declared as a
+//                          feedback slot (see ParameterSlot.feedback) so
+//                          that the tempo-from-length → repeating-event →
+//                          retrigger-the-flash loop (bind an EventLayer
+//                          driven by this layer's own Rate output back into
+//                          triggerSlot) is a well-defined, one-frame-delayed
+//                          cycle rather than infinite recursion: Flash reads
+//                          the trigger source's cached value instead of
+//                          eagerly pulling a fresh evaluation of it, and
+//                          Graph.bind() exempts feedback slots from the
+//                          reachability cycle check so the closing edge can
+//                          actually be created.
+//   imageSlot   (Image)  — content rendered during the flash
+//   lengthSlot  (Amount) — flash duration, logarithmic [0, 1] → 16 ms … 4 s
+//                          (SliderSlot row, standard suspend-on-touch)
 //
 // Output:
 //   EventSource — slow mode only: two events per flash
 //                 (one at start, one at end) suitable for toggle effects
+//   RateSource  — the repetition rate (Hz) implied by the current
+//                 length, i.e. the tempo of a flash repeated back-to-back
+//                 at that interval
 //
-// Duration slider — logarithmic, 16 ms … 4 000 ms.
-// The slider is divided into two zones at ~200 ms:
+// Duration — logarithmic, 16 ms … 4 000 ms, split into two zones at
+// ~200 ms:
 //
 //   Fast (< 200 ms): renders image locally for the flash duration,
 //     then removes it.  No output events — propagation overhead
@@ -36,63 +55,99 @@ import { drawIcon }      from '../ui/icons.js'
 //     event after the duration.  These two events are ideal for
 //     driving toggle parameters on other layers.
 //
-// A mode badge (FAST / SLOW) and the duration value are shown in
-// the pill.  The dividing line on the slider track shows the
-// threshold visually.
+// Big-button row: a Trigger button (fires the flash directly, same
+// as binding+firing the trigger slot's EventLayer) plus Frame/Pulse
+// preset buttons. Frame sets length to a single frame (20 ms); Pulse
+// sets it to the lowest value of the slow range (200 ms). Whichever
+// zone the current length falls in is highlighted, mirroring the
+// draw/erase mode-button highlight on MaskLayer. Pressing either
+// while lengthSlot is bound suspends the binding first (standard
+// suspend-on-touch).
 
 const ACCENT       = '#e0e060'          // Event type colour
-const MIN_DUR_MS   = 16                 // shortest flash: one frame at 60 fps
-const MAX_DUR_MS   = 4000               // longest flash: 4 s
-const TRIG_W       = 22                 // trigger button width in the pill
+const AM_COL       = '#4a8fe8'          // Amount type colour (length slider)
+const MIN_DUR_MS    = 16                // shortest flash: one frame at 60 fps
+const MAX_DUR_MS    = 4000              // longest flash: 4 s
 
 // Param value at which fast mode transitions to slow mode.
 // Derived: log(200/16) / log(4000/16) ≈ 0.457
 const FAST_THRESH  = Math.log(200 / MIN_DUR_MS) / Math.log(MAX_DUR_MS / MIN_DUR_MS)
 
+// Preset param values for the Frame/Pulse buttons.
+const FRAME_PARAM  = Math.log(20 / MIN_DUR_MS) / Math.log(MAX_DUR_MS / MIN_DUR_MS)   // single frame, 20 ms
+const PULSE_PARAM  = FAST_THRESH                                                     // lowest "slow" value, 200 ms
+
+// Big-button row geometry (Trigger / Frame / Pulse).
+const BTN_H       = 52
+const BTN_GAP     = 8
+const BTN_MARGIN  = 10
+const HDR_H       = BTN_MARGIN * 2 + BTN_H
+
+// Length SliderSlot row (below the button row).
+const ROW_H   = 30   // must match Layer.renderSlotGroup's row height
+const ROW_PAD = 3
+
 type BBox = { x: number; y: number; width: number; height: number }
 
-export class FlashLayer extends Layer implements EventSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Event])
+export class FlashLayer extends Layer implements EventSource, RateSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Event, ValueType.Rate])
 
   readonly triggerSlot: ParameterSlot
   readonly imageSlot:   ParameterSlot
+  readonly lengthSlot:  ParameterSlot
 
-  private _durationParam:    number     = 0.30       // [0, 1] slider position
-  private _currentEventTime: EventValue = null        // slow-mode output
-  private _lastSeenTrigger:  EventValue = null
-  private _flashStart:       number | null = null     // wall time (ms)
-  private _flashEndTime:     number     = 0
-  private _timeoutId:        ReturnType<typeof setTimeout> | null = null
+  private _length:            number     = 0.30       // [0, 1] manual fallback for lengthSlot
+  private _currentEventTime:  EventValue = null        // slow-mode output
+  private _lastSeenTrigger:   EventValue = null
+  private _flashStart:        number | null = null     // wall time (ms)
+  private _flashEndTime:      number     = 0
+  private _timeoutId:         ReturnType<typeof setTimeout> | null = null
 
-  private _dragSlider  = false
-  private _trackBounds:  BBox | null = null
-  private _trigBtnBounds: BBox | null = null
+  private readonly _lengthWidget: SliderSlot
 
   constructor() {
     super()
-    this.triggerSlot = new ParameterSlot(ValueType.Event, this, 'trigger')
-    this.imageSlot   = new ParameterSlot(ValueType.Image, this, 'image')
-    this.slots.push(this.triggerSlot, this.imageSlot)
+    this.triggerSlot = new ParameterSlot(ValueType.Event,  this, 'trigger', true)
+    this.imageSlot   = new ParameterSlot(ValueType.Image,  this, 'image')
+    this.lengthSlot  = new ParameterSlot(ValueType.Amount, this, 'length')
+    this.slots.push(this.triggerSlot, this.imageSlot, this.lengthSlot)
     this.debugName = 'Flash'
+    this._lengthWidget = new SliderSlot(
+      this.lengthSlot, 'length', AM_COL,
+      () => this._lengthValue,
+      v => {
+        if (this.lengthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.lengthSlot)?.toggle()
+        this._length = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
     graph.register(this)
   }
 
   // ----------------------------------------------------------
-  // EventSource
+  // EventSource + RateSource
   // ----------------------------------------------------------
 
   getEventTime(): EventValue { return this._currentEventTime }
+  getRate():      Rate       { return 1000 / this._durationMs }
 
   // ----------------------------------------------------------
   // Derived state
   // ----------------------------------------------------------
 
+  private get _lengthValue(): number {
+    return this.lengthSlot.isActive
+      ? Math.max(0, Math.min(1, (this.lengthSlot.source as AmountSource).getAmount() as Amount))
+      : this._length
+  }
+
   private get _durationMs(): number {
-    return MIN_DUR_MS * Math.pow(MAX_DUR_MS / MIN_DUR_MS, this._durationParam)
+    return MIN_DUR_MS * Math.pow(MAX_DUR_MS / MIN_DUR_MS, this._lengthValue)
   }
 
   private get _isFast(): boolean {
-    return this._durationParam < FAST_THRESH
+    return this._lengthValue < FAST_THRESH
   }
 
   // ----------------------------------------------------------
@@ -100,11 +155,16 @@ export class FlashLayer extends Layer implements EventSource {
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { durationParam: this._durationParam }
+    return { durationParam: this._length }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
-    if (typeof state.durationParam === 'number') this._durationParam = state.durationParam
+    if (typeof state.durationParam === 'number') this._length = state.durationParam
+  }
+
+  override getSlotDefault(slot: ParameterSlot): number | null {
+    if (slot === this.lengthSlot) return this._length
+    return null
   }
 
   // ----------------------------------------------------------
@@ -133,10 +193,10 @@ export class FlashLayer extends Layer implements EventSource {
       }
     }
 
-    // Keep frames running during any flash so the progress bar animates and
-    // fast-mode expiry is detected. markDirty() inside recompute() is a no-op
-    // because _dirty is still true at that point; queueMicrotask fires after
-    // evaluate() clears _dirty, so the next rAF finds the node dirty again.
+    // Keep frames running during any flash so fast-mode expiry is detected.
+    // markDirty() inside recompute() is a no-op because _dirty is still true
+    // at that point; queueMicrotask fires after evaluate() clears _dirty, so
+    // the next rAF finds the node dirty again.
     if (this._flashStart !== null) {
       if (this._isFast && performance.now() >= this._flashEndTime) {
         this._flashStart = null
@@ -193,156 +253,96 @@ export class FlashLayer extends Layer implements EventSource {
     ctx.drawImage(img as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
   }
 
-  renderPanel(ctx: Ctx2D): void {
-    const { x, y, width: w, height: h } = this.canvasBounds
-    if (w <= 0 || h <= 0) return
-    this._drawPill(ctx, x, y, w, h)
+  override get canvasBounds() {
+    return { ...super.canvasBounds, height: HDR_H }
   }
 
-  private _drawPill(ctx: Ctx2D, x: number, y: number, w: number, h: number): void {
-    const midY   = y + h / 2
-    const isFast = this._isFast
-    const dur    = this._durationMs
-    const durStr = dur < 1000 ? `${Math.round(dur)} ms` : `${(dur / 1000).toFixed(1)} s`
+  override get panelBottom(): number {
+    return 50 + HDR_H + 8
+  }
 
-    // Layout constants
-    const LABEL_W  = 52   // "Flash" label area
-    const TRIG_GAP = 4    // gap between label and trigger button
-    const MODE_W   = 40   // "FAST"/"SLOW" badge
-    const VAL_W    = 46   // duration text
-    const TRACK_PL = 8    // left padding before track
-    const TRACK_PR = 8    // right padding after track
-
-    const trigBtnH = h - 10
-    const trigBtnX = x + 4 + LABEL_W + TRIG_GAP
-    const trigBtnY = y + 5
-    this._trigBtnBounds = { x: trigBtnX, y: trigBtnY, width: TRIG_W, height: trigBtnH }
-
-    const trackX = x + 4 + LABEL_W + TRIG_GAP + TRIG_W + TRACK_PL
-    const trackW = w - 4 - LABEL_W - TRIG_GAP - TRIG_W - TRACK_PL - TRACK_PR - MODE_W - VAL_W - 6
-    const trackH = 5
-    const trackY = midY - Math.floor(trackH / 2)
-
-    this._trackBounds = { x: trackX, y, width: trackW, height: h }
-
-    const threshX = trackX + FAST_THRESH * trackW
-    const thumbX  = trackX + this._durationParam * trackW
+  renderPanel(ctx: Ctx2D): void {
+    const cb = this.canvasBounds
+    if (cb.width <= 0 || cb.height <= 0) return
 
     ctx.save()
 
     // Pill background
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
     ctx.beginPath()
-    ctx.roundRect(x, y, w, h, Math.min(h / 2, 8))
+    ctx.roundRect(cb.x, cb.y, cb.width, cb.height, 8)
     ctx.fill()
 
     // Accent stripe
     ctx.fillStyle = ACCENT
     ctx.beginPath()
-    ctx.roundRect(x, y, 4, h, [4, 0, 0, 4])
+    ctx.roundRect(cb.x, cb.y, 4, cb.height, [4, 0, 0, 4])
     ctx.fill()
 
-    // "Flash" label
-    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
-    ctx.font         = '11px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText('Flash', x + 12, midY)
-
-    // Trigger button — fires a hidden EventLayer on click
-    ctx.fillStyle = 'rgba(224,224,96,0.15)'
-    ctx.beginPath()
-    ctx.roundRect(trigBtnX, trigBtnY, TRIG_W, trigBtnH, 4)
-    ctx.fill()
-    ctx.fillStyle = ACCENT
-    drawIcon(ctx, 'lightning', trigBtnX + TRIG_W / 2, trigBtnY + trigBtnH / 2, trigBtnH - 4)
-
-    // Slider track — fast zone (blue-tinted, left) and slow zone (amber, right)
-    ctx.fillStyle = 'rgba(100,180,255,0.22)'
-    ctx.beginPath()
-    ctx.roundRect(trackX, trackY, threshX - trackX, trackH, [3, 0, 0, 3])
-    ctx.fill()
-
-    ctx.fillStyle = 'rgba(232,160,74,0.22)'
-    ctx.beginPath()
-    ctx.roundRect(threshX, trackY, trackX + trackW - threshX, trackH, [0, 3, 3, 0])
-    ctx.fill()
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.18)'
-    ctx.lineWidth   = 1
-    ctx.beginPath()
-    ctx.roundRect(trackX + 0.5, trackY + 0.5, trackW - 1, trackH - 1, 3)
-    ctx.stroke()
-
-    // Threshold divider
-    ctx.strokeStyle = 'rgba(255,255,255,0.35)'
-    ctx.lineWidth   = 1
-    ctx.setLineDash([2, 2])
-    ctx.beginPath()
-    ctx.moveTo(threshX, y + 7)
-    ctx.lineTo(threshX, y + h - 7)
-    ctx.stroke()
-    ctx.setLineDash([])
-
-    // Thumb
-    const thumbColour = isFast ? '#64b4ff' : ACCENT
-    ctx.shadowColor = thumbColour
-    ctx.shadowBlur  = 7
-    ctx.fillStyle   = thumbColour
-    ctx.beginPath()
-    ctx.arc(thumbX, midY, 5, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.shadowBlur  = 0
-
-    // Progress bar above the track — grows from left toward the thumb,
-    // using the same logarithmic mapping as the slider scale.
-    if (this._flashStart !== null) {
-      const elapsed      = Math.max(1, performance.now() - this._flashStart)
-      const logScale     = Math.log(MAX_DUR_MS / MIN_DUR_MS)
-      const progressParam = Math.min(
-        this._durationParam,
-        Math.max(0, Math.log(elapsed / MIN_DUR_MS) / logScale),
-      )
-      const barW = progressParam * trackW
-      if (barW > 0) {
-        const barY = trackY - 4
-        ctx.fillStyle = isFast ? 'rgba(100,180,255,0.80)' : ACCENT + 'cc'
-        ctx.beginPath()
-        ctx.roundRect(trackX, barY, barW, 3, 2)
-        ctx.fill()
-      }
-    }
-
-    // Mode badge
-    const badgeX = trackX + trackW + TRACK_PR
-    const badgeH = h - 12
-    const badgeY = y + 6
-    ctx.fillStyle = isFast ? 'rgba(100,180,255,0.20)' : 'rgba(232,160,74,0.20)'
-    ctx.beginPath()
-    ctx.roundRect(badgeX, badgeY, MODE_W, badgeH, 3)
-    ctx.fill()
-    ctx.fillStyle    = isFast ? '#64b4ff' : ACCENT
-    ctx.font         = 'bold 9px monospace'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(isFast ? 'FAST' : 'SLOW', badgeX + MODE_W / 2, midY)
-
-    // Duration value
-    ctx.fillStyle    = 'rgba(255,255,255,0.55)'
-    ctx.font         = '9px monospace'
-    ctx.textAlign    = 'right'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(durStr, x + w - 4, midY)
-
-    // Active flash indicator — bright dot on accent stripe
-    if (this._flashStart !== null) {
-      ctx.fillStyle = '#ffffff'
-      ctx.beginPath()
-      ctx.arc(x + 2, midY, 2.5, 0, Math.PI * 2)
-      ctx.fill()
-    }
+    const isFast = this._isFast
+    this._drawTriggerBtn(ctx, this._triggerBtnBounds())
+    this._drawModeBtn(ctx, this._frameBtnBounds(), 'Frame', isFast)
+    this._drawModeBtn(ctx, this._pulseBtnBounds(), 'Pulse', !isFast)
 
     ctx.restore()
+  }
+
+  private _drawTriggerBtn(ctx: Ctx2D, b: BBox): void {
+    const flashing = this._flashStart !== null
+    ctx.fillStyle = flashing ? ACCENT + '33' : 'rgba(255,255,255,0.07)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    ctx.strokeStyle = flashing ? ACCENT : 'rgba(255,255,255,0.25)'
+    ctx.lineWidth   = flashing ? 1.5 : 1
+    ctx.beginPath()
+    ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 6)
+    ctx.stroke()
+    ctx.fillStyle = ACCENT
+    drawIcon(ctx, 'lightning', b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 16)
+  }
+
+  private _drawModeBtn(ctx: Ctx2D, b: BBox, label: string, active: boolean): void {
+    ctx.fillStyle = active ? AM_COL + '22' : 'rgba(255,255,255,0.07)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+    if (active) {
+      ctx.strokeStyle = AM_COL
+      ctx.lineWidth   = 1.5
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 6)
+      ctx.stroke()
+    }
+    ctx.fillStyle    = active ? AM_COL : 'rgba(255,255,255,0.55)'
+    ctx.font         = '11px monospace'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2)
+  }
+
+  // ----------------------------------------------------------
+  // Slot rendering — length SliderSlot row, then standard trigger/image rows
+  // ----------------------------------------------------------
+
+  override renderSlots(ctx: Ctx2D): void {
+    this._slotBounds.clear()
+    const cb    = this.canvasBounds
+    const px    = cb.x, py = this.panelBottom, pw = cb.width
+    const pillH = ROW_H + 2 * ROW_PAD
+
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'
+    ctx.beginPath(); ctx.roundRect(px, py, pw, pillH, 6); ctx.fill()
+    ctx.fillStyle = AM_COL
+    ctx.beginPath(); ctx.roundRect(px, py, 4, pillH, [4, 0, 0, 4]); ctx.fill()
+    ctx.restore()
+
+    const lengthRow = this._lengthRow()
+    this._slotBounds.set(this.lengthSlot, lengthRow)
+    this._lengthWidget.render(ctx, lengthRow)
+
+    this.renderSlotGroup(ctx, [this.triggerSlot, this.imageSlot], py + pillH + 8)
   }
 
   // ----------------------------------------------------------
@@ -375,43 +375,68 @@ export class FlashLayer extends Layer implements EventSource {
   }
 
   // ----------------------------------------------------------
+  // Frame / Pulse presets
+  // ----------------------------------------------------------
+
+  private _applyPreset(param: number): void {
+    if (this.lengthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.lengthSlot)?.toggle()
+    this._length = param
+    this.markDirty()
+  }
+
+  private _setFrame(): void { this._applyPreset(FRAME_PARAM) }
+  private _setPulse(): void { this._applyPreset(PULSE_PARAM) }
+
+  // ----------------------------------------------------------
   // Interaction
   // ----------------------------------------------------------
 
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): this | null {
-    return boundingBoxContains(this.canvasBounds, point) ? this : null
+    const cb = this.canvasBounds
+    if (boundingBoxContains(cb, point)) return this
+    const lr = this._lengthRow()
+    if (boundingBoxContains(lr, point)) return this
+    return null
   }
 
   handlePointerDown(point: Point): boolean {
-    if (this._trigBtnBounds !== null && boundingBoxContains(this._trigBtnBounds, point)) {
-      this._fireTrigger()
-      return true
-    }
-    const tb = this._trackBounds
-    if (tb === null) return false
-    if (point.x >= tb.x && point.x <= tb.x + tb.width &&
-        point.y >= tb.y && point.y <= tb.y + tb.height) {
-      this._dragSlider = true
-      this._setParamFromX(point.x)
-      return true
-    }
+    if (boundingBoxContains(this._triggerBtnBounds(), point)) { this._fireTrigger(); return true }
+    if (boundingBoxContains(this._frameBtnBounds(),   point)) { this._setFrame();     return true }
+    if (boundingBoxContains(this._pulseBtnBounds(),   point)) { this._setPulse();     return true }
+    if (this._lengthWidget.handlePointerDown(point, this._lengthRow())) return true
     return false
   }
 
   handlePointerMove(point: Point): void {
-    if (this._dragSlider) this._setParamFromX(point.x)
+    this._lengthWidget.handlePointerMove(point, this._lengthRow())
   }
 
   handlePointerUp(): void {
-    this._dragSlider = false
+    this._lengthWidget.handlePointerUp()
   }
 
-  private _setParamFromX(px: number): void {
-    const tb = this._trackBounds
-    if (tb === null) return
-    this._durationParam = Math.max(0, Math.min(1, (px - tb.x) / tb.width))
-    this.markDirty()
+  // ----------------------------------------------------------
+  // Private geometry helpers
+  // ----------------------------------------------------------
+
+  private _btnBounds(i: number): BBox {
+    const cb   = this.canvasBounds
+    const btnW = (cb.width - 2 * BTN_MARGIN - 2 * BTN_GAP) / 3
+    return {
+      x: cb.x + BTN_MARGIN + i * (btnW + BTN_GAP),
+      y: cb.y + BTN_MARGIN,
+      width: btnW, height: BTN_H,
+    }
+  }
+
+  private _triggerBtnBounds(): BBox { return this._btnBounds(0) }
+  private _frameBtnBounds():   BBox { return this._btnBounds(1) }
+  private _pulseBtnBounds():   BBox { return this._btnBounds(2) }
+
+  private _lengthRow(): BBox {
+    const cb = this.canvasBounds
+    return { x: cb.x, y: this.panelBottom + ROW_PAD, width: cb.width, height: ROW_H }
   }
 }

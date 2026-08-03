@@ -98,6 +98,13 @@ export class RotateLayer extends Layer implements ImageSource {
     ]
   }
 
+  // phaseSlot doesn't accept a bare Rate directly (it needs an accumulating
+  // phase, not an instantaneous Hz value) but main.ts's tryBindRateIntoPhase
+  // auto-creates a hidden TempoLayer adapter for exactly this case.
+  override adapterCompatible(slot: ParameterSlot, sourceTypes: ReadonlySet<ValueType>): boolean {
+    return slot === this.phaseSlot && sourceTypes.has(ValueType.Rate)
+  }
+
   // ----------------------------------------------------------
   // Persistence
   // ----------------------------------------------------------

@@ -231,12 +231,17 @@ export abstract class Node {
   }
 
   // Force dirty regardless of current state (e.g. for initial state or
-  // after a bounds change that invalidates the cache).
+  // after a bounds change that invalidates the cache). Only `this` is
+  // force-marked unconditionally; propagation to dependents uses the
+  // guarded markDirty() so a cycle (permitted through a feedback edge —
+  // see _feedbackDependents above) can't recurse forever. A dependent
+  // that's already dirty was already propagated from when it became
+  // dirty, so re-forcing it here would add nothing but stack depth.
   forceDirty(): void {
     this._dirty = true
     Node.scheduleFrame?.()
-    for (const dep of this._dependents)         dep.forceDirty()
-    for (const dep of this._feedbackDependents) dep.forceDirty()
+    for (const dep of this._dependents)         dep.markDirty()
+    for (const dep of this._feedbackDependents) dep.markDirty()
   }
 
   get isDirty(): boolean { return this._dirty }

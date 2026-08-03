@@ -2,12 +2,13 @@ import { Layer } from '../core/Layer.js'
 import { Node }  from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
-  ValueType,
+  ValueType, SlotState,
   type Amount, type AmountSource,
   type Rate,   type RateSource,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { BindingLayer } from './BindingLayer.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 
@@ -18,6 +19,13 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 // Inputs:
 //   _timeSlot  (Amount) — binds to a ClockLayer or any Amount source.
 //                         Represents elapsed time in seconds.
+//
+//   _rateSlot  (Rate)   — optional. When bound, overrides the internal
+//                         slider's Hz every recompute (suspend-on-touch:
+//                         dragging the slider while bound suspends the
+//                         binding first, same as AmountLayer's slider).
+//                         Lets any RateSource (e.g. FlashLayer's implied
+//                         repetition rate) drive this Tempo's speed.
 //
 //   _rateSlider (embedded SliderRegion) — controls the rate in Hz
 //                         when no Rate slot is bound.  Maps slider
@@ -69,6 +77,7 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Amount, ValueType.Rate])
 
   private readonly _timeSlot:   ParameterSlot   // Amount input (time source)
+  private readonly _rateSlot:   ParameterSlot   // Rate input — overrides the slider when bound
   private readonly _rateSlider: SliderRegion     // Rate control widget
 
   private _phase:     Amount = 0   // output: cycling [0, 1]
@@ -89,8 +98,12 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     this._rateHz     = Math.max(MIN_RATE, Math.min(MAX_RATE, initialRateHz))
     const sliderInit = hzToSlider(this._rateHz)
     this._timeSlot   = new ParameterSlot(ValueType.Amount, this, 'time')
+    this._rateSlot   = new ParameterSlot(ValueType.Rate,   this, 'rate')
     this._rateSlider = new SliderRegion(this, sliderInit)
-    this.slots.push(this._timeSlot)
+    this._rateSlider.setOnDragStart(() => {
+      if (this._rateSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._rateSlot)?.toggle()
+    })
+    this.slots.push(this._timeSlot, this._rateSlot)
     this.debugName = 'TempoLayer'
     graph.register(this)
   }
@@ -107,6 +120,7 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // ----------------------------------------------------------
 
   get timeSlot(): ParameterSlot { return this._timeSlot }
+  get rateSlot(): ParameterSlot { return this._rateSlot }
 
   // ----------------------------------------------------------
   // Called by the embedded SliderRegion when the user drags.
@@ -147,9 +161,16 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // ----------------------------------------------------------
 
   protected recompute(): void {
-    // Rate — from slider (no Rate input slot in this implementation).
-    this._rateHz = sliderToHz(this._rateSlider.value)
-    this._rateSlider.interactive  = true
+    // Rate — from the bound Rate source when active (overrides the slider,
+    // suspend-on-touch lets the user take over by dragging), else the slider.
+    if (this._rateSlot.isActive) {
+      const hz = (this._rateSlot.source as RateSource).getRate()
+      this._rateHz = Math.max(MIN_RATE, Math.min(MAX_RATE, hz))
+      this._rateSlider.setValue(hzToSlider(this._rateHz))
+    } else {
+      this._rateHz = sliderToHz(this._rateSlider.value)
+    }
+    this._rateSlider.interactive  = !this._rateSlot.isActive
     this._rateSlider.displayValue = this._rateSlider.value
 
     // Time — from bound source, or zero if unbound.

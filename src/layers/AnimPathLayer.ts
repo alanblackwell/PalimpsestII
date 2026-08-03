@@ -110,6 +110,13 @@ export class AnimPathLayer extends Layer implements PointSource {
     return slot === this.shapeSlot
   }
 
+  // phaseSlot doesn't accept a bare Rate directly (it needs an accumulating
+  // phase, not an instantaneous Hz value) but main.ts's tryBindRateIntoPhase
+  // auto-creates a hidden TempoLayer adapter for exactly this case.
+  override adapterCompatible(slot: ParameterSlot, sourceTypes: ReadonlySet<ValueType>): boolean {
+    return slot === this.phaseSlot && sourceTypes.has(ValueType.Rate)
+  }
+
   // Current phase [0, 1) — exposed so EventLayer can detect cycle wraps.
   get phase(): number { return this._phase }
 
@@ -307,10 +314,12 @@ export class AnimPathLayer extends Layer implements PointSource {
 
       // Phase slot row
       const slot = this.phaseSlot
-      const isCompat = (drag.active && drag.source !== null && slot.type !== null
-                        && drag.source.types.has(slot.type))
+      const dragSourceOk = drag.active && drag.source !== null && slot.type !== null
+      const isCompat = (dragSourceOk && drag.source!.types.has(slot.type!))
                     || (Node.fileDragActive && slot.type === ValueType.Image
                         && slot.state === SlotState.Unbound)
+      const isAdapterCompat = !isCompat && dragSourceOk
+        && this.adapterCompatible(slot, drag.source!.types)
 
       this._slotBounds.set(slot, { x: PANEL_X, y: phaseY, width: PANEL_W, height: SLOT_H })
 
@@ -323,7 +332,7 @@ export class AnimPathLayer extends Layer implements PointSource {
       const bby = phaseY + 3
       const bh  = SLOT_H - 6
 
-      if (slot.isActive && !isCompat) {
+      if (slot.isActive && !isCompat && !isAdapterCompat) {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = AMOUNT_TC + '22'
         ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
@@ -338,6 +347,13 @@ export class AnimPathLayer extends Layer implements PointSource {
         ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
         ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, phaseY + SLOT_H / 2)
+      } else if (isAdapterCompat) {
+        ctx.fillStyle = 'rgba(230,160,50,0.18)'
+        ctx.beginPath(); ctx.roundRect(vx, bby, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(230,160,50,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, bby + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(255,200,100,0.80)'; ctx.textAlign = 'left'
+        ctx.fillText(slot.isActive ? 'convert & replace' : 'drop to convert', vx + 6, phaseY + SLOT_H / 2)
       } else if (slot.state === SlotState.SuspendedBound) {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = AMOUNT_TC + '11'

@@ -246,13 +246,16 @@ export abstract class Layer extends Node {
     ctx.fill()
 
     for (const slot of slots) {
-      const isCompat = (drag.active
-                    && drag.source !== null
-                    && slot.type !== null
-                    && drag.source.types.has(slot.type))
+      const dragSourceOk = drag.active && drag.source !== null && slot.type !== null
+      const isCompat = (dragSourceOk && drag.source!.types.has(slot.type!))
                     || (Node.fileDragActive
                     && slot.type === ValueType.Image
                     && slot.state === SlotState.Unbound)
+      // Doesn't satisfy the slot's type directly, but the app layer knows
+      // how to bind it via an auto-created adapter (see adapterCompatible) —
+      // highlight amber rather than green.
+      const isAdapterCompat = !isCompat && dragSourceOk
+        && this.adapterCompatible(slot, drag.source!.types)
 
       const b = { x: PANEL_X, y, width: PANEL_W, height: SLOT_H }
       this._slotBounds.set(slot, b)
@@ -269,7 +272,7 @@ export abstract class Layer extends Node {
       const by  = y + 3
       const bh  = SLOT_H - 6
 
-      if (slot.isActive && !isCompat) {
+      if (slot.isActive && !isCompat && !isAdapterCompat) {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = tc + '22'
         ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
@@ -284,6 +287,13 @@ export abstract class Layer extends Node {
         ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
         ctx.fillStyle = 'rgba(100,255,120,0.75)'; ctx.textAlign = 'left'
         ctx.fillText(slot.isActive ? 'replace binding' : 'drop to bind', vx + 6, y + SLOT_H / 2)
+      } else if (isAdapterCompat) {
+        ctx.fillStyle = 'rgba(230,160,50,0.18)'
+        ctx.beginPath(); ctx.roundRect(vx, by, vw, bh, 4); ctx.fill()
+        ctx.strokeStyle = 'rgba(230,160,50,0.85)'; ctx.lineWidth = 1.5; ctx.setLineDash([])
+        ctx.beginPath(); ctx.roundRect(vx + 0.5, by + 0.5, vw - 1, bh - 1, 4); ctx.stroke()
+        ctx.fillStyle = 'rgba(255,200,100,0.80)'; ctx.textAlign = 'left'
+        ctx.fillText(slot.isActive ? 'convert & replace' : 'drop to convert', vx + 6, y + SLOT_H / 2)
       } else if (slot.state === SlotState.SuspendedBound) {
         const srcName = (slot.source as { debugName?: string } | null)?.debugName ?? '?'
         ctx.fillStyle = tc + '11'
@@ -455,6 +465,18 @@ export abstract class Layer extends Node {
   // gesture, rather than the slot type's canonical default layer — e.g. an
   // AnimPath's shape slot or a MaskLayer's shape slots.
   wantsShapeForSlot(_slot: ParameterSlot): boolean {
+    return false
+  }
+
+  // True if `slot` doesn't accept `sourceTypes` directly, but the app layer
+  // knows how to bind it anyway via an auto-created adapter/converter layer
+  // (e.g. AnimPathLayer/RotateLayer's phaseSlot accepting a Rate-only source
+  // through a hidden TempoLayer — see tryBindRateIntoPhase in main.ts).
+  // renderSlotGroup uses this to highlight the drop target amber instead of
+  // green, so a type that "isn't recognised" directly still shows the user
+  // where it *can* land. Override alongside the app-layer wiring that
+  // actually performs the conversion — this is display-only.
+  adapterCompatible(_slot: ParameterSlot, _sourceTypes: ReadonlySet<ValueType>): boolean {
     return false
   }
 

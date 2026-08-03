@@ -71,7 +71,7 @@ function bindRateClock(rate: TempoLayer): void {
 // Create a hidden helper TempoLayer directly above `host`, bind it to
 // `phaseSlot`, and wire its timeSlot to the singleton Clock.
 // `rateHz` is the initial rate; pass `1.0` for the default.
-function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number): void {
+function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number): TempoLayer {
   const rate = new TempoLayer(rateHz)
   Layer.assignDebugName(rate)
   rate.bounds = { ...host.bounds }
@@ -81,6 +81,7 @@ function createHiddenRate(host: Layer, phaseSlot: ParameterSlot, rateHz: number)
   host.hiddenHelper = rate
   bindRateClock(rate)
   BindingLayer.create(rate, phaseSlot)
+  return rate
 }
 
 // Auto-bind a phase slot to a Rate or Clock layer, creating a hidden helper
@@ -105,6 +106,32 @@ function ensurePhaseSource(host: Layer, phaseSlot: ParameterSlot): void {
   }
 
   BindingLayer.create(phaseSource, phaseSlot)
+}
+
+// A "phase" slot (AnimPathLayer.phaseSlot, RotateLayer.phaseSlot — both
+// Amount, cycling [0,1)) can't accept a Rate-only source like FlashLayer's
+// tempo output directly: a phase needs an accumulating time base, not just
+// an instantaneous Hz value. When a bind-drag drop lands on one of these
+// slots with a source that produces Rate but not Amount, redirect the drop
+// into the TempoLayer that's already driving the phase (auto-created for
+// every new AnimPath/Rotate layer — see ensurePhaseSource/createHiddenRate
+// above), binding the Rate source into the Tempo's own rateSlot so it sets
+// the cycling speed instead of trying to replace the phase output. If the
+// phase slot isn't currently fed by a TempoLayer, create one first.
+// Returns true if the drop was handled this way.
+function tryBindRateIntoPhase(source: Node, slot: ParameterSlot): boolean {
+  const consumer = slot.owner
+  const isPhaseSlot = (consumer instanceof AnimPathLayer || consumer instanceof RotateLayer)
+    && slot === consumer.phaseSlot
+  if (!isPhaseSlot) return false
+  if (slot.type === null || source.types.has(slot.type)) return false   // direct bind already works
+  if (!source.types.has(ValueType.Rate)) return false
+
+  const tempo = (slot.isActive && slot.source instanceof TempoLayer)
+    ? slot.source
+    : createHiddenRate(consumer, slot, 1.0)
+
+  return BindingLayer.create(source, tempo.rateSlot) !== null
 }
 
 // Log-uniform random rate in [0.1, 1.5] Hz — spread across octaves so each
@@ -1301,6 +1328,7 @@ interaction.setCollectionAction(() => {
 })
 
 interaction.setBoundCallback((source, slot) => {
+  if (tryBindRateIntoPhase(source, slot)) { refreshStack(); return }
   BindingLayer.create(source, slot)
   refreshStack()
 })

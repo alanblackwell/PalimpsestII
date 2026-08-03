@@ -73,10 +73,20 @@ export class Graph {
   // Bind source's output to `slot`.
   // Returns true on success, false if the binding would create a cycle
   // or if source does not satisfy the slot's declared type.
+  //
+  // Feedback slots (slot.feedback) are exempt from the reachability check:
+  // they're documented (Node._feedbackDependents) as reading the source's
+  // cached value rather than pulling a fresh evaluation specifically so
+  // that a cycle through one is well-defined, one-frame-delayed, and safe.
+  // Skipping the check here (not just excluding the edge from *future*
+  // BFS walks once created) is what actually lets that cycle-closing edge
+  // get created in the first place, regardless of what order the other
+  // edges in the loop were bound in.
   bind(source: Node, slot: ParameterSlot): boolean {
     // null type = polymorphic slot; skip the type check.
     if (slot.type !== null && !source.types.has(slot.type)) return false
-    if (!this.canBind(source, slot.owner)) return false
+    if (source === slot.owner) return false
+    if (!slot.feedback && !this.canBind(source, slot.owner)) return false
     slot.bind(source)
     return true
   }
