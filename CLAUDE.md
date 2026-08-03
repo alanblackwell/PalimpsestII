@@ -650,6 +650,42 @@ palette (deep purple → hot pink → neon lime → electric yellow). Both the C
 fallback (`FilterLayer.ts`) and the WebGL path (`FilterGL.ts`) use identical
 palettes and blend logic.
 
+## Big-button mobile touch-target pass (in progress)
+
+Ongoing multi-session effort to replace small/cramped panel buttons with
+larger ones sized for touch, started from VideoLayer/CaptureLayer's
+big-button source-selector rows. Convention: local `LG_SZ`/`LG_GAP`/
+`LG_MARGIN`-style constants per layer (target ~48–72px squares; shrink to a
+floor on narrow panels rather than wrapping when there are few buttons,
+wrap to a grid when there are more — see each layer for its choice), with
+`canvasBounds`/`panelBottom` overridden to compute the panel height
+dynamically instead of relying on `this.bounds.height`. Old thin
+identity/status strips (small type glyph + text preview + slot-state dots)
+are being removed outright where they carry no interactive controls, not
+just resized.
+
+**Done**: VideoLayer (source picker — camera/screen/file, one big button
+per camera on mobile), CaptureLayer (shutter/mode/save/share), TextLayer
+(edit/size row only — align row deliberately left small, not very
+touch-critical for this layer), MaskLayer (removed the debug status strip;
+tool buttons themselves not yet resized), ImageLayer (File/Paste/Camera
+acquire row, replaced by a live camera preview with a red shutter +
+flip-camera control once Camera is tapped), NoiseLayer (style-picker
+thumbnails replacing the type-cycle/seed-stepper row; each button shows a
+live-generated-but-static preview of that style), CountLayer/"Index"
+(−/+/reset), TileLayer (Tile/Fit buttons with live mode previews; margin
+converted from a −/+ stepper to a bindable Amount slot + slider, matching
+opacity).
+
+**Remaining**:
+- MaskLayer — paint/erase toggles (28×28), clear/reset pair (18×24).
+- SequencerLayer — `[−] value [+]` stepper (20×20), same shape as
+  CountLayer's before this pass.
+- Lower priority / more specialized: BindingMapLayer's 24×24 toggle/delete
+  pairs (repeated per row in a node-diagram, not a single top-of-panel
+  strip); ClockLayer's play/pause + reset (already reasonably spaced, only
+  2 buttons).
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
