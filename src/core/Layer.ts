@@ -222,8 +222,11 @@ export abstract class Layer extends Node {
   // group (e.g. MaskLayer's invert pill below its shape-slot pill) should
   // call `_slotBounds.clear()` once themselves, then call this once per
   // group. Returns the y-coordinate of the bottom of the pill, for stacking
-  // further groups beneath it.
-  protected renderSlotGroup(ctx: Ctx2D, slots: ParameterSlot[], y: number): number {
+  // further groups beneath it. Pass `drawBackdrop = false` when the caller
+  // already painted its own background behind these rows (e.g. to merge
+  // them into a larger pill with other, non-slot content) — see
+  // TraceLayer._renderColourPill.
+  protected renderSlotGroup(ctx: Ctx2D, slots: ParameterSlot[], y: number, drawBackdrop = true): number {
     if (slots.length === 0) return y
 
     const SLOT_H  = 30
@@ -240,10 +243,12 @@ export abstract class Layer extends Node {
     // Dark backdrop behind all rows in this group
     const n = slots.length
     const totalH = n * (SLOT_H + SLOT_GAP) - SLOT_GAP
-    ctx.fillStyle = 'rgba(0,0,0,0.28)'
-    ctx.beginPath()
-    ctx.roundRect(PANEL_X, y, PANEL_W, totalH, 6)
-    ctx.fill()
+    if (drawBackdrop) {
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(PANEL_X, y, PANEL_W, totalH, 6)
+      ctx.fill()
+    }
 
     for (const slot of slots) {
       const dragSourceOk = drag.active && drag.source !== null && slot.type !== null

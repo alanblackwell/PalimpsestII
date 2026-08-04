@@ -6,7 +6,7 @@ import {
   ValueType,
   boundingBoxContains,
   type Amount,
-  type Colour,
+  type Colour, type ColourSource,
   type ImageValue, type ImageSource,
   type MaskValue, type MaskSource,
   type Point, type PointSource,
@@ -14,8 +14,11 @@ import {
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
 import { BindingLayer }  from './BindingLayer.js'
+import { ColourLayer }   from './ColourLayer.js'
+import { PointLayer }    from './PointLayer.js'
 import { SliderRegion }  from '../regions/SliderRegion.js'
 import { contentLeft }   from '../interaction/layout.js'
+import { drawIcon }      from '../ui/icons.js'
 // import { detectContour } from './contourTrace.js'  // mothballed — see _detectPath
 import { detectByGradient } from './gradientTrace.js'
 
@@ -54,6 +57,11 @@ import { detectByGradient } from './gradientTrace.js'
 
 const ACCENT      = '#e8a04a'   // shape amber — matches Rect/Ellipse/Path
 const DIR_ACCENT  = '#7ecfcf'
+const COLOUR_ACCENT  = '#e8944a'   // Colour type accent — include/exclude pill
+const INCLUDE_ACCENT = '#7ecf7e'   // tick handle
+const EXCLUDE_ACCENT = '#e87e7e'   // cross handle
+const SAMPLE_HANDLE_R  = 9    // include/exclude handle radius
+const SAMPLE_HANDLE_OFF = 40  // default handle offset from centroid/canvas-centre
 const CAPTURE_W   = 72
 const CAPTURE_H   = 26
 const PATH_BTN_W  = 60   // "Path" convenience button width
@@ -87,7 +95,7 @@ const CPILL_GAP    = 4
 const CPILL_PAD    = 6
 const CPILL_LBL_W  = 36
 const CPILL_VAL_W  = 32
-const CPILL_H      = 6 * CPILL_ROW_H + 5 * CPILL_GAP + 2 * CPILL_PAD
+const CPILL_H      = 7 * CPILL_ROW_H + 6 * CPILL_GAP + 2 * CPILL_PAD
 
 // ── Geometry helpers ─────────────────────────────────────────────
 
@@ -95,6 +103,12 @@ function rotatePoint(p: Point, c: Point, angle: number): Point {
   const cos = Math.cos(angle), sin = Math.sin(angle)
   const dx = p.x - c.x, dy = p.y - c.y
   return { x: c.x + dx * cos - dy * sin, y: c.y + dx * sin + dy * cos }
+}
+
+// getColour() returns a fresh object each call, so change detection needs value equality.
+function coloursEqual(a: Colour | null, b: Colour | null): boolean {
+  if (a === null || b === null) return a === b
+  return a.r === b.r && a.g === b.g && a.b === b.b && a.a === b.a
 }
 
 // ── Catmull-Rom ──────────────────────────────────────────────────
@@ -123,6 +137,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   readonly maskSlot:   ParameterSlot
   readonly priorSlot: ParameterSlot
 
+  // Colour priors — expected inside/outside the boundary
+  readonly includeColourSlot: ParameterSlot
+  readonly excludeColourSlot: ParameterSlot
+
   // Shape rendering inputs
   readonly phaseSlot: ParameterSlot
 
@@ -132,6 +150,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private readonly _biasSlider:     SliderRegion
   private readonly _circSlider:     SliderRegion
   private readonly _gradModeSlider: SliderRegion
+  private readonly _marginSlider:   SliderRegion
+  private readonly _colourWeightSlider: SliderRegion
 
   // Detection state
   private _phase:           number  = 0
@@ -143,9 +163,13 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _lastRadialBias:    number       = 0.5
   private _lastCircBias:      number       = 0.5
   private _lastGradMode:      number       = 0.5
+  private _lastMarginBias:    number       = 0.2
   private _lastPriorId:       object|null  = null
   private _lastPriorActive:   boolean      = false
   private _lastMaskActive:    boolean      = false
+  private _lastColourWeight:  number       = 0
+  private _lastIncludeColour: Colour | null = null
+  private _lastExcludeColour: Colour | null = null
   private _forceDetect:     boolean = false
 
   // Offscreen canvases for Mask and Image outputs
@@ -167,11 +191,20 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _dragStartCenter: Point = { x: 0, y: 0 }
   private _dragStartAngle:  number = 0
 
+  // Colour-sample handles (tick=include=0, cross=exclude=1) — hidden helper
+  // ColourLayer+PointLayer pairs, WarpLayer-style (private array, not the
+  // singular Layer.hiddenHelper field, since there can be up to 4 of them).
+  private _hiddenSampleColour: (ColourLayer | null)[] = [null, null]
+  private _hiddenSamplePoint:  (PointLayer  | null)[] = [null, null]
+  private _sampleDragIdx: number = -1
+
   constructor() {
     super()
     this.imageSlot  = new ParameterSlot(ValueType.Image,  this, 'image')
     this.maskSlot   = new ParameterSlot(ValueType.Mask,   this, 'mask')
     this.priorSlot  = new ParameterSlot(ValueType.Mask,   this, 'prior')
+    this.includeColourSlot = new ParameterSlot(ValueType.Colour, this, 'include')
+    this.excludeColourSlot = new ParameterSlot(ValueType.Colour, this, 'exclude')
     this.phaseSlot  = new ParameterSlot(ValueType.Amount, this, 'phase')
     const initRays   = (DEF_RAYS   - MIN_RAYS)   / (MAX_RAYS   - MIN_RAYS)
     const initSmooth = (DEF_SMOOTH - MIN_SMOOTH) / (MAX_SMOOTH - MIN_SMOOTH)
@@ -182,6 +215,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     this._biasSlider     = new SliderRegion(this, 0.5)
     this._circSlider     = new SliderRegion(this, 0.5)
     this._gradModeSlider = new SliderRegion(this, 0.5)
+    this._marginSlider   = new SliderRegion(this, 0.2)
+    this._colourWeightSlider = new SliderRegion(this, 0)
     this.slots.push(this.imageSlot, this.maskSlot, this.priorSlot)
     this.debugName = 'Trace'
     graph.register(this)
@@ -230,6 +265,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       biasValue:     this._biasSlider.value,
       circValue:     this._circSlider.value,
       gradModeValue: this._gradModeSlider.value,
+      marginValue:   this._marginSlider.value,
+      colourWeightValue: this._colourWeightSlider.value,
     }
   }
 
@@ -260,6 +297,14 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       this._gradModeSlider.setValue(state.gradModeValue as Amount)
       this._lastGradMode = this._gradModeSlider.value
     }
+    if (typeof state.marginValue === 'number') {
+      this._marginSlider.setValue(state.marginValue as Amount)
+      this._lastMarginBias = this._marginSlider.value
+    }
+    if (typeof state.colourWeightValue === 'number') {
+      this._colourWeightSlider.setValue(state.colourWeightValue as Amount)
+      this._lastColourWeight = this._colourWeightSlider.value
+    }
   }
 
   // ----------------------------------------------------------
@@ -273,6 +318,8 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const radialBias   = this._biasSlider.value
     const circBias     = this._circSlider.value
     const gradMode     = this._gradModeSlider.value
+    const marginBias   = this._marginSlider.value
+    const colourWeight = this._colourWeightSlider.value
     const maskActive  = this.maskSlot.isActive
     const priorActive = this.priorSlot.isActive
     const imageVal    = this.imageSlot.isActive
@@ -284,11 +331,23 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       ? (this.priorSlot.source as MaskSource).getMask() : null
     const imageId     = imageVal as object | null
     const priorId     = priorMask as object | null
+    const includeColour = this.includeColourSlot.isActive
+      ? (this.includeColourSlot.source as ColourSource).getColour() : null
+    const excludeColour = this.excludeColourSlot.isActive
+      ? (this.excludeColourSlot.source as ColourSource).getColour() : null
+    // getColour() returns a fresh object each call, so identity comparison would
+    // always see a "change" — only worth comparing (and only matters) while the
+    // slider actually gives colour a say in detection.
+    const colourChanged = colourWeight > 0 &&
+      (!coloursEqual(includeColour, this._lastIncludeColour) ||
+       !coloursEqual(excludeColour, this._lastExcludeColour))
 
     if ((this._forceDetect || imageId !== this._lastImageId ||
          numRays !== this._lastNumRays || winSize !== this._lastWinSize ||
          workSize !== this._lastWorkSize || radialBias !== this._lastRadialBias ||
          circBias !== this._lastCircBias || gradMode !== this._lastGradMode ||
+         marginBias !== this._lastMarginBias || colourWeight !== this._lastColourWeight ||
+         colourChanged ||
          priorId !== this._lastPriorId || priorActive !== this._lastPriorActive ||
          maskActive !== this._lastMaskActive)
         && imageVal !== null) {
@@ -299,6 +358,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       this._lastRadialBias  = radialBias
       this._lastCircBias    = circBias
       this._lastGradMode    = gradMode
+      this._lastMarginBias  = marginBias
+      this._lastColourWeight  = colourWeight
+      this._lastIncludeColour = includeColour
+      this._lastExcludeColour = excludeColour
       this._lastPriorId     = priorId
       this._lastPriorActive = priorActive
       this._lastMaskActive  = maskActive
@@ -309,7 +372,7 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
         typeof (this.priorSlot.source as unknown as Record<string, unknown>)['samplePerimeter'] === 'function')
         ? this._buildPriorCanvas(this.priorSlot.source as unknown as { samplePerimeter(t: number): Point  })
         : priorMask
-      this._detectPath(imageVal, maskVal, priorSrc, numRays, winSize, workSize, radialBias, circBias, gradMode)
+      this._detectPath(imageVal, maskVal, priorSrc, numRays, winSize, workSize, radialBias, circBias, gradMode, marginBias, includeColour, excludeColour, colourWeight)
     } else if (imageVal === null && this._controlPoints.length > 0) {
       this._lastImageId = null; this._controlPoints = []
     }
@@ -358,10 +421,15 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     radialBias: number,
     circBias:   number,
     gradMode:   number,
+    marginBias: number,
+    includeColour: Colour | null,
+    excludeColour: Colour | null,
+    colourWeight:  number,
   ): void {
     const pts = detectByGradient(
       imageSrc, maskSrc as OffscreenCanvas | null,
-      numRays, winSize, workSize, radialBias, circBias, gradMode,
+      numRays, winSize, workSize, radialBias, circBias, gradMode, marginBias,
+      includeColour, excludeColour, colourWeight,
       priorSrc as OffscreenCanvas | null,
     )
     this._controlPoints = pts ?? []
@@ -420,16 +488,95 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     this.renderSlotGroup(ctx, this.slots, this.panelBottom)
     let bottom = this.panelBottom
     for (const b of this._slotBounds.values()) bottom = Math.max(bottom, b.y + b.height)
-    const pillY = bottom + 8
+
+    const colourPillY = bottom + 8
+    const colourBottom = this._renderColourPill(ctx, colourPillY)
+
+    const pillY = colourBottom + 8
     this._drawControlPill(ctx, pillY)
     this._slotsBottom = pillY + CPILL_H
   }
 
+  // Single pill: weight slider on top, include/exclude binding rows below —
+  // one shared background (drawn here; the two rows below opt out of their
+  // own via renderSlotGroup's drawBackdrop=false) so it reads as one control,
+  // not two stacked ones. Background turns a lighter, muted grey at weight=0
+  // to signal the pill has no effect on detection at the default.
+  private _renderColourPill(ctx: Ctx2D, topY: number): number {
+    const cb = this.canvasBounds
+    const { x, width } = cb
+    const active = this._colourWeightSlider.value > 0
+
+    // Must match Layer.renderSlotGroup's own SLOT_H/SLOT_GAP — mirrored here
+    // so the background height can be computed before those rows are drawn.
+    const SLOT_ROW_H = 30, SLOT_ROW_GAP = 4
+    const rowsH = 2 * (SLOT_ROW_H + SLOT_ROW_GAP) - SLOT_ROW_GAP
+    const pillH = CPILL_PAD + CPILL_ROW_H + rowsH + CPILL_PAD
+
+    ctx.save()
+    ctx.fillStyle = active ? 'rgba(0,0,0,0.45)' : 'rgba(120,120,120,0.35)'
+    ctx.beginPath()
+    ctx.roundRect(x, topY, width, pillH, 6)
+    ctx.fill()
+    ctx.fillStyle = active ? COLOUR_ACCENT : COLOUR_ACCENT + '77'
+    ctx.beginPath()
+    ctx.roundRect(x, topY, 4, pillH, [4, 0, 0, 4])
+    ctx.fill()
+    ctx.restore()
+
+    const lblW = 46   // wider than CPILL_LBL_W — fits the "colour" label
+    const trkX0 = x + lblW + 12
+    const trkX1 = x + width - CPILL_VAL_W - 8
+    const trkW  = Math.max(0, trkX1 - trkX0)
+    const sliderRowY = topY + CPILL_PAD
+    const midY = sliderRowY + CPILL_ROW_H / 2
+
+    this._colourWeightSlider.bounds       = { x: trkX0, y: sliderRowY + 4, width: trkW, height: CPILL_ROW_H - 8 }
+    this._colourWeightSlider.interactive  = true
+    this._colourWeightSlider.displayValue = this._colourWeightSlider.value
+
+    ctx.save()
+    ctx.font         = '10px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.62)'
+    ctx.textAlign    = 'left'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('colour', x + 12, midY)
+    this._colourWeightSlider.renderSelf(ctx)
+    ctx.fillStyle = 'rgba(255,255,255,0.85)'
+    ctx.textAlign = 'right'
+    ctx.fillText(`${Math.round(this._colourWeightSlider.value * 100)}`, x + width - 8, midY)
+    ctx.restore()
+
+    const rowsTopY = sliderRowY + CPILL_ROW_H
+    this.renderSlotGroup(ctx, [this.includeColourSlot, this.excludeColourSlot], rowsTopY, false)
+
+    return topY + pillH
+  }
+
   override renderOverlay(ctx: Ctx2D): void {
     this._drawControlHandles(ctx)
+    this._renderSampleHandles(ctx)
     this._renderCaptureBtn(ctx)
     this._renderPathBtn(ctx)
     this._renderClipBtn(ctx)
+  }
+
+  private _renderSampleHandles(ctx: Ctx2D): void {
+    if (this._colourWeightSlider.value <= 0) return
+    this._drawSampleHandle(ctx, this._sampleHandlePos(0), 'check', INCLUDE_ACCENT, this._sampleDragIdx === 0)
+    this._drawSampleHandle(ctx, this._sampleHandlePos(1), 'x',     EXCLUDE_ACCENT, this._sampleDragIdx === 1)
+  }
+
+  private _drawSampleHandle(ctx: Ctx2D, pos: Point, icon: 'check' | 'x', colour: string, lit: boolean): void {
+    ctx.save()
+    ctx.fillStyle   = lit ? '#ffffff' : colour
+    ctx.strokeStyle = 'rgba(0,0,0,0.50)'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath(); ctx.arc(pos.x, pos.y, SAMPLE_HANDLE_R, 0, Math.PI * 2)
+    ctx.fill(); ctx.stroke()
+    ctx.fillStyle = lit ? colour : 'rgba(0,0,0,0.75)'
+    drawIcon(ctx, icon, pos.x, pos.y, SAMPLE_HANDLE_R * 1.2)
+    ctx.restore()
   }
 
   private _renderCaptureBtn(ctx: Ctx2D): void {
@@ -563,9 +710,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
       { label: 'pnts', slider: this._raysSlider,     text: `${this._numRays()}`  },
       { label: 'slop', slider: this._smoothSlider,   text: `${this._winSize()}`  },
       { label: 'gran', slider: this._sizeSlider,     text: `${this._workSize()}` },
-      { label: 'bias', slider: this._biasSlider,     text: `${Math.round(this._biasSlider.value * 100)}` },
+      { label: 'size', slider: this._biasSlider,     text: `${Math.round(this._biasSlider.value * 100)}` },
       { label: 'circ', slider: this._circSlider,     text: `${Math.round(this._circSlider.value * 100)}` },
       { label: 'hue', slider: this._gradModeSlider, text: `${Math.round(this._gradModeSlider.value * 100)}` },
+      { label: 'marg', slider: this._marginSlider,  text: `${Math.round(this._marginSlider.value * 100)}` },
     ]
 
     for (let i = 0; i < rows.length; i++) {
@@ -596,6 +744,15 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   get isInteractive(): boolean { return true }
 
   protected override hitTestSelf(point: Point): Node | null {
+    // Colour-sample handles — independent of whether a shape exists yet.
+    if (this._colourWeightSlider.value > 0) {
+      const sr2 = SAMPLE_HANDLE_R * SAMPLE_HANDLE_R
+      const ip  = this._sampleHandlePos(0)
+      if ((point.x-ip.x)**2 + (point.y-ip.y)**2 <= sr2) return this
+      const ep  = this._sampleHandlePos(1)
+      if ((point.x-ep.x)**2 + (point.y-ep.y)**2 <= sr2) return this
+    }
+
     // Handles take priority over controls so they remain reachable everywhere on canvas.
     if (this._controlPoints.length >= 2) {
       const r2 = HIT_R * HIT_R
@@ -630,6 +787,10 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     if (circHit !== null) return circHit
     const gradModeHit = this._gradModeSlider.hitTest(point)
     if (gradModeHit !== null) return gradModeHit
+    const marginHit = this._marginSlider.hitTest(point)
+    if (marginHit !== null) return marginHit
+    const colourWeightHit = this._colourWeightSlider.hitTest(point)
+    if (colourWeightHit !== null) return colourWeightHit
     if (boundingBoxContains(this._detectBtnBounds(this.canvasBounds), point)) return this
     if (this._captureBtnBounds !== null && boundingBoxContains(this._captureBtnBounds, point)) return this
 
@@ -664,6 +825,23 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     // Capture button (below slot rows)
     if (this._captureBtnBounds !== null && boundingBoxContains(this._captureBtnBounds, point)) {
       this._forceDetect = true; this.markDirty(); return true
+    }
+
+    // Colour-sample handles
+    if (this._colourWeightSlider.value > 0) {
+      const sr2 = SAMPLE_HANDLE_R * SAMPLE_HANDLE_R
+      const ip  = this._sampleHandlePos(0)
+      if ((point.x-ip.x)**2 + (point.y-ip.y)**2 <= sr2) {
+        this._ensureSampleHelpers(0)
+        this._sampleDragIdx = 0
+        this.markDirty(); return true
+      }
+      const ep  = this._sampleHandlePos(1)
+      if ((point.x-ep.x)**2 + (point.y-ep.y)**2 <= sr2) {
+        this._ensureSampleHelpers(1)
+        this._sampleDragIdx = 1
+        this.markDirty(); return true
+      }
     }
 
     if (this._controlPoints.length < 2) return false
@@ -723,6 +901,11 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   }
 
   override handlePointerMove(point: Point): void {
+    if (this._sampleDragIdx >= 0) {
+      const pl = this._hiddenSamplePoint[this._sampleDragIdx] ?? null
+      if (pl !== null) pl.setPoint(point)
+      this.markDirty(); return
+    }
     if (this._specialDrag === 'center') {
       const dx = point.x - this._dragStartPtr.x
       const dy = point.y - this._dragStartPtr.y
@@ -755,8 +938,9 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   }
 
   override handlePointerUp(): void {
-    this._specialDrag = null
-    this._dragIndex   = -1
+    this._specialDrag   = null
+    this._dragIndex     = -1
+    this._sampleDragIdx = -1
     this.markDirty()
   }
 
@@ -784,6 +968,89 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     const maxR = this._controlPoints.reduce((r, p) => Math.max(r, Math.hypot(p.x-c.x, p.y-c.y)), 0)
     const a    = this._angle - Math.PI / 2
     return { x: c.x + (maxR + ROT_OFF) * Math.cos(a), y: c.y + (maxR + ROT_OFF) * Math.sin(a) }
+  }
+
+  // ── Colour-sample handles (which: 0=include/tick, 1=exclude/cross) ──────
+
+  private _sampleColourSlot(which: number): ParameterSlot {
+    return which === 0 ? this.includeColourSlot : this.excludeColourSlot
+  }
+
+  private _defaultSampleHandlePos(which: number): Point {
+    const c = this._controlPoints.length >= 2
+      ? this._centroid()
+      : { x: Node.canvasWidth / 2, y: Node.canvasHeight / 2 }
+    return which === 0
+      ? { x: c.x - SAMPLE_HANDLE_OFF, y: c.y + SAMPLE_HANDLE_OFF }
+      : { x: c.x + SAMPLE_HANDLE_OFF, y: c.y + SAMPLE_HANDLE_OFF }
+  }
+
+  // Reuse an existing hidden helper pair if the slot is already wired to one —
+  // including right after a session reload, when this layer's own private
+  // cache starts empty but isHiddenHelper/helperHost and the slot bindings
+  // were already restored generically. Does not create anything, and leaves
+  // the cache alone if the slot's source doesn't match a recognisable helper
+  // (e.g. the binding was removed via the inspector) — callers that need to
+  // tell "still live" apart from "stale" must compare against slot.source
+  // themselves, see _ensureSampleHelpers.
+  private _syncSampleCache(which: number): void {
+    const slot = this._sampleColourSlot(which)
+    const cached = this._hiddenSampleColour[which] ?? null
+    if (cached !== null && slot.source === cached) return
+    if (slot.source instanceof ColourLayer && slot.source.isHiddenHelper && slot.source.helperHost === this) {
+      const cl = slot.source
+      this._hiddenSampleColour[which] = cl
+      const pl = cl.samplePointSlot.source
+      this._hiddenSamplePoint[which] = pl instanceof PointLayer ? pl : null
+    }
+  }
+
+  private _sampleHandlePos(which: number): Point {
+    this._syncSampleCache(which)
+    const pl = this._hiddenSamplePoint[which] ?? null
+    return pl !== null ? pl.getPoint() : this._defaultSampleHandlePos(which)
+  }
+
+  // Called on first touch of a tick/cross handle: creates the hidden
+  // ColourLayer+PointLayer pair (if not already wired) that drives the
+  // include/exclude colour slot from the dragged sample point.
+  private _ensureSampleHelpers(which: number): void {
+    this._syncSampleCache(which)
+    const slot = this._sampleColourSlot(which)
+    const cached = this._hiddenSampleColour[which] ?? null
+    if (cached !== null && slot.source === cached) return
+
+    // Clean up any orphaned prior pair for this handle (binding removed via inspector,
+    // or _syncSampleCache above couldn't confirm it's still live).
+    const staleCL = this._hiddenSampleColour[which] ?? null
+    const stalePL = this._hiddenSamplePoint[which] ?? null
+    if (staleCL !== null && !staleCL.outsideStack) staleCL.removeFromStack()
+    if (stalePL !== null && !stalePL.outsideStack) stalePL.removeFromStack()
+    this._hiddenSampleColour[which] = null
+    this._hiddenSamplePoint[which]  = null
+
+    const startPos = this._defaultSampleHandlePos(which)
+    const pl = new PointLayer({ ...startPos })
+    Layer.assignDebugName(pl)
+    pl.isHiddenHelper = true
+    pl.helperHost      = this
+    pl.insertAbove(this)
+
+    const cl = new ColourLayer()
+    Layer.assignDebugName(cl)
+    cl.isHiddenHelper = true
+    cl.helperHost      = this
+    cl.insertAbove(pl)
+
+    BindingLayer.create(pl, cl.samplePointSlot)
+    if (this.imageSlot.isActive && this.imageSlot.source !== null) {
+      BindingLayer.create(this.imageSlot.source, cl.sampleImageSlot)
+    }
+    cl.enableSampling()
+    BindingLayer.create(cl, slot)
+
+    this._hiddenSampleColour[which] = cl
+    this._hiddenSamplePoint[which]  = pl
   }
 
   private _nearest(p: Point): number {
