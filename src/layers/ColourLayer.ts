@@ -362,33 +362,6 @@ export class ColourLayer extends Layer implements ColourSource {
     ctx.textBaseline = 'middle'
     ctx.fillText(hex, dotX + dotR + 6, labelY)
 
-    // Slot indicators — right to left: position, hue
-    const indicators = [
-      { slot: this._posSlot, label: 'P', colour: '#cf7ecf' },
-      { slot: this._hueSlot, label: 'H', colour: '#4a8fe8' },
-    ]
-    let dx = x + width - ColourLayer.PAD_X
-    ctx.font = '9px monospace'
-    for (const { slot, label, colour } of indicators) {
-      const state = slot.state
-      let dot: string, dotColour: string, labelColour: string
-      if (state === SlotState.Bound) {
-        dot = '●'; dotColour = colour; labelColour = 'rgba(255,255,255,0.55)'
-      } else if (state === SlotState.SuspendedBound) {
-        dot = '◐'; dotColour = colour + '88'; labelColour = 'rgba(255,255,255,0.40)'
-      } else {
-        dot = '○'; dotColour = 'rgba(255,255,255,0.22)'; labelColour = 'rgba(255,255,255,0.28)'
-      }
-      ctx.fillStyle    = dotColour
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(dot, dx, labelY)
-      dx -= 11
-      ctx.fillStyle = labelColour
-      ctx.fillText(label, dx, labelY)
-      dx -= ctx.measureText(label).width + 5
-    }
-
     ctx.restore()
   }
 

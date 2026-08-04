@@ -35,16 +35,13 @@ registerPromotionFactory((initial: Point) => new PointLayer(initial))
 //
 // Rendering has these components:
 //
-//   1. A compact label bar at canvasBounds (canvas-space panel),
-//      showing the current (x, y) coordinates.
+//   1. A single-row pill at canvasBounds (canvas-space panel) for the
+//      main Point binding (`slot`) — lets another Point source drive
+//      this layer's output, e.g. as a named relay/tap point.
 //
-//   2. A single-row pill directly below it for the main Point
-//      binding (`slot`) — lets another Point source drive this
-//      layer's output, e.g. as a named relay/tap point.
+//   2. The wander pill (below that) — see below.
 //
-//   3. The wander pill (below that) — see below.
-//
-//   4. The draggable handle (crosshair circle) drawn at the point
+//   3. The draggable handle (crosshair circle) drawn at the point
 //      value itself — which can be anywhere on the canvas.
 //
 // ------------------------------------------------------------
@@ -966,41 +963,6 @@ export class PointLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
   // Rendering
   // ----------------------------------------------------------
-
-  renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
-
-    // ── Label bar (canvas panel) ───────────────────────────
-    if (width > 0 && height > 0) {
-      ctx.save()
-
-      // Background pill
-      ctx.fillStyle = 'rgba(0,0,0,0.45)'
-      ctx.beginPath()
-      ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-      ctx.fill()
-
-      // Accent stripe
-      ctx.fillStyle = ACCENT
-      ctx.beginPath()
-      ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-      ctx.fill()
-
-      // Coordinate label
-      const px = Math.round(this._point.x)
-      const py = Math.round(this._point.y)
-      ctx.font         = '11px monospace'
-      ctx.fillStyle    = this._slot.isActive
-        ? 'rgba(255,255,255,0.55)'
-        : 'rgba(255,255,255,0.80)'
-      ctx.textAlign    = 'left'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(`(${px}, ${py})`, x + 12, y + height / 2)
-
-      ctx.restore()
-    }
-
-  }
 
   override renderOverlay(ctx: Ctx2D): void {
     this._region.renderSelf(ctx)

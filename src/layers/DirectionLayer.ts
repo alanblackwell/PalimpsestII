@@ -39,7 +39,6 @@ import { SliderSlot } from '../ui/SliderSlot.js'
 // so rotation animation has no visible effect while handleSlot is bound.
 
 const ACCENT       = '#7ecfcf'   // Direction type colour
-const POINT_ACCENT = '#cf7ecf'   // Point type colour
 const EV_ACCENT    = '#e0e060'   // Event type accent
 const AM_ACCENT    = '#4a8fe8'   // Amount type accent
 
@@ -382,11 +381,6 @@ export class DirectionLayer extends Layer implements DirectionSource {
   // Rendering
   // ----------------------------------------------------------
 
-  renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
-    if (width > 0 && height > 0) this._drawPill(ctx, { x, y, width, height })
-  }
-
   override renderOverlay(ctx: Ctx2D): void {
     this._renderDial(ctx)
   }
@@ -560,70 +554,6 @@ export class DirectionLayer extends Layer implements DirectionSource {
       ctx.setLineDash([])
       ctx.fillStyle = 'rgba(255,255,255,0.32)'; ctx.textAlign = 'left'
       ctx.fillText('unbound', vx + 6, midY)
-    }
-
-    ctx.restore()
-  }
-
-  // ----------------------------------------------------------
-  // Panel pill
-  // ----------------------------------------------------------
-
-  private _drawPill(ctx: Ctx2D, b: BBox): void {
-    const { x, y, width, height } = b
-    const midY      = y + height / 2
-    const magBound  = this._magnitudeSlot.isActive
-
-    ctx.save()
-
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    // Angle / magnitude readout
-    const deg = (this._angle * 180 / Math.PI).toFixed(1)
-    ctx.font         = '11px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-    ctx.fillText(`∠ ${deg}°`, x + 12, midY - 7)
-    ctx.fillStyle = magBound ? ACCENT : 'rgba(255,255,255,0.65)'
-    ctx.fillText(`m  ${this._magnitude.toFixed(2)}`, x + 12, midY + 7)
-
-    // Rotation state indicator
-    if (this._rotating) {
-      ctx.fillStyle = EV_ACCENT
-      drawIcon(ctx, this._clockwise ? 'arrow-clockwise' : 'arrow-counter-clockwise', x + width - 48, midY, 14)
-    }
-
-    // Slot indicators (●/○), right-to-left
-    const slotRows: Array<{ slot: ParameterSlot; label: string; accent: string }> = [
-      { slot: this._cwSlot,           label: 'cw',  accent: EV_ACCENT    },
-      { slot: this._speedSlot,        label: 'spd', accent: AM_ACCENT    },
-      { slot: this._rotateToggleSlot, label: 'rot', accent: EV_ACCENT    },
-      { slot: this._magnitudeSlot,    label: 'mag', accent: ACCENT       },
-      { slot: this._lineSlot,         label: 'ln',  accent: ACCENT       },
-      { slot: this._handleSlot,       label: 'hdl', accent: POINT_ACCENT },
-      { slot: this._positionSlot,     label: 'pos', accent: POINT_ACCENT },
-    ]
-    let dx = x + width - 10
-    ctx.font = '9px monospace'
-    for (const { slot, label, accent } of slotRows) {
-      const active = slot.isActive
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillStyle    = active ? accent : 'rgba(255,255,255,0.22)'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 8
     }
 
     ctx.restore()

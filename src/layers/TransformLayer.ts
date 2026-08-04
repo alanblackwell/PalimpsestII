@@ -663,66 +663,6 @@ export class TransformLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  // ── Stack panel ─────────────────────────────────────────────
-
-  renderPanel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.canvasBounds
-    if (width <= 0 || height <= 0) return
-
-    const midY = y + height / 2
-
-    ctx.save()
-
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    // Accent stripe
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    const angleDeg = Math.round(this._rotation * 180 / Math.PI)
-
-    // Transform readout
-    ctx.font         = '11px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.85)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    const readout = `∠ ${angleDeg}°  × ${this._scale.toFixed(2)}  (${Math.round(this._position.x)}, ${Math.round(this._position.y)})`
-    ctx.fillText(readout, x + 12, midY)
-
-    // Slot indicators (right side)
-    const slots = [
-      { slot: this._sourceSlot,   label: 'src' },
-      { slot: this._positionSlot, label: 'pos' },
-      { slot: this._scaleSlot,    label: 'sc'  },
-      { slot: this._rotateSlot,   label: 'rot' },
-      { slot: this._centreSlot,   label: 'ctr' },
-      { slot: this._opacitySlot,  label: 'op'  },
-    ]
-    let dx = x + width - 6
-    ctx.font = '9px monospace'
-    for (let i = slots.length - 1; i >= 0; i--) {
-      const entry = slots[i]; if (!entry) continue
-      const { slot, label } = entry
-      const active = slot.isActive
-      ctx.fillStyle    = active ? ACCENT : 'rgba(255,255,255,0.22)'
-      ctx.textAlign    = 'right'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(active ? '●' : '○', dx, midY)
-      dx -= 12
-      ctx.fillStyle = 'rgba(255,255,255,0.35)'
-      ctx.fillText(label, dx, midY)
-      dx -= ctx.measureText(label).width + 6
-    }
-
-    ctx.restore()
-  }
-
   // Compute the canvas-space AABB of the transformed source content.
   // Returns null when there is no source or no source snap bounds to work from.
   private _transformedSnapBounds(pos: Point): { cx: number; cy: number; extX: number; extY: number } | null {

@@ -510,7 +510,6 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
   private _drawPill(ctx: Ctx2D, b: BBox): void {
     const { x, y, width, height } = b
     if (width <= 0 || height <= 0) return
-    const midY    = y + height / 2
     const btnB    = this._detectBtnBounds(b)
 
     ctx.save()
@@ -526,17 +525,6 @@ export class TraceLayer extends Layer implements PointSource, MaskSource, ImageS
     ctx.beginPath()
     ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
     ctx.fill()
-
-    // Status text
-    const hasPts = this._controlPoints.length > 0
-    ctx.font         = '10px monospace'
-    ctx.fillStyle    = hasPts ? 'rgba(255,255,255,0.75)' : 'rgba(255,255,255,0.35)'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(
-      hasPts ? `${this._controlPoints.length} pts` : this.imageSlot.isActive ? '…' : '—',
-      x + 16, midY,
-    )
 
     // DETECT button
     ctx.fillStyle = 'rgba(255,255,255,0.08)'

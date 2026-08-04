@@ -44,6 +44,10 @@ export const MIN_RATE  = 0.001  // Hz — slider full-left  (~0.06 BPM)
 export const MAX_RATE  = 8      // Hz — slider full-right (~480 BPM)
 const ACCENT    = '#e87e7e'  // Rate type colour
 
+// Below this BPM, metronome terminology ("Larghissimo" etc.) stops making
+// musical sense, so the readout switches to a seconds-per-cycle description.
+const LOW_BPM_THRESHOLD = 10
+
 // Logarithmic mapping between slider [0,1] and Hz [MIN_RATE, MAX_RATE].
 const _logRange = Math.log(MAX_RATE / MIN_RATE)
 export function sliderToHz(v: number): number {
@@ -192,6 +196,30 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // Rendering
   // ----------------------------------------------------------
 
+  // Two-line tempo readout for the strip pill next to the slider. Below
+  // LOW_BPM_THRESHOLD, BPM and metronome markings are replaced with a
+  // seconds-per-cycle description.
+  private get _tempoLines(): [string, string] {
+    const bpm = this._rateHz * 60
+    if (bpm < LOW_BPM_THRESHOLD) {
+      const sec = this._rateHz > 0 ? Math.round(1 / this._rateHz) : 0
+      return [`${sec} seconds`, 'per cycle']
+    }
+    return [`${Math.round(bpm)} BPM`, tempoMarking(this._rateHz)]
+  }
+
+  // Single-line label for the phase-arc dial — the metronome marking name
+  // for ordinary tempos, or seconds-per-cycle below LOW_BPM_THRESHOLD (where
+  // BPM and marking names stop making musical sense).
+  private get _dialLabel(): string {
+    const bpm = this._rateHz * 60
+    if (bpm < LOW_BPM_THRESHOLD) {
+      const sec = this._rateHz > 0 ? Math.round(1 / this._rateHz) : 0
+      return `${sec} seconds per cycle`
+    }
+    return tempoMarking(this._rateHz)
+  }
+
   renderPanel(ctx: Ctx2D): void {
     if (this.bounds.width <= 0 || this.bounds.height <= 0) return
     this._drawPill(ctx, this.bounds)
@@ -236,16 +264,18 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     ctx.font      = '11px monospace'
     ctx.textAlign = 'left'
 
-    // BPM value (upper label line)
+    const [line1, line2] = this._tempoLines
+
+    // Upper label line — BPM, or seconds-per-cycle below LOW_BPM_THRESHOLD
     ctx.fillStyle    = 'rgba(255,255,255,0.80)'
     ctx.textBaseline = 'middle'
-    ctx.fillText(Math.round(this._rateHz * 60) + ' BPM', labelX, midY - 7)
+    ctx.fillText(line1, labelX, midY - 7)
 
-    // Metronome marking (lower label line) — lit when time source is active
+    // Lower label line — metronome marking or "per cycle" — lit when time source is active
     ctx.fillStyle = this._timeSlot.isActive
       ? 'rgba(232,196,74,0.90)'
       : 'rgba(255,255,255,0.30)'
-    ctx.fillText(tempoMarking(this._rateHz), labelX, midY + 7)
+    ctx.fillText(line2, labelX, midY + 7)
 
     ctx.restore()
   }
@@ -279,24 +309,16 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
       ctx.stroke()
     }
 
-    // BPM value
-    ctx.font         = 'bold 12px monospace'
-    ctx.fillStyle    = 'rgba(255,255,255,0.70)'
+    // Single-line readout below the dial — metronome marking name, or
+    // seconds-per-cycle below LOW_BPM_THRESHOLD.
+    const textY = cy + R + 20
+    ctx.font         = '11px monospace'
+    ctx.fillStyle    = this._timeSlot.isActive
+      ? 'rgba(232,196,74,0.90)'
+      : 'rgba(255,255,255,0.55)'
     ctx.textAlign    = 'center'
     ctx.textBaseline = 'middle'
-    ctx.fillText(Math.round(this._rateHz * 60) + ' BPM', cx, cy - 10)
-
-    // Metronome marking
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = this._timeSlot.isActive
-      ? 'rgba(232,196,74,0.85)'
-      : 'rgba(255,255,255,0.30)'
-    ctx.fillText(tempoMarking(this._rateHz), cx, cy + 3)
-
-    // Phase value
-    ctx.font      = '10px monospace'
-    ctx.fillStyle = 'rgba(255,255,255,0.45)'
-    ctx.fillText('φ ' + this._phase.toFixed(2), cx, cy + 16)
+    ctx.fillText(this._dialLabel, cx, textY)
 
     ctx.restore()
   }

@@ -28,10 +28,9 @@ import { graph } from '../dataflow/Graph.js'
 //   first.  Control points are draggable at all times (editing the
 //   path shape is independent of whether the position slot is bound).
 //
-// Rendering has two components (same pattern as PointLayer):
-//   1. A compact label bar in the stack panel (this.bounds).
-//   2. The spline, control-point handles, and position indicator
-//      drawn directly at their canvas coordinates.
+// Rendering is entirely canvas-space (renderOverlay): the spline,
+// control-point handles, and position indicator drawn directly at
+// their canvas coordinates.
 //
 // Hit-testing finds the nearest control point within HIT_R px;
 // handlePointerDown/Move/Up manage the drag of that point.
@@ -193,51 +192,8 @@ export class AnimationPathLayer extends Layer implements PointSource {
 
   renderSelf(_ctx: Ctx2D): void {}
 
-  renderPanel(ctx: Ctx2D): void {
-    this._renderLabel(ctx)
-  }
-
   override renderOverlay(ctx: Ctx2D): void {
     this._renderPath(ctx)
-  }
-
-  private _renderLabel(ctx: Ctx2D): void {
-    const { x, y, width, height } = this.bounds
-    if (width <= 0 || height <= 0) return
-
-    ctx.save()
-
-    // Background pill
-    ctx.fillStyle = 'rgba(0,0,0,0.45)'
-    ctx.beginPath()
-    ctx.roundRect(x, y, width, height, Math.min(height / 2, 8))
-    ctx.fill()
-
-    // Accent stripe
-    ctx.fillStyle = ACCENT
-    ctx.beginPath()
-    ctx.roundRect(x, y, 4, height, [4, 0, 0, 4])
-    ctx.fill()
-
-    const midY = y + height / 2
-    ctx.font         = '11px monospace'
-    ctx.textBaseline = 'middle'
-
-    // Current output coordinates
-    const px = Math.round(this._currentPoint.x)
-    const py = Math.round(this._currentPoint.y)
-    ctx.fillStyle = this._posSlot.isActive
-      ? 'rgba(255,255,255,0.55)'
-      : 'rgba(255,255,255,0.80)'
-    ctx.textAlign = 'left'
-    ctx.fillText(`(${px}, ${py})`, x + 12, midY)
-
-    // Position t on the right
-    ctx.fillStyle = 'rgba(255,255,255,0.35)'
-    ctx.textAlign = 'right'
-    ctx.fillText(`t=${this._position.toFixed(2)}`, x + width - 8, midY)
-
-    ctx.restore()
   }
 
   private _renderPath(ctx: Ctx2D): void {
