@@ -8,6 +8,7 @@ import {
   type EventValue, type EventSource,
   type ImageSource,
   type PointSource,
+  type AudioSource,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -15,12 +16,14 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 import { TempoLayer, sliderToHz, hzToSlider } from './TempoLayer.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { audioRhythm } from '../audio/AudioRhythm.js'
+import { AudioScopeWidget } from '../audio/AudioScopeWidget.js'
 
 // ------------------------------------------------------------
 // EventLayer — discrete event source (pulse generator)
 // ------------------------------------------------------------
 //
-// Three independent triggering modes (all active simultaneously
+// Four independent triggering modes (all active simultaneously
 // when their slots are bound):
 //
 //   Manual       — [▶ FIRE] button triggers a pulse on click.
@@ -56,10 +59,38 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 //                  centroid of surviving pixels is mapped back to
 //                  canvas coordinates and shown as a crosshair/flash.
 //
+//   Audio onset  — audioSlot (Audio, e.g. a VideoLayer's file audio) is
+//                  bound. The signal is passed through the shared
+//                  audioRhythm singleton's band-pass BiquadFilterNode
+//                  (tunable centre frequency + Q, e.g. isolating a kick
+//                  drum from vocals — full-band amplitude alone is
+//                  dominated by whatever's loudest) built downstream of
+//                  the raw AnalyserNode VideoLayer exposes. Fires on the
+//                  below→above rising edge of a level threshold on the
+//                  filtered envelope, gated by a short refractory period.
+//                  See src/audio/AudioRhythm.ts — filter/detector/beat-
+//                  tracking are all shared with TempoLayer's audio mode
+//                  ("one master audio rhythm"), not per-layer state, so
+//                  tuning either layer's scope tunes both. Level
+//                  threshold, filter frequency, and Q are dragged
+//                  directly on a live amplitude-trace scope
+//                  (AudioScopeWidget, src/audio/AudioScopeWidget.ts),
+//                  which also marks each detected onset with a travelling
+//                  yellow line and the shared beat prediction with a cyan
+//                  grid. An optional tempo gate (toggle button in the
+//                  pill header) rejects onsets that don't land near a
+//                  predicted beat — bounces/reverb trailing a real hit.
+//                  A TAP button (same header, same shared audioRhythm.tap()
+//                  as TempoLayer's) lets the prior be (re)seeded directly
+//                  from here — useful for rhythmic material, where a
+//                  manually-set inter-onset-interval estimate improves the
+//                  tempo gate's accuracy without needing a TempoLayer.
+//
 // Output: EventValue — performance.now() timestamp of the most
 // recent pulse, or null if never triggered.
 
 const ACCENT               = '#e0e060'
+const AUDIO_TC              = '#a87ee8'   // Audio type accent
 const CALIBRATION_SAMPLES  = 500
 const PROXIMITY_TOLERANCE  = 1.05   // fire within 5 % of calibrated minimum
 const PROBE_SIZE           = 64     // collision probe canvas dimensions
@@ -68,6 +99,11 @@ const PROBE_SIZE           = 64     // collision probe canvas dimensions
 // pass through each other, which would otherwise spuriously reset _wasColliding
 // and trigger a second fire mid-passage.
 const SEPARATION_THRESHOLD = 3
+
+// Tempo gate — rejects a detected onset unless it lands within this
+// fraction of a beat cycle of the shared audioRhythm's predicted beat,
+// to filter out bounces/reverb trailing a real hit.
+const TEMPO_GATE_TOLERANCE = 0.15
 
 // Button geometry
 const BTN_M = 6
@@ -88,6 +124,7 @@ export class EventLayer extends Layer implements EventSource {
   private readonly _targetSlot:   ParameterSlot
   private readonly _imageASlot:   ParameterSlot
   private readonly _imageBSlot:   ParameterSlot
+  private readonly _audioSlot:    ParameterSlot
 
   // Collision probe canvas — allocated once, reused every frame
   private readonly _probe:    OffscreenCanvas
@@ -119,6 +156,19 @@ export class EventLayer extends Layer implements EventSource {
   private _contactPoint:      Point | null = null  // current-frame collision centroid
   private _lastContactPoint:  Point | null = null  // snapshot at last event fire
 
+  // ── Audio-onset detection state ─────────────────────────────
+  // Filter/detector state itself lives in the shared audioRhythm
+  // singleton ("one master audio rhythm") — this widget instance only
+  // holds this layer's own drag/UI state, so EventLayer's and
+  // TempoLayer's scopes can be dragged independently while staying in
+  // sync (see src/audio/AudioRhythm.ts, src/audio/AudioScopeWidget.ts).
+  private readonly _scope = new AudioScopeWidget()
+
+  // Tempo gate — see TEMPO_GATE_TOLERANCE / _passesTempoGate.
+  private _tempoGate = false
+  private _tempoGateBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+
   constructor() {
     super()
     this._rateSlot     = new ParameterSlot(ValueType.Rate, this, 'tempo')
@@ -126,9 +176,10 @@ export class EventLayer extends Layer implements EventSource {
     this._targetSlot   = new ParameterSlot(ValueType.Point,  this, 'target')
     this._imageASlot   = new ParameterSlot(ValueType.Image,  this, 'image A', true)
     this._imageBSlot   = new ParameterSlot(ValueType.Image,  this, 'image B', true)
+    this._audioSlot    = new ParameterSlot(ValueType.Audio,  this, 'audio')
     this.slots.push(
       this._rateSlot, this._animPathSlot, this._targetSlot,
-      this._imageASlot, this._imageBSlot,
+      this._imageASlot, this._imageBSlot, this._audioSlot,
     )
 
     this._probe    = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE)
@@ -154,6 +205,7 @@ export class EventLayer extends Layer implements EventSource {
   get targetSlot():   ParameterSlot { return this._targetSlot }
   get imageASlot():   ParameterSlot { return this._imageASlot }
   get imageBSlot():   ParameterSlot { return this._imageBSlot }
+  get audioSlot():    ParameterSlot { return this._audioSlot }
 
   // ----------------------------------------------------------
   // SliderRegion callback — called when user drags the rate slider
@@ -172,12 +224,14 @@ export class EventLayer extends Layer implements EventSource {
     return {
       running:         this._running,
       rateSliderValue: this._rateSlider.value,
+      tempoGate:       this._tempoGate,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.running === 'boolean')         this._running = state.running
     if (typeof state.rateSliderValue === 'number')  this._rateSlider.setValue(state.rateSliderValue)
+    if (typeof state.tempoGate === 'boolean')        this._tempoGate = state.tempoGate
   }
 
   // ----------------------------------------------------------
@@ -326,6 +380,35 @@ export class EventLayer extends Layer implements EventSource {
       this._separationFrames = 0
       this._contactPoint     = null
     }
+
+    // ── Mode 4: audio onset detection ──────────────────────
+    if (this._audioSlot.isActive) {
+      const analyser = (this._audioSlot.source as AudioSource).getAudio()
+      if (analyser !== null) {
+        const nowMs  = performance.now()
+        const onset  = audioRhythm.update(analyser, nowMs)
+        if (onset && this._passesTempoGate(nowMs)) this._eventTime = performance.now()
+      }
+      queueMicrotask(() => this.forceDirty())   // keep the live scope animating
+    }
+  }
+
+  // When enabled, rejects a detected onset unless it lands within
+  // TEMPO_GATE_TOLERANCE of the shared audioRhythm's predicted beat —
+  // filters out bounces/reverb trailing a real hit. Passes everything
+  // through until a tempo estimate has locked in.
+  private _passesTempoGate(nowMs: number): boolean {
+    if (!this._tempoGate || audioRhythm.periodMs === null) return true
+    const phase = audioRhythm.currentPhase(nowMs)
+    return Math.min(phase, 1 - phase) <= TEMPO_GATE_TOLERANCE
+  }
+
+  // Tap-tempo — same shared audioRhythm.tap() TempoLayer's TAP button
+  // uses. No suspend-on-touch needed here: unlike TempoLayer, EventLayer
+  // has no manual Hz control competing with audioRhythm's prior.
+  private _tap(): void {
+    audioRhythm.tap(performance.now())
+    this.markDirty()
   }
 
   // Downscale both images to a 64×64 probe canvas, multiply their alphas
@@ -662,10 +745,10 @@ export class EventLayer extends Layer implements EventSource {
     const y2 = this.renderSlotGroup(ctx, [this._animPathSlot, this._targetSlot], y) + SLOT_GAP
 
     // ── Pill 3: collision (image A + B) with heading ─────────
+    const HEAD_H = 18
+    const cSlots = [this._imageASlot, this._imageBSlot]
+    const totalH = HEAD_H + cSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
     {
-      const HEAD_H = 18
-      const cSlots = [this._imageASlot, this._imageBSlot]
-      const totalH = HEAD_H + cSlots.length * (SLOT_H + SLOT_GAP) - SLOT_GAP
       const IMAGE_TC = '#7ecf7e'
 
       ctx.save()
@@ -739,6 +822,72 @@ export class EventLayer extends Layer implements EventSource {
 
       ctx.restore()
     }
+
+    // ── Pill 4: audio onset ──────────────────────────────────
+    const y3 = y2 + totalH + SLOT_GAP
+    this._renderAudioPill(ctx, y3, PANEL_X, PANEL_W)
+  }
+
+  // Live amplitude-trace scope (of the band-pass-filtered signal) with a
+  // draggable level-threshold handle, a draggable Q handle, a band-centre-
+  // frequency mini-slider, and a travelling yellow marker at the most
+  // recent detected onset, plus the audioSlot binding row.
+  private _renderAudioPill(ctx: Ctx2D, y: number, PANEL_X: number, PANEL_W: number): void {
+    const HEAD_H  = 18
+    const totalH  = HEAD_H + SLOT_H + SLOT_GAP + AudioScopeWidget.HEIGHT + 8
+
+    ctx.save()
+    ctx.textBaseline = 'middle'
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(PANEL_X, y, PANEL_W, totalH, 6)
+    ctx.fill()
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.38)'
+    ctx.textAlign = 'left'
+    ctx.fillText('audio onset', PANEL_X + 8, y + HEAD_H / 2)
+
+    // TAP button — (re)seeds the shared audioRhythm prior directly, same
+    // logic (same shared state) as TempoLayer's TAP button. Useful here
+    // too: rhythmic material's onset detection gets more accurate once
+    // the tempo gate (below) has a manually-set inter-onset-interval
+    // estimate to filter candidate onsets against.
+    const TAP_W = 36, TAP_H = HEAD_H - 4
+    const tapX  = PANEL_X + PANEL_W - TAP_W - 3
+    const tapY  = y + 2
+    this._tapBtnBounds = { x: tapX, y: tapY, width: TAP_W, height: TAP_H }
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.beginPath(); ctx.roundRect(tapX, tapY, TAP_W, TAP_H, 4); ctx.fill()
+    ctx.fillStyle = AUDIO_TC
+    ctx.font = 'bold 10px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('TAP', tapX + TAP_W / 2, tapY + TAP_H / 2 + 0.5)
+
+    // Tempo-gate toggle — small button left of TAP.
+    const GATE_SZ = HEAD_H - 4
+    const gateX   = tapX - GATE_SZ - 4
+    const gateY   = y + 2
+    this._tempoGateBtnBounds = { x: gateX, y: gateY, width: GATE_SZ, height: GATE_SZ }
+    ctx.fillStyle = this._tempoGate ? AUDIO_TC + '55' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath(); ctx.roundRect(gateX, gateY, GATE_SZ, GATE_SZ, 3); ctx.fill()
+    ctx.strokeStyle = this._tempoGate ? AUDIO_TC : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    ctx.beginPath(); ctx.arc(gateX + GATE_SZ / 2, gateY + GATE_SZ / 2, GATE_SZ / 2 - 4, 0, Math.PI * 2); ctx.stroke()
+
+    // audioSlot row — via the shared generic slot-row renderer (same
+    // accent/compat/suspended states every other slot gets); backdrop
+    // already painted above, so drawBackdrop = false.
+    const rowY = y + HEAD_H
+    ctx.font = '10px monospace'
+    this.renderSlotGroup(ctx, [this._audioSlot], rowY, false)
+
+    // Frequency slider + scope + handles — shared with TempoLayer's audio
+    // mode via the same audioRhythm singleton (see AudioScopeWidget).
+    this._scope.render(ctx, PANEL_X, rowY + SLOT_H + SLOT_GAP, PANEL_W)
+
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
@@ -761,12 +910,34 @@ export class EventLayer extends Layer implements EventSource {
       this.markDirty()
       return true
     }
+    if (this._tempoGateBtnBounds && boundingBoxContains(this._tempoGateBtnBounds, point)) {
+      this._tempoGate = !this._tempoGate
+      this.markDirty()
+      return true
+    }
+    if (this._tapBtnBounds && boundingBoxContains(this._tapBtnBounds, point)) {
+      this._tap()
+      return true
+    }
+    if (this._scope.handlePointerDown(point)) return true
     return false
+  }
+
+  handlePointerMove(point: Point): void {
+    this._scope.handlePointerMove(point)
+    if (this._scope.dragging) this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._scope.handlePointerUp()
   }
 
   protected override hitTestSelf(point: { x: number; y: number }) {
     if (this._cpBounds && boundingBoxContains(this._cpBounds, point)) return this
     if (this._playBtnBounds && boundingBoxContains(this._playBtnBounds, point)) return this
+    if (this._tempoGateBtnBounds && boundingBoxContains(this._tempoGateBtnBounds, point)) return this
+    if (this._tapBtnBounds && boundingBoxContains(this._tapBtnBounds, point)) return this
+    if (this._scope.hitTest(point) !== null) return this
     const sliderHit = this._rateSlider.hitTest(point)
     if (sliderHit !== null) return sliderHit
     return null

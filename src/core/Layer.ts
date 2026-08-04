@@ -15,6 +15,7 @@ const SLOT_TC: Partial<Record<ValueType, string>> = {
   [ValueType.Count]:     '#a0a0a0',
   [ValueType.Event]:     '#e0e060',
   [ValueType.Collection]:'#a0a4b8',
+  [ValueType.Audio]:     '#a87ee8',
 }
 
 // ------------------------------------------------------------

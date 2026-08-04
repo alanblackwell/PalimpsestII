@@ -2,6 +2,7 @@ import { Node } from '../core/Node.js'
 import { Layer } from '../core/Layer.js'
 import { SlotState, type BoundingBox } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
+import { audioRhythm } from '../audio/AudioRhythm.js'
 
 import { RootLayer }       from '../layers/RootLayer.js'
 import { ClockLayer }      from '../layers/ClockLayer.js'
@@ -113,6 +114,13 @@ export interface SaveFile {
   version: number
   canvas: { width: number; height: number }
   clock: { elapsed: number; paused: boolean }
+  // Shared audio-rhythm tuning (src/audio/AudioRhythm.ts) — a plain
+  // importable singleton, not structural like clock/background/archive
+  // below, so no cross-reference ids are needed. Optional: absent in
+  // saves from before this feature, and beat/phase tracking state isn't
+  // included — that's live, recomputed state that re-locks quickly once
+  // audio is playing again, not "manual/fallback" state worth persisting.
+  audioRhythm?: { filterFreq: number; filterQ: number; levelThreshold: number }
   layers: LayerRecord[]
   stack: number[]
   background: number[]
@@ -339,6 +347,11 @@ export async function serialize(ctx: PersistenceContext): Promise<SaveFile> {
     version: SAVE_FILE_VERSION,
     canvas: { width: Node.canvasWidth, height: Node.canvasHeight },
     clock: { elapsed: ctx.clock.elapsed, paused: ctx.clock.paused },
+    audioRhythm: {
+      filterFreq:     audioRhythm.filterFreq,
+      filterQ:        audioRhythm.filterQ,
+      levelThreshold: audioRhythm.onset.levelThreshold,
+    },
     layers,
     stack: stackIds,
     background: backgroundIds,
@@ -531,6 +544,15 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
   // root.clockSlot (a raw bind, not a BindingLayer — see phase-7 skip above).
   ctx.clock.restoreState(json.clock.elapsed, json.clock.paused)
   ctx.root.setClock(ctx.clock)
+
+  // Phase 8b — restore the shared audioRhythm singleton's tunables. Absent
+  // in saves from before this feature; beat/phase state isn't persisted
+  // (see SaveFile.audioRhythm), so no restore needed there.
+  if (json.audioRhythm) {
+    if (typeof json.audioRhythm.filterFreq === 'number')     audioRhythm.filterFreq = json.audioRhythm.filterFreq
+    if (typeof json.audioRhythm.filterQ === 'number')        audioRhythm.filterQ = json.audioRhythm.filterQ
+    if (typeof json.audioRhythm.levelThreshold === 'number') audioRhythm.onset.levelThreshold = json.audioRhythm.levelThreshold
+  }
 
   // Phase 9 — finish. Caller is responsible for refreshStack()/selection.
   ctx.root.forceDirty()

@@ -40,13 +40,24 @@ check whether `docs/` is stale before debugging the feature itself
 
 ### Value types (`src/core/types.ts`)
 
-Ten types in the `ValueType` enum:
-`Image`, `Mask`, `Colour`, `Amount`, `Point`, `Direction`, `Rate`, `Count`, `Event`, `Collection`
+Eleven types in the `ValueType` enum:
+`Image`, `Mask`, `Colour`, `Amount`, `Point`, `Direction`, `Rate`, `Count`, `Event`, `Collection`, `Audio`
 
 Each has a corresponding `*Source` interface (`AmountSource`, `MaskSource`, etc.).
 Layers that produce a type implement the interface; consumers cast `slot.source`
 to the interface to read the value. This is structural subtyping — no shared
 base interface required.
+
+`Audio` is deliberately a thin handle rather than an interpreted signal:
+`AudioValue = AnalyserNode | null`, and `AudioSource.getAudio()` just returns
+the raw Web Audio node (same shape as `MaskValue`/`MaskSource` exposing an
+`OffscreenCanvas`). Consumers pull samples from it themselves every frame
+(`getByteTimeDomainData`/`getByteFrequencyData`) and do their own analysis —
+see `VideoLayer`'s audio tap and `EventLayer`/`TempoLayer`'s audio modes
+below. Three separate `Partial<Record<ValueType, string>>` maps duplicate the
+per-type accent colour/label (`Layer.ts`'s `SLOT_TC`, `BindingLayer.ts`'s
+`TYPE_COLOUR`, `ParameterSlot.ts`'s `_defaultLabel`) — there is no single
+source of truth, so a new `ValueType` needs an entry added to all three.
 
 ### Node (`src/core/Node.ts`)
 
@@ -176,7 +187,7 @@ Standard elements:
 - Accent stripe: 4 px wide on the left, coloured by type
 - Type accent colours: Amount `#4a8fe8`, Colour `#e8944a`, Image `#7ecf7e`,
   Mask `#cfcf7e`, Point `#cf7ecf`, Direction `#7ecfcf`, Rate `#e87e7e`,
-  Event `#e0e060`, Count `#a0a0a0`
+  Event `#e0e060`, Count `#a0a0a0`, Collection `#a0a4b8`, Audio `#a87ee8`
 - Slot indicator dots (●/◐/○ for Bound/SuspendedBound/Unbound) drawn
   right-to-left before the reset button
 - Reset button `[↺]` at far right: `x + width - 26, width: 20`
@@ -525,6 +536,18 @@ Every new `RateLayer`'s `timeSlot` is auto-bound to this singleton via
 `bindRateClock()` (in `postInsertLayer`, the slot-click default-value path,
 and `ensurePhaseSource`'s hidden-helper Rate).
 
+**Global pause ('p' key)** — `interaction.setPauseClockAction` (wired once,
+`main.ts`, near the other global key actions) toggles `clock.togglePause()`
+and, on the same keypress, also pauses every currently-`instanceof
+VideoLayer` node found via `graph.nodes` (`VideoLayer.pauseForGlobalPause()`
+— file-source playback only; camera/screen are live capture, not a
+play/pause timeline) and freezes the shared `audioRhythm` singleton
+(`audioRhythm.setPaused(true)`, see "Audio-onset detection..." below) — one
+key freezes everything time-based at once, for testing convenience. Resuming
+only resumes the `VideoLayer`s this same action paused (tracked in a
+`Set<VideoLayer>` closure in `main.ts`), so a video the user had already
+paused manually beforehand stays paused.
+
 ### `DeletionLayer`
 
 Not inserted into the stack at startup. `ensureDeletionLayerInStack()` adds it
@@ -586,6 +609,9 @@ and the mask source to `BackgroundLayer`).
 | `src/layers/ClockLayer.ts` | Singleton time source, `outsideStack` but ticked every frame |
 | `src/layers/FilterGL.ts` | Shared WebGL pipeline singleton for `FilterLayer` |
 | `src/layers/MotionBlurLayer.ts` | Temporal image accumulation / motion trails |
+| `src/audio/OnsetDetector.ts` | Crude time-domain onset DSP (pure, not a singleton itself) |
+| `src/audio/AudioRhythm.ts` | Shared "one master audio rhythm" singleton — filter, detector, beat-tracking |
+| `src/audio/AudioScopeWidget.ts` | Shared live-scope tuning UI, used by both EventLayer and TempoLayer |
 | `src/persistence/Persistence.ts` | Save/load — `LAYER_CLASSES` registry, serialize/deserialize |
 | `spec/architecture.md` | Detailed architecture specification |
 | `spec/feature-log.md` | Per-feature implementation notes (historical reference) |
@@ -750,6 +776,240 @@ reopens the file picker when file is already the active source).
 for file mode. The file-playback scrub/control bar at the bottom of the
 viewport now starts at `contentLeft(cw)` instead of a fixed left margin, so
 it's no longer hidden under the `LayerStackWidget` strip.
+
+`VideoLayer` also `implements AudioSource` (`types` includes `ValueType.Audio`
+alongside `Image` — the same multi-type-source pattern `LineLayer` uses for
+Image+Mask). `getAudio()` lazily builds an `AudioContext` →
+`MediaElementAudioSourceNode(this._video)` → `AnalyserNode` (small
+`fftSize = 1024` for low-latency time-domain reads) → `destination` chain the
+first time a consumer calls it, and caches it forever —
+`createMediaElementSource` can only be called once per `<video>` element ever,
+and `_video` persists across camera/screen/file source switches, so this is
+safe regardless of when the first consumer binds. No source-type gating: when
+not playing file audio the signal is simply near-silent, which consumers
+already have to tolerate.
+
+### Audio-onset detection and beat induction — stage-performance sync
+
+Three-file split: `src/audio/OnsetDetector.ts` (pure DSP), `src/audio/
+AudioRhythm.ts` (shared analysis singleton), `src/audio/AudioScopeWidget.ts`
+(shared tuning UI). `EventLayer`'s audio-onset trigger mode and `TempoLayer`'s
+audio-driven beat induction each bind a `VideoLayer` (or any future
+`AudioSource`) via their own `Audio`-typed `audioSlot`, but **there is only
+one master audio rhythm at a time** — filtering, onset detection, and beat
+tracking are shared global state, not per-layer copies that could drift out
+of sync tuning-wise. Whichever layer's `audioSlot` is active feeds the
+shared singleton each `recompute()`; tuning dragged on either layer's scope
+applies to both immediately.
+
+**`OnsetDetector`** — plain (non-`Node`) DSP, time-domain only (no FFT — a
+windowed analysis would delay a one-off transient; frequency selectivity is
+the caller's job, via a `BiquadFilterNode` upstream — see `AudioRhythm`
+below). Each `sample()` call reduces `getByteTimeDomainData` to a single
+envelope scalar (mean absolute deviation from silence, `[0, 1]`) and fires
+`onset` on the below→above rising edge of `levelThreshold`, gated by a short
+refractory period — edge-triggering (not "level is currently above") is
+what stops a sustained loud passage from retriggering every time the
+refractory window expires. `history` (1000 samples, `HISTORY_LEN`, public,
+~16 s at one `sample()` call per rendered frame — long enough to see
+several cycles of a slow beat) and parallel `historyTimesMs` (wall-clock
+capture time per sample, for placing something timestamp-based like a
+predicted-beat grid onto the tick-indexed axis by interpolation) are a
+render-only ring buffer. `onsetAges` returns the age (ticks since firing) of
+every still-visible onset, oldest first, so a caller can mark each one on a
+scrolling trace rather than only the latest. `normCenter`/`normScale` are a
+slow EMA (not a windowed min/max, which would make a display scale jump
+every time a peak entered or left the visible window) of the envelope's
+centre and mean absolute deviation, for auto-normalising a live trace.
+
+**`AudioRhythm`** (`export const audioRhythm = new AudioRhythm()`) — a bare
+module-level singleton, same weight as `FilterGL`'s shared WebGL pipeline
+(no `Node`/`Layer`/`Clock`, no graph registration, no per-frame ticking of
+its own — purely input-driven by whichever caller supplies a live
+`AnalyserNode`). Owns: `filterFreq`/`filterQ` (tunable `BiquadFilterNode`
+params — full-band amplitude alone was dominated by whichever instrument is
+loudest, e.g. vocals drowning out a kick drum, so isolating a band is what
+makes onset detection usable for beat-driven triggers), the one shared
+`OnsetDetector` instance, and beat-induction state (`periodMs`, private
+wall-clock `_phaseAnchorMs`/`_lastBeatOnsetMs`/`_tapTimes`). `update(raw
+Analyser, nowMs)` lazily builds/rebuilds a band-pass tap downstream of
+whatever raw `AnalyserNode` it's given (`raw -> BiquadFilterNode('bandpass')
+-> its own AnalyserNode` — an `AnalyserNode`'s output fanning out further,
+not a change to `VideoLayer`, keeping "`VideoLayer` only exposes the tap,
+DSP happens at the consumer"), runs the detector on the filtered signal, and
+on a fire updates the beat-induction prior via `_registerBeatOnset` — a
+crude drift-tolerant PLL: rejects intervals outside `[0.5×, 1.5×]` of the
+current period estimate (defense in depth — in practice the refractory
+below already keeps this from tripping once a period exists), otherwise
+blends the period toward the freshly measured interval at `AUDIO_DRIFT_RATE`
+(0.1) — or the much slower `AUDIO_DRIFT_RATE_CONFIDENT` (0.02) once
+`tap()` has set `_periodConfident`, so a tapped tempo stays sticky against
+live audio evidence — and nudges `_phaseAnchorMs` by a damped fraction of
+the phase error at a fixed rate regardless of confidence (audio timing is
+more precise than a human tap, so phase keeps correcting freely either
+way; only *period* drift slows down post-tap) — never a hard reset either
+way. `update()` also keeps `onset.refractoryMs` in sync with the current
+period estimate every call — `max(BASE_REFRACTORY_MS, periodMs ×
+REFRACTORY_FRACTION)` (0.6) — so once a period is known (especially a
+tapped one), anything arriving sooner than ~60% of a beat cycle later
+structurally can't register as a separate onset at all: this is what
+rejects an echo/reverb tail immediately following a real hit, filtered
+before it ever reaches interval estimation rather than merely down-weighted
+afterward. `currentPhase(nowMs)`/`currentRateHz()`
+derive from `periodMs`/`_phaseAnchorMs` directly in wall-clock ms
+throughout (deliberately **not** anchored to any one `TempoLayer`'s own
+`_timeSlot`/`_timeValue` the way a single-layer implementation naturally
+would be — onset-interval measurement was already wall-clock-based via
+`performance.now()`, and decoupling the phase anchor from any one
+consumer's time source is what sharing this prediction across multiple
+layers requires). One real behaviour change from a single-layer design:
+this means `AudioRhythm` pausing is independent of the singleton
+`ClockLayer`'s own pause state — nothing here freezes just because
+`ClockLayer` does. `paused`/`setPaused(p)` is `AudioRhythm`'s own explicit
+freeze: `update()` becomes a no-op (history/onset markers hold their last
+state) and `displayNowMs` holds the moment pausing started (rather than
+live `performance.now()`), so `AudioScopeWidget`'s predicted-beat overlay
+(which reads wall-clock time every render) freezes in place too instead of
+continuing to drift while the trace itself is frozen. The global 'p' key
+(see `ClockLayer` singleton above) calls `audioRhythm.setPaused(true)`
+alongside pausing `ClockLayer` and video playback, but nothing requires
+that pairing — a future caller could pause just the audio analysis.
+`tap(nowMs)` (re)seeds `periodMs`/`_phaseAnchorMs` — the standard "tap
+tempo" convention from music software, called by both `EventLayer` and
+`TempoLayer`'s TAP buttons (below). A gap of more than `MIN_TAP_INTERVAL_
+GAP_MS` (12 s, covers down to 6 BPM — must comfortably exceed the slowest
+realistic tap-to-tap spacing, or every tap in a genuine slow sequence looks
+like the start of a new one and `periodMs` never updates at all; e.g.
+tapping the downbeat of a slow bar rather than every beat, where "tempo"
+means bar-rate) starts a fresh run, free to jump straight to a new tempo
+(the very first interval of a
+run is taken raw, unblended, precisely because it shouldn't be weighed
+against an unrelated prior); later taps within the same run blend at
+`TAP_DRIFT_RATE` (0.4 — higher than audio's, since a deliberate tap is
+higher-quality evidence and should converge in a few taps, not drift
+glacially) rather than recomputing a flat median from scratch each time
+(which used to make every tap jitter independently instead of firming up).
+`tapMarkerTimesMs` (public, render-only, capped at `MAX_TAP_MARKERS = 32`)
+records every `tap()` call's wall-clock time regardless of what it did or
+didn't do to `periodMs` — `AudioScopeWidget` draws a red (`#ff3b3b`) line
+per entry, a diagnostic independent of the period/predicted-beat machinery
+for confirming the TAP button is actually registering clicks at all.
+
+**`AudioScopeWidget`** — the part of the tuning UI that's identical
+wherever it's shown and reads/writes `audioRhythm` directly: the
+band-centre-frequency mini-slider (log-mapped 40 Hz – 2 kHz, full-width
+drag track rather than a small circular handle, since its range needs a
+wider grab target), the scope box (waveform + onset markers + predicted-beat
+grid), and the level/Q drag handles. **Not** included: the `audioSlot`
+binding row and pill header, which stay layer-specific (each layer still
+decides which `VideoLayer` feeds the shared analysis) — callers draw a
+header (label + TAP/gate buttons) then render the `audioSlot` row via the
+ordinary shared `Layer.renderSlotGroup(ctx, [audioSlot], rowY, false)` (the
+`drawBackdrop = false` form — the caller's already painted one continuous
+pill backdrop behind header + slot row + scope, exactly `TraceLayer`'s
+`_renderColourPill` pattern) and then call `render(ctx, x, y, width)` for
+the frequency/scope/handles portion, which returns the total height
+consumed (`AudioScopeWidget.HEIGHT` gives this up front, for sizing the
+pill backdrop before calling `render`). `EventLayer` and `TempoLayer`'s
+audio pills are now deliberately identical in structure this way — header,
+`audioSlot` row, scope, all one pill — see both below. Each host layer
+constructs its **own** `AudioScopeWidget` instance — the widget holds only
+this-instance drag/UI state (`_scopeBounds`, `_levelHandlePos`, `_qHandlePos`,
+`_freqRowBounds`, `_scopeDrag`), never analysis state — so `EventLayer`'s
+and `TempoLayer`'s scopes can be dragged independently while staying
+visually and numerically in sync (both mutate the same `audioRhythm`).
+Waveform trace and onset markers are positioned horizontally via
+`_ageToX` — age (ticks since capture) scaled against `OnsetDetector.
+HISTORY_LEN` (the buffer's fixed *capacity*, not its current `length`) — so
+newest is always pinned to the scope's right edge and the time axis never
+rescales as the buffer fills from empty (indexing directly by array
+position instead made the apparent time scale visibly stretch while
+filling). Vertically, the waveform trace and the level-threshold line are
+positioned through `_envToY`/`_yToEnv` (inverse, used when dragging the
+level handle), mapping an envelope value to scope-y via `OnsetDetector`'s
+`normCenter`/`normScale` — running average sits at `MEAN_Y_FRAC` (0.2, i.e.
+20%) up from the bottom, **not** centred: every onset of interest is a rise
+*above* the mean, so most of the height (80%) is headroom above it and
+little is spent below. Both directions still share one constant
+deviations-per-pixel rate (`NORM_HEADROOM` total), so this is a pure
+re-anchoring of the same linear scale, not a different slope each way —
+the trace stays visible and the threshold line stays visually aligned with
+where it actually crosses the trace regardless of loudness (the absolute
+`levelThreshold` value used for detection is unaffected — only its
+*displayed* position is normalised). `AudioRhythm`'s `onset` is constructed
+with `levelThreshold = 0.05`, chosen so the handle starts at roughly 50% up
+this axis given `OnsetDetector`'s initial (pre-adaptation) EMA seed values
+— a reasonable starting drag position before real audio has streamed in
+and shifted the live centre/scale to something track-specific. The scope
+**always** draws a yellow
+(`#ffe000`) vertical line per entry in `onsetAges` — every detected onset
+gets its own persistent marker that travels leftward with the waveform and
+only disappears once it ages out (not replaced by the next onset) — and,
+whenever `audioRhythm.periodMs !== null`, a cyan (`#4ae0e0`) predicted-beat
+grid: vertical lines at each beat position `AudioRhythm` currently predicts,
+computed by walking backward from `currentPhase(nowMs) * periodMs` in
+`periodMs` steps and converting each to an x via the average ms-per-tick
+across `historyTimesMs` (good enough for a visual overlay without tracking
+exact per-tick timestamps). No on/off option for the predicted-beat
+overlay — it's useful comparison context on both layers (why `TempoLayer`
+duplicates the scope at all — tuning from either layer, plus this
+comparison view — and what makes `EventLayer`'s tempo gate below legible),
+so showing it unconditionally keeps the widget's API simple.
+
+**`EventLayer`** (mode 4 of its four independent trigger modes): calls
+`audioRhythm.update(analyser, nowMs)` each `recompute()`, and on a fire,
+optionally gates it through `_passesTempoGate` — when the `_tempoGate`
+toggle (small button in the "audio onset" pill header, plain boolean, not
+tied to a `ParameterSlot`) is on and a tempo estimate has locked in, an
+onset is only accepted if `audioRhythm.currentPhase(nowMs)` is within
+`TEMPO_GATE_TOLERANCE` (0.15, a fixed constant) of a beat — rejecting
+onsets that don't land near a predicted beat, e.g. bounces/reverb trailing
+a real hit. Passes everything through until a tempo estimate exists. The
+pill header also has a **TAP** button (plain text glyph — no tap/metronome
+icon exists in `src/ui/icons.ts`), next to the gate toggle: calls
+`audioRhythm.tap(performance.now())` directly, no suspend-on-touch needed
+(unlike `TempoLayer`, `EventLayer` has no manual Hz control competing with
+`audioRhythm`'s prior). Useful even though `EventLayer` doesn't display a
+tempo: for rhythmic material, manually seeding the inter-onset-interval
+estimate is what makes the tempo gate above accurate, without needing a
+`TempoLayer` in the stack at all. Level threshold/filter freq/Q are **not**
+serialized per-`EventLayer` instance any more (see `AudioRhythm`
+persistence below) — `serializeState` only keeps `tempoGate` alongside its
+pre-existing fields.
+
+**`TempoLayer`**: audio branch calls the same `audioRhythm.update(...)` and
+reads `periodMs`/`currentRateHz()` to drive `_rateHz`, at lowest priority —
+an explicitly-bound `_rateSlot` (`Rate`) still wins outright, unchanged from
+before this feature. Phase: when the audio slot is active and locked,
+`_phase = audioRhythm.currentPhase(nowMs)` directly, bypassing the
+`_timeValue`-based formula entirely for that case; every other case
+(rate-slot-bound, manual slider) keeps the original `wrap01(_timeValue *
+_rateHz)` formula unchanged. `renderSlots` pulls `audioSlot` out of the main
+`timeSlot`/`rateSlot` group and renders it in its own `_renderAudioPill`
+pill (own `AudioScopeWidget` instance, `this._scope`) below — **structured
+identically to `EventLayer`'s audio-onset pill**: header + `audioSlot` row
++ scope, one continuous backdrop — so tuning `audioRhythm` looks and works
+the same from either layer. Wired through the same `hitTestSelf`/
+`handlePointerDown`/`handlePointerMove`/`handlePointerUp` delegation
+pattern as `EventLayer`. Its own **TAP** button sits in the pill header
+(same position/style as `EventLayer`'s); `tap()` suspends `_rateSlot` if
+bound (same suspend-on-touch convention the rate slider already uses) then
+calls `audioRhythm.tap(performance.now())` — deliberately does **not**
+suspend `_audioSlot`: tap reseeds the shared prior, it doesn't disable the
+ongoing audio tracking that keeps refining it afterward. Dragging the rate
+slider directly, by contrast, suspends both `_rateSlot` and `_audioSlot` —
+a full manual takeover.
+
+**Persistence**: `AudioRhythm`'s tunables (`filterFreq`, `filterQ`, `onset.
+levelThreshold`) are saved/restored as a flat top-level `SaveFile.
+audioRhythm` field in `src/persistence/Persistence.ts` — unlike `ClockLayer`
+(which threads through `PersistenceContext` and a dedicated restore phase
+since it's referenced structurally by id), `audioRhythm` is a plain
+importable singleton with no cross-references to other layers, so it's just
+a few lines in `serialize()`/`deserialize()` reading/writing the module
+directly. Beat/phase-tracking state is **not** persisted — live state that
+re-locks quickly once audio is playing again, the same "recomputed from
+slot sources, don't persist" case as any other derived field.
 
 ### `FilterLayer` — `gradient-map` filter
 

@@ -3,14 +3,18 @@ import { Node }  from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
   ValueType, SlotState,
+  boundingBoxContains,
   type Amount, type AmountSource,
   type Rate,   type RateSource,
+  type AudioSource,
   type Ctx2D, type Point,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import { audioRhythm } from '../audio/AudioRhythm.js'
+import { AudioScopeWidget } from '../audio/AudioScopeWidget.js'
 
 // ------------------------------------------------------------
 // TempoLayer — converts a time source into a cycling phase
@@ -31,6 +35,25 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 //                         when no Rate slot is bound.  Maps slider
 //                         value [0, 1] → [MIN_RATE, MAX_RATE] Hz.
 //
+//   _audioSlot (Audio)  — optional, e.g. a VideoLayer's file audio.
+//                         Lowest priority: only used when _rateSlot is
+//                         not bound. Filtering, onset detection, and the
+//                         drift-tolerant beat-induction prior (crude PLL)
+//                         all live in the shared audioRhythm singleton
+//                         (src/audio/AudioRhythm.ts) — "one master audio
+//                         rhythm" shared with EventLayer's audio-onset
+//                         mode, not per-layer state. This layer duplicates
+//                         EventLayer's audio pill (header + audioSlot row +
+//                         AudioScopeWidget, identical layout) so the shared
+//                         tuning can be dragged from either layer, plus the
+//                         predicted-beat overlay for comparing prediction
+//                         against detected onsets. Both layers also have
+//                         their own TAP button, same shared
+//                         audioRhythm.tap() — (re)seeding the prior helps
+//                         onset-detection accuracy for rhythmic material
+//                         too, not just tempo display, since EventLayer's
+//                         tempo gate filters candidate onsets against it.
+//
 // Output:
 //   Amount — a phase value (t × hz) mod 1, cycling [0, 1].
 //   Rate   — the current rate value in Hz.
@@ -43,6 +66,11 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 export const MIN_RATE  = 0.001  // Hz — slider full-left  (~0.06 BPM)
 export const MAX_RATE  = 8      // Hz — slider full-right (~480 BPM)
 const ACCENT    = '#e87e7e'  // Rate type colour
+const AUDIO_TC  = '#a87ee8'  // Audio type accent — matches EventLayer's audio pill
+
+// Slot-row constants (must match Layer.ts renderSlotGroup)
+const SLOT_H   = 30
+const SLOT_GAP = 4
 
 // Below this BPM, metronome terminology ("Larghissimo" etc.) stops making
 // musical sense, so the readout switches to a seconds-per-cycle description.
@@ -55,6 +83,11 @@ export function sliderToHz(v: number): number {
 }
 export function hzToSlider(hz: number): number {
   return Math.log(Math.max(MIN_RATE, Math.min(MAX_RATE, hz)) / MIN_RATE) / _logRange
+}
+
+// Wrap into [0, 1) — handles negative input (JS `%` keeps the sign of its LHS).
+function wrap01(v: number): number {
+  return ((v % 1) + 1) % 1
 }
 
 // BPM ↔ Hz helpers used for display.
@@ -82,12 +115,20 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
 
   private readonly _timeSlot:   ParameterSlot   // Amount input (time source)
   private readonly _rateSlot:   ParameterSlot   // Rate input — overrides the slider when bound
+  private readonly _audioSlot:  ParameterSlot   // Audio input — beat induction, lowest priority
   private readonly _rateSlider: SliderRegion     // Rate control widget
 
   private _phase:     Amount = 0   // output: cycling [0, 1]
   private _rateHz:    Rate   = 1   // current rate in Hz
   private _timeValue: number = 0   // last time input (for display)
   private _cpBounds: { x: number; y: number; width: number; height: number } | null = null
+
+  // ── Audio-driven beat induction ─────────────────────────
+  // Filter/detector/PLL state lives in the shared audioRhythm singleton;
+  // this widget instance only holds this layer's own drag/UI state (see
+  // EventLayer's identical setup and src/audio/AudioScopeWidget.ts).
+  private readonly _scope = new AudioScopeWidget()
+  private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
 
   // Layers whose sliders directly control this Tempo's Hz (tracked externally
   // by those layers; not a ParameterSlot binding).
@@ -103,11 +144,13 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     const sliderInit = hzToSlider(this._rateHz)
     this._timeSlot   = new ParameterSlot(ValueType.Amount, this, 'time')
     this._rateSlot   = new ParameterSlot(ValueType.Rate,   this, 'rate')
+    this._audioSlot  = new ParameterSlot(ValueType.Audio,  this, 'audio')
     this._rateSlider = new SliderRegion(this, sliderInit)
     this._rateSlider.setOnDragStart(() => {
       if (this._rateSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._rateSlot)?.toggle()
+      if (this._audioSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._audioSlot)?.toggle()
     })
-    this.slots.push(this._timeSlot, this._rateSlot)
+    this.slots.push(this._timeSlot, this._rateSlot, this._audioSlot)
     this.debugName = 'TempoLayer'
     graph.register(this)
   }
@@ -123,8 +166,9 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // Slot accessor (for BindingLayer.create)
   // ----------------------------------------------------------
 
-  get timeSlot(): ParameterSlot { return this._timeSlot }
-  get rateSlot(): ParameterSlot { return this._rateSlot }
+  get timeSlot():  ParameterSlot { return this._timeSlot }
+  get rateSlot():  ParameterSlot { return this._rateSlot }
+  get audioSlot(): ParameterSlot { return this._audioSlot }
 
   // ----------------------------------------------------------
   // Called by the embedded SliderRegion when the user drags.
@@ -147,6 +191,16 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // Called from the controller layer's recompute() when _hiddenRate changes.
   addController(layer: Layer):    void { this._controllers.add(layer)    }
   removeController(layer: Layer): void { this._controllers.delete(layer) }
+
+  // Tap-tempo — (re)seeds the shared audioRhythm prior directly from the
+  // median of recent tap intervals, same convention as music software.
+  // Does NOT suspend _audioSlot: the point is to reseed the prior, not to
+  // disable the ongoing audio tracking that keeps refining it afterward.
+  tap(): void {
+    if (this._rateSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._rateSlot)?.toggle()
+    audioRhythm.tap(performance.now())
+    this.markDirty()
+  }
 
   // ----------------------------------------------------------
   // Persistence
@@ -171,10 +225,18 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
       const hz = (this._rateSlot.source as RateSource).getRate()
       this._rateHz = Math.max(MIN_RATE, Math.min(MAX_RATE, hz))
       this._rateSlider.setValue(hzToSlider(this._rateHz))
+    } else if (this._audioSlot.isActive) {
+      const analyser = (this._audioSlot.source as AudioSource).getAudio()
+      if (analyser !== null) audioRhythm.update(analyser, performance.now())
+      this._rateHz = audioRhythm.periodMs !== null
+        ? Math.max(MIN_RATE, Math.min(MAX_RATE, audioRhythm.currentRateHz()))
+        : sliderToHz(this._rateSlider.value)
+      this._rateSlider.setValue(hzToSlider(this._rateHz))
+      queueMicrotask(() => this.forceDirty())   // keep tracking even without a time-slot dependent
     } else {
       this._rateHz = sliderToHz(this._rateSlider.value)
     }
-    this._rateSlider.interactive  = !this._rateSlot.isActive
+    this._rateSlider.interactive  = !this._rateSlot.isActive && !this._audioSlot.isActive
     this._rateSlider.displayValue = this._rateSlider.value
 
     // Time — from bound source, or zero if unbound.
@@ -184,10 +246,15 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
       this._timeValue = 0
     }
 
-    // Phase — wrap into [0, 1).
-    this._phase = this._rateHz > 0
-      ? (this._timeValue * this._rateHz) % 1
-      : 0
+    // Phase — audio-locked case reads the shared prediction directly
+    // (wall-clock based, decoupled from this layer's own _timeValue —
+    // see AudioRhythm.currentPhase); every other case keeps the original
+    // continuous real-time-from-_timeValue formula unchanged.
+    if (this._audioSlot.isActive && audioRhythm.periodMs !== null) {
+      this._phase = audioRhythm.currentPhase(performance.now())
+    } else {
+      this._phase = this._rateHz > 0 ? wrap01(this._timeValue * this._rateHz) : 0
+    }
 
     this._syncSliderBounds()
   }
@@ -329,16 +396,22 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const y1 = this.renderSlotGroup(ctx, this.slots, this.panelBottom)
+    const PANEL_X = contentLeft(Node.canvasWidth)
+    const PANEL_W = panelWidth(Node.canvasWidth)
+    const GAP     = 4
+
+    // time + rate — audioSlot is pulled out into its own pill below,
+    // matching EventLayer's audio-onset pill layout.
+    const mainSlots = this.slots.filter(s => s !== this._audioSlot)
+    const y1 = this.renderSlotGroup(ctx, mainSlots, this.panelBottom)
+
+    const y1b = this._renderAudioPill(ctx, y1 + GAP, PANEL_X, PANEL_W)
 
     if (this._controllers.size === 0) return
 
-    const PANEL_X = contentLeft(Node.canvasWidth)
-    const PANEL_W = panelWidth(Node.canvasWidth)
     const HEAD_H  = 18
     const ENTRY_H = 18
-    const GAP     = 4
-    const y0      = y1 + GAP
+    const y0      = y1b + GAP
 
     const names: string[] = []
     for (const c of this._controllers) names.push(c.debugName ?? '?')
@@ -370,16 +443,83 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   }
 
   // ----------------------------------------------------------
-  // Hit testing
+  // Interaction
   // ----------------------------------------------------------
 
+  handlePointerDown(point: Point): boolean {
+    if (this._tapBtnBounds && boundingBoxContains(this._tapBtnBounds, point)) {
+      this.tap()
+      return true
+    }
+    if (this._scope.handlePointerDown(point)) return true
+    return false
+  }
+
+  handlePointerMove(point: Point): void {
+    this._scope.handlePointerMove(point)
+    if (this._scope.dragging) this.markDirty()
+  }
+
+  handlePointerUp(): void {
+    this._scope.handlePointerUp()
+  }
+
   protected override hitTestSelf(point: Point) {
+    if (this._tapBtnBounds && boundingBoxContains(this._tapBtnBounds, point)) return this
+    if (this._scope.hitTest(point) !== null) return this
     return this._rateSlider.hitTest(point)
   }
 
   // ----------------------------------------------------------
   // Private
   // ----------------------------------------------------------
+
+  // Audio pill — header + audioSlot binding row + shared live scope, same
+  // layout/style as EventLayer's audio-onset pill (deliberately identical:
+  // one shared control surface for tuning audioRhythm, duplicated so it's
+  // reachable from whichever layer is selected). Returns the bottom y.
+  private _renderAudioPill(ctx: Ctx2D, y: number, PANEL_X: number, PANEL_W: number): number {
+    const HEAD_H = 18
+    const totalH = HEAD_H + SLOT_H + SLOT_GAP + AudioScopeWidget.HEIGHT + 8
+
+    ctx.save()
+    ctx.textBaseline = 'middle'
+
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(PANEL_X, y, PANEL_W, totalH, 6)
+    ctx.fill()
+
+    ctx.font      = '9px monospace'
+    ctx.fillStyle = 'rgba(255,255,255,0.38)'
+    ctx.textAlign = 'left'
+    ctx.fillText('audio tempo', PANEL_X + 8, y + HEAD_H / 2)
+
+    // TAP button — (re)seeds the shared audioRhythm prior directly, same
+    // logic (same shared state) as EventLayer's TAP button.
+    const TAP_W = 36, TAP_H = HEAD_H - 4
+    const tapX  = PANEL_X + PANEL_W - TAP_W - 3
+    const tapY  = y + 2
+    this._tapBtnBounds = { x: tapX, y: tapY, width: TAP_W, height: TAP_H }
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.beginPath(); ctx.roundRect(tapX, tapY, TAP_W, TAP_H, 4); ctx.fill()
+    ctx.fillStyle = AUDIO_TC
+    ctx.font = 'bold 10px monospace'
+    ctx.textAlign = 'center'
+    ctx.fillText('TAP', tapX + TAP_W / 2, tapY + TAP_H / 2 + 0.5)
+
+    // audioSlot row — shared generic slot-row renderer, backdrop already
+    // painted above.
+    const rowY = y + HEAD_H
+    ctx.font = '10px monospace'
+    this.renderSlotGroup(ctx, [this._audioSlot], rowY, false)
+
+    // Frequency slider + scope + handles.
+    this._scope.render(ctx, PANEL_X, rowY + SLOT_H + SLOT_GAP, PANEL_W)
+
+    ctx.restore()
+    return y + totalH
+  }
 
   private _syncSliderBounds(): void {
     const { x, y, width, height } = this.bounds

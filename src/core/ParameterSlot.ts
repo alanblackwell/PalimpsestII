@@ -46,6 +46,7 @@ export class ParameterSlot {
       [ValueType.Count]:     'count',
       [ValueType.Event]:     'event',
       [ValueType.Collection]:'collection',
+      [ValueType.Audio]:     'audio',
     }
     return m[type] ?? 'value'
   }

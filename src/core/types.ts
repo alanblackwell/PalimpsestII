@@ -14,6 +14,7 @@ export enum ValueType {
   Count      = 'Count',    // non-negative integer
   Event      = 'Event',    // discrete trigger
   Collection = 'Collection',
+  Audio      = 'Audio',    // live audio analysis tap
 }
 
 // ------------------------------------------------------------
@@ -57,6 +58,13 @@ export type MaskValue = OffscreenCanvas | null
 // Collection value — an ordered sequence of Amount values [0, 1].
 // Used by step sequencers, lookup tables, and breakpoint banks.
 export type CollectionValue = readonly number[]
+
+// Audio value — a live Web Audio analyser node tapped from a playing media
+// element. null before the tap exists (or when the source has no audio).
+// Consumers pull raw samples from it themselves every frame (getByteTime-
+// DomainData / getByteFrequencyData) and do their own analysis — this type
+// is deliberately just a handle, not an interpreted signal.
+export type AudioValue = AnalyserNode | null
 
 // ------------------------------------------------------------
 // Rendering context
@@ -105,6 +113,7 @@ export interface EventSource     { getEventTime(): EventValue }
 export interface ImageSource     { getImage():     ImageValue }
 export interface MaskSource       { getMask():       MaskValue       }
 export interface CollectionSource { getCollection(): CollectionValue  }
+export interface AudioSource      { getAudio():      AudioValue       }
 
 // ------------------------------------------------------------
 // Parameter slot states

@@ -13,6 +13,7 @@ import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
 import { VideoLayer }        from '../layers/VideoLayer.js'
+import { audioRhythm }       from '../audio/AudioRhythm.js'
 import { TempoLayer }        from '../layers/TempoLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
 import { MenuLayer, rndShape } from '../layers/MenuLayer.js'
@@ -1294,8 +1295,26 @@ interaction.setMenuFocusAction(() => {
   refreshStack(menuLayer)
 })
 
-// 'p' key — pause/resume the singleton ClockLayer.
-interaction.setPauseClockAction(() => { clock.togglePause() })
+// 'p' key — pause/resume the singleton ClockLayer, all file-playing
+// VideoLayers, and the shared audioRhythm analysis/scope, together — for
+// testing convenience (one key freezes everything time-based at once).
+// Only resumes the VideoLayers this same action paused, so a video the
+// user had already paused manually before hitting 'p' stays paused.
+const _pKeyPausedVideos = new Set<VideoLayer>()
+interaction.setPauseClockAction(() => {
+  const wasPaused = clock.paused
+  clock.togglePause()
+  if (!wasPaused) {
+    for (const node of graph.nodes) {
+      if (node instanceof VideoLayer && node.pauseForGlobalPause()) _pKeyPausedVideos.add(node)
+    }
+    audioRhythm.setPaused(true)
+  } else {
+    for (const v of _pKeyPausedVideos) v.resumeFromGlobalPause()
+    _pKeyPausedVideos.clear()
+    audioRhythm.setPaused(false)
+  }
+})
 
 // 'c' key — collect the layer below into a CollectionLayer.
 //

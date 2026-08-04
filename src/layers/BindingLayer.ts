@@ -65,6 +65,7 @@ const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
   [ValueType.Rate]:      '#e87e7e',
   [ValueType.Count]:     '#a0a0a0',
   [ValueType.Event]:     '#e0e060',
+  [ValueType.Audio]:     '#a87ee8',
 }
 
 function primaryTypeColour(types: ReadonlySet<ValueType>): string {

@@ -8,6 +8,7 @@ import {
   type ImageValue, type ImageSource,
   type EventValue, type EventSource,
   type Amount, type AmountSource,
+  type AudioValue, type AudioSource,
   type Direction,
   type Ctx2D, type Point,
 } from '../core/types.js'
@@ -101,8 +102,8 @@ function fmtTime(s: number): string {
 // migrated by auto-starting the camera. Old MediaLayer saves (has
 // filename field) are migrated as file source.
 
-export class VideoLayer extends Layer implements ImageSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
+export class VideoLayer extends Layer implements ImageSource, AudioSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Audio])
 
   // ── Source state ──────────────────────────────────────────────
   private _sourceType: SourceType = 'none'
@@ -129,6 +130,12 @@ export class VideoLayer extends Layer implements ImageSource {
   private _video:   HTMLVideoElement
   private _result:  OffscreenCanvas | null = null
   private _status   = ''
+
+  // Audio tap — built lazily on first getAudio() call and cached forever
+  // (createMediaElementSource can only be called once per video element).
+  private _audioCtx:      AudioContext | null = null
+  private _mediaSrcNode:  MediaElementAudioSourceNode | null = null
+  private _analyser:      AnalyserNode | null = null
 
   // Enable slot — rising edge toggles freeze (stream) or play/pause (file)
   readonly enableSlot:  ParameterSlot
@@ -275,6 +282,26 @@ export class VideoLayer extends Layer implements ImageSource {
   // ── ImageSource ───────────────────────────────────────────────
 
   getImage(): ImageValue { return this._result }
+
+  // ── AudioSource ───────────────────────────────────────────────
+  // Lazily taps the shared <video> element's audio into a Web Audio
+  // AnalyserNode the first time a consumer asks for it, then reconnects
+  // to destination so the element stays audible. Consumers pull raw
+  // samples from the node themselves every frame and do their own
+  // analysis (see EventLayer/TempoLayer's audio-onset modes).
+
+  getAudio(): AudioValue {
+    if (this._analyser === null) {
+      this._audioCtx     = new AudioContext()
+      this._mediaSrcNode = this._audioCtx.createMediaElementSource(this._video)
+      this._analyser     = this._audioCtx.createAnalyser()
+      this._analyser.fftSize = 1024   // small window — low-latency time-domain reads
+      this._mediaSrcNode.connect(this._analyser)
+      this._analyser.connect(this._audioCtx.destination)
+    }
+    if (this._audioCtx!.state === 'suspended') void this._audioCtx!.resume()
+    return this._analyser
+  }
 
   get opacityWidget(): SliderSlot { return this._opacityWidget }
   get volumeWidget():  SliderSlot { return this._volumeWidget }
@@ -908,6 +935,29 @@ export class VideoLayer extends Layer implements ImageSource {
       this._frozen = !this._frozen
       this.markDirty()
     }
+  }
+
+  // ── Global pause (the 'p' key, alongside the singleton ClockLayer) ────
+  // File playback only — camera/screen are live capture, not a timeline
+  // with its own play/pause concept the way file source is. Pause-only /
+  // resume-only (not a toggle) so the global handler can track exactly
+  // which layers it paused and resume only those, without disturbing a
+  // video the user had already paused manually before global pause hit.
+  pauseForGlobalPause(): boolean {
+    if (this._sourceType !== 'file' || !this._playing || this._scrubbing) return false
+    this._playing = false
+    this._status  = 'paused'
+    this._video.pause()
+    this.markDirty()
+    return true
+  }
+
+  resumeFromGlobalPause(): void {
+    if (this._sourceType !== 'file' || this._playing || this._scrubbing) return
+    this._playing = true
+    this._status  = 'playing'
+    void this._video.play().catch(() => {})
+    this.markDirty()
   }
 
   // ── Rendering ─────────────────────────────────────────────────
