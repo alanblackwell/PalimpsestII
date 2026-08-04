@@ -1030,25 +1030,36 @@ export class CaptureLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  // Conventional still-shutter button — a slightly dished (concave) white disc.
+  // Bright red dished disc with a "Shutter" label — same style as
+  // ImageLayer's still-capture shutter button.
   private _drawShutterIcon(ctx: Ctx2D, b: BBox): void {
-    this._drawBtnBg(ctx, b)
+    ctx.save()
+    ctx.fillStyle = 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 6)
+    ctx.fill()
+
     const cx = b.x + b.width / 2
-    const cy = b.y + b.height / 2
-    const r  = Math.min(b.width, b.height) / 2 - 3
+    const cy = b.y + b.height * 0.42
+    const r  = b.width * 0.26
 
-    const grad = ctx.createRadialGradient(cx, cy, r * 0.15, cx, cy, r)
-    grad.addColorStop(0,   'rgba(208,208,208,1)')
-    grad.addColorStop(0.7, 'rgba(255,255,255,1)')
-    grad.addColorStop(1,   'rgba(232,232,232,1)')
-
+    const grad = ctx.createRadialGradient(cx, cy, r * 0.2, cx, cy, r)
+    grad.addColorStop(0, '#ff6b5e')
+    grad.addColorStop(1, '#d81f1f')
     ctx.beginPath()
     ctx.arc(cx, cy, r, 0, Math.PI * 2)
     ctx.fillStyle = grad
     ctx.fill()
-    ctx.lineWidth = 1
-    ctx.strokeStyle = 'rgba(0,0,0,0.35)'
+    ctx.lineWidth   = 2
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)'
     ctx.stroke()
+
+    ctx.font         = `${Math.max(9, Math.round(b.width * 0.13))}px monospace`
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+    ctx.fillText('Shutter', b.x + b.width / 2, b.y + b.height - Math.max(10, b.height * 0.16))
+    ctx.restore()
   }
 
   // Conventional movie record/stop button — white disc with a red dot

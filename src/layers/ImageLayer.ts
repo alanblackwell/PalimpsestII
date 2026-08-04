@@ -116,8 +116,10 @@ export class ImageLayer extends Layer implements ImageSource {
   private _cameraVideo:     HTMLVideoElement | null = null
   private _cameraDevices:   MediaDeviceInfo[]  = []
   private _cameraDeviceIdx  = 0
+  private _cameraMirrored:  boolean     = false
   private _shutterBtnB:        BBox | null = null
   private _flipBtnB:           BBox | null = null
+  private _mirrorBtnB:         BBox | null = null
   private _cameraCancelBtnB:   BBox | null = null
 
   // Direct-manipulation state (persist across recompute when slot is unbound)
@@ -315,6 +317,7 @@ export class ImageLayer extends Layer implements ImageSource {
       this._cameraStream = stream
       this._cameraVideo  = video
       this._cameraMode   = true
+      this._initCameraMirror(stream)
       this.markDirty()
       void this._refreshCameraDeviceList()
     } catch {
@@ -323,6 +326,18 @@ export class ImageLayer extends Layer implements ImageSource {
       this._cameraMode = false
       this.markDirty()
     }
+  }
+
+  // Default the reflect toggle from the stream's reported facing direction —
+  // same signal VideoLayer's face-detect uses as its first, most reliable
+  // check (MediaStreamTrack.getSettings().facingMode): front-facing cameras
+  // are conventionally previewed mirrored, rear ones aren't. Desktop
+  // webcams rarely report this, so they fall through with reflect off.
+  // Re-run on every stream (re)start, including a device flip, so switching
+  // between front/back re-defaults the toggle rather than carrying over.
+  private _initCameraMirror(stream: MediaStream): void {
+    const facingMode = stream.getVideoTracks()[0]?.getSettings().facingMode
+    this._cameraMirrored = facingMode === 'user'
   }
 
   // Silent re-enumeration after permission is granted: device labels/ids
@@ -351,6 +366,11 @@ export class ImageLayer extends Layer implements ImageSource {
     void this._openCameraStream()
   }
 
+  private _toggleCameraMirror(): void {
+    this._cameraMirrored = !this._cameraMirrored
+    this.markDirty()
+  }
+
   private _stopCameraStream(): void {
     if (this._cameraStream !== null) {
       this._cameraStream.getTracks().forEach(t => t.stop())
@@ -370,7 +390,12 @@ export class ImageLayer extends Layer implements ImageSource {
     if (video === null || video.videoWidth === 0) return
     const vw = video.videoWidth, vh = video.videoHeight
     const canvas = new OffscreenCanvas(vw, vh)
-    canvas.getContext('2d')!.drawImage(video, 0, 0, vw, vh)
+    const cctx = canvas.getContext('2d')!
+    if (this._cameraMirrored) {
+      cctx.translate(vw, 0)
+      cctx.scale(-1, 1)
+    }
+    cctx.drawImage(video, 0, 0, vw, vh)
     const bitmap = await createImageBitmap(canvas)
     this._stopCameraStream()
     this._cameraMode = false
@@ -487,6 +512,10 @@ export class ImageLayer extends Layer implements ImageSource {
       }
       if (this._flipBtnB !== null && boundingBoxContains(this._flipBtnB, point)) {
         this._flipCamera()
+        return true
+      }
+      if (this._mirrorBtnB !== null && boundingBoxContains(this._mirrorBtnB, point)) {
+        this._toggleCameraMirror()
         return true
       }
       if (this._cameraCancelBtnB !== null && boundingBoxContains(this._cameraCancelBtnB, point)) {
@@ -678,6 +707,7 @@ export class ImageLayer extends Layer implements ImageSource {
       // Live preview replaces convenience buttons / handles / acquire row.
       if (this._shutterBtnB      !== null && boundingBoxContains(this._shutterBtnB,      point)) return this
       if (this._flipBtnB         !== null && boundingBoxContains(this._flipBtnB,         point)) return this
+      if (this._mirrorBtnB       !== null && boundingBoxContains(this._mirrorBtnB,       point)) return this
       if (this._cameraCancelBtnB !== null && boundingBoxContains(this._cameraCancelBtnB, point)) return this
     } else {
       // Convenience buttons (drawn over canvas, not clipped)
@@ -786,19 +816,21 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  // ── Live camera preview controls (Shutter / Flip / Cancel) ────
+  // ── Live camera preview controls (Shutter / Mirror / Flip / Cancel) ──
+  //
+  // Layout: one big Shutter button, with two smaller square buttons
+  // (Mirror, Flip-camera) stacked beside it — rather than all three in
+  // the acquire row's equal-size grid, since Shutter is the primary
+  // action and the other two are secondary toggles/selectors.
 
   private _cameraRowH(): number {
-    const n = this._cameraDevices.length > 1 ? 2 : 1
-    const rows = this._bigGridRows(n, panelWidth(Node.canvasWidth))
-    return LG_MARGIN * 2 + rows * LG_SZ + (rows - 1) * LG_GAP
+    return LG_MARGIN * 2 + LG_SZ
   }
 
   private _renderCameraControls(ctx: Ctx2D): void {
     const pillX = contentLeft(Node.canvasWidth)
     const pillW = panelWidth(Node.canvasWidth)
     if (pillW <= 0) return
-    const n = this._cameraDevices.length > 1 ? 2 : 1
     const h = this._cameraRowH()
 
     ctx.save()
@@ -812,14 +844,26 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.roundRect(pillX, 50, 4, h, [4, 0, 0, 4])
     ctx.fill()
 
-    const cells = this._bigGridCells(n, pillX, pillW, 50 + LG_MARGIN)
-    this._shutterBtnB = cells[0]!
-    this._flipBtnB    = n > 1 ? cells[1]! : null
-
+    const top = 50 + LG_MARGIN
+    this._shutterBtnB = { x: pillX + LG_MARGIN, y: top, width: LG_SZ, height: LG_SZ }
     this._drawShutterBtn(ctx, this._shutterBtnB)
-    if (this._flipBtnB !== null) this._drawBigIconBtn(ctx, this._flipBtnB, 'swap', 'Flip')
 
-    // Small cancel button — far right of the pill, same row as the grid.
+    // Two smaller buttons to the right of Shutter, stacked to match its height.
+    const smX   = this._shutterBtnB.x + LG_SZ + LG_GAP
+    const smSz  = (LG_SZ - LG_GAP) / 2
+    const showFlip = this._cameraDevices.length > 1
+
+    this._mirrorBtnB = { x: smX, y: top, width: smSz, height: smSz }
+    this._drawSmallToggleBtn(ctx, this._mirrorBtnB, 'arrows-left-right', this._cameraMirrored)
+
+    if (showFlip) {
+      this._flipBtnB = { x: smX, y: top + smSz + LG_GAP, width: smSz, height: smSz }
+      this._drawSmallToggleBtn(ctx, this._flipBtnB, 'swap', false)
+    } else {
+      this._flipBtnB = null
+    }
+
+    // Small cancel button — far right of the pill.
     const CANCEL_SZ = 28
     const cancelB: BBox = {
       x: pillX + pillW - 6 - CANCEL_SZ,
@@ -837,9 +881,30 @@ export class ImageLayer extends Layer implements ImageSource {
     ctx.restore()
   }
 
-  // Bright red dished disc, distinct from CaptureLayer's neutral shutter —
-  // this is a one-shot "take the photo now" action, not a persistent
-  // record control.
+  // Small square icon-only button used for the Mirror/Flip pair beside the
+  // shutter. `active` highlights it with the accent colour (used for the
+  // Mirror toggle's on state); Flip has no persistent on/off state so it's
+  // always drawn neutral.
+  private _drawSmallToggleBtn(ctx: Ctx2D, b: BBox, icon: IconName, active: boolean): void {
+    ctx.save()
+    ctx.fillStyle = active ? ACCENT + '40' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 5)
+    ctx.fill()
+    if (active) {
+      ctx.strokeStyle = ACCENT
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, 5)
+      ctx.stroke()
+    }
+    ctx.fillStyle = active ? ACCENT : 'rgba(255,255,255,0.75)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.round(b.width * 0.5))
+    ctx.restore()
+  }
+
+  // Bright red dished disc with a "Shutter" label — same style as
+  // CaptureLayer's still-shutter button.
   private _drawShutterBtn(ctx: Ctx2D, b: BBox): void {
     ctx.save()
     ctx.fillStyle = 'rgba(255,255,255,0.08)'
@@ -999,7 +1064,16 @@ export class ImageLayer extends Layer implements ImageSource {
     const cw = Node.canvasWidth, ch = Node.canvasHeight
     const scale = Math.min(cw / vw, ch / vh)
     const dw = vw * scale, dh = vh * scale
-    ctx.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh)
+    const dx = (cw - dw) / 2, dy = (ch - dh) / 2
+    if (this._cameraMirrored) {
+      ctx.save()
+      ctx.translate(dx + dw, dy)
+      ctx.scale(-1, 1)
+      ctx.drawImage(video, 0, 0, dw, dh)
+      ctx.restore()
+    } else {
+      ctx.drawImage(video, dx, dy, dw, dh)
+    }
   }
 
   // ── Transform handles ────────────────────────────────────────
