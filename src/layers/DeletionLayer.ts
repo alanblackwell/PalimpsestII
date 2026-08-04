@@ -8,7 +8,8 @@ import { contentLeft } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
-// DeletionLayer — archive for removed layers
+// DeletionLayer — archive for removed layers, and browser for the
+// live Background collection (its default view)
 // ------------------------------------------------------------
 //
 // Sits at the bottom of the stack (just above RootLayer).
@@ -23,11 +24,12 @@ import { drawIcon } from '../ui/icons.js'
 //     clicking the × button on each thumbnail.
 //
 // Interaction:
-//   Single click  — select thumbnail (highlight)
-//   Double-click  — restore layer to stack (just above DeletionLayer)
-//   × button      — permanently purge; calls _onPurge(layer)
-//   toggle button — switch the grid between the archive ("Deleted")
-//                   and a linked BackgroundLayer's items ("Background")
+//   Single click — select thumbnail (highlight)
+//   Double-click — restore layer to stack (just above DeletionLayer)
+//   × button     — permanently purge; calls _onPurge(layer)
+//   tabs         — "Background" / "Deleted" browser-style tabs switch the
+//                  grid between a linked BackgroundLayer's items (the
+//                  default view on selection) and the archive
 
 const ACCENT   = '#9090a0'
 const PANEL_Y  = 54
@@ -36,8 +38,9 @@ const PAD      = 10
 const GAP      = 8
 const TRASH_SZ = 20     // × button size
 const TRASH_M  = 3      // margin from thumbnail top-right
-const TOGGLE_W = 110    // "Deleted"/"Background" toggle button width
-const TOGGLE_H = 20
+const TAB_GAP  = 3      // gap between the Background/Deleted tabs
+const TAB_R    = 8      // tab top-corner radius
+const TAB_PAD_X = 14    // horizontal label padding inside each tab
 const MAX_COLS = 4
 const TW_MAX   = 180    // max thumbnail width
 const TW_MIN   = 70     // min thumbnail width before dropping a column
@@ -71,7 +74,8 @@ export class DeletionLayer extends Layer {
   private _onRestore:     ((layer: Layer) => void) | null = null
   private _onPurge:       ((layer: Layer) => void) | null = null
   private _cpBounds:      BBox | null = null
-  private _toggleBounds:  BBox | null = null
+  private _bgTabBounds:   BBox | null = null
+  private _delTabBounds:  BBox | null = null
   private _selected:      number = -1
   private _lastClickTime = 0
   private _lastClickIdx  = -1
@@ -79,7 +83,7 @@ export class DeletionLayer extends Layer {
 
   constructor() {
     super()
-    this.debugName = 'Deleted'
+    this.debugName = 'Background'
   }
 
   // DeletionLayer is permanently part of the stack (directly above Root),
@@ -89,11 +93,10 @@ export class DeletionLayer extends Layer {
     return this._archived.length === 0
   }
 
-  // On entry, show whichever collection is relevant: Deleted if there are
-  // archived layers, otherwise Background (an empty Deleted grid would be
-  // pointless when that's the only reason this layer is reachable at all).
+  // Always default to the Background tab on entry — Deleted is now an
+  // explicit tab switch rather than something the layer falls back to.
   override onSelected(): void {
-    this._showBackground = this._archived.length === 0
+    this._showBackground = true
   }
 
   // ----------------------------------------------------------
@@ -166,11 +169,13 @@ export class DeletionLayer extends Layer {
   // ----------------------------------------------------------
 
   get isInteractive(): boolean {
-    return this._activeItems().length > 0 || this._toggleBounds !== null
+    return this._activeItems().length > 0 ||
+      this._bgTabBounds !== null || this._delTabBounds !== null
   }
 
   protected override hitTestSelf(point: Point): this | null {
-    if (this._toggleBounds !== null && this._inBBox(point, this._toggleBounds)) return this
+    if (this._bgTabBounds  !== null && this._inBBox(point, this._bgTabBounds))  return this
+    if (this._delTabBounds !== null && this._inBBox(point, this._delTabBounds)) return this
     if (this._cpBounds === null) return null
     const b = this._cpBounds
     if (point.x < b.x || point.x > b.x + b.width ||
@@ -179,11 +184,22 @@ export class DeletionLayer extends Layer {
   }
 
   handlePointerDown(point: Point): boolean {
-    if (this._toggleBounds !== null && this._inBBox(point, this._toggleBounds)) {
-      this._showBackground = !this._showBackground
-      this._selected      = -1
-      this._lastClickIdx  = -1
-      this.markDirty()
+    if (this._bgTabBounds !== null && this._inBBox(point, this._bgTabBounds)) {
+      if (!this._showBackground) {
+        this._showBackground = true
+        this._selected      = -1
+        this._lastClickIdx  = -1
+        this.markDirty()
+      }
+      return true
+    }
+    if (this._delTabBounds !== null && this._inBBox(point, this._delTabBounds)) {
+      if (this._showBackground) {
+        this._showBackground = false
+        this._selected      = -1
+        this._lastClickIdx  = -1
+        this.markDirty()
+      }
       return true
     }
 
@@ -318,10 +334,21 @@ export class DeletionLayer extends Layer {
 
     this._cpBounds = n > 0 ? { x: panX, y: PANEL_Y, width: panW, height: panH } : null
 
-    // Toggle button — right edge of panel header, independent of _cpBounds.
-    this._toggleBounds = this._background !== null
-      ? { x: panX + panW - TOGGLE_W - PAD, y: PANEL_Y + (HEADER - TOGGLE_H) / 2, width: TOGGLE_W, height: TOGGLE_H }
-      : null
+    // Tab bounds — "Background" / "Deleted", sized to fit the longer label
+    // so both tabs match width, browser-tab style.
+    const bgLabel  = `Background (${this._background?.items.length ?? 0})`
+    const delLabel = `Deleted (${this._archived.length})`
+    ctx.font = '10px monospace'
+    const tabW = Math.max(ctx.measureText(bgLabel).width, ctx.measureText(delLabel).width) + TAB_PAD_X * 2
+
+    let tabX = panX + PAD
+    if (this._background !== null) {
+      this._bgTabBounds = { x: tabX, y: PANEL_Y, width: tabW, height: HEADER }
+      tabX += tabW + TAB_GAP
+    } else {
+      this._bgTabBounds = null
+    }
+    this._delTabBounds = { x: tabX, y: PANEL_Y, width: tabW, height: HEADER }
 
     ctx.save()
 
@@ -337,27 +364,48 @@ export class DeletionLayer extends Layer {
     ctx.roundRect(panX, PANEL_Y, 4, panH, [4, 0, 0, 4])
     ctx.fill()
 
-    // Header label
-    ctx.fillStyle    = 'rgba(255,255,255,0.55)'
-    ctx.font         = '11px monospace'
-    ctx.textAlign    = 'left'
-    ctx.textBaseline = 'middle'
-    const noun = this._showBackground ? 'background' : 'deleted'
-    const hint = n === 0 ? `No ${noun} layers` : 'Double-click to restore'
-    ctx.fillText(hint, panX + 14, PANEL_Y + HEADER / 2)
+    // Tabs — active tab shares the panel's fill and drops its bottom edge
+    // so it visually fuses with the content area below; the inactive tab
+    // sits behind it, dimmer, with a full border.
+    this._drawTab(ctx, this._bgTabBounds,  bgLabel,  this._showBackground)
+    this._drawTab(ctx, this._delTabBounds, delLabel, !this._showBackground)
 
-    // Toggle button
-    if (this._toggleBounds !== null) {
-      const tb = this._toggleBounds
-      ctx.fillStyle = 'rgba(255,255,255,0.12)'
-      ctx.beginPath()
-      ctx.roundRect(tb.x, tb.y, tb.width, tb.height, tb.height / 2)
-      ctx.fill()
-      ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+    // Full-width separator along the tab row's straight bottom edge —
+    // browser-tab style. Broken across the active tab's own width so that
+    // tab still reads as fused with the grid below it.
+    const tabLineY = PANEL_Y + HEADER + 0.5
+    const activeTab = this._showBackground ? this._bgTabBounds : this._delTabBounds
+    ctx.strokeStyle = 'rgba(255,255,255,0.14)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    if (activeTab !== null) {
+      if (activeTab.x > panX) {
+        ctx.moveTo(panX, tabLineY)
+        ctx.lineTo(activeTab.x, tabLineY)
+      }
+      const activeRight = activeTab.x + activeTab.width
+      if (activeRight < panX + panW) {
+        ctx.moveTo(activeRight, tabLineY)
+        ctx.lineTo(panX + panW, tabLineY)
+      }
+    } else {
+      ctx.moveTo(panX, tabLineY)
+      ctx.lineTo(panX + panW, tabLineY)
+    }
+    ctx.stroke()
+
+    // Hint text — right-aligned in whatever header space the tabs leave;
+    // skipped on narrow panels where it would collide with them.
+    const tabsRight = this._delTabBounds.x + this._delTabBounds.width
+    const hintX     = panX + panW - 14
+    if (hintX - tabsRight > 60) {
+      const noun = this._showBackground ? 'background' : 'deleted'
+      const hint = n === 0 ? `No ${noun} layers` : 'Double-click to restore'
+      ctx.fillStyle    = 'rgba(255,255,255,0.4)'
       ctx.font         = '10px monospace'
-      ctx.textAlign    = 'center'
-      const label = this._showBackground ? `Deleted (${this._archived.length})` : `Background (${this._background!.items.length})`
-      ctx.fillText(label, tb.x + tb.width / 2, tb.y + tb.height / 2)
+      ctx.textAlign    = 'right'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(hint, hintX, PANEL_Y + HEADER / 2)
       ctx.textAlign = 'left'
     }
 
@@ -408,6 +456,36 @@ export class DeletionLayer extends Layer {
       drawIcon(ctx, 'x', tb.x + tb.width / 2, tb.y + tb.height / 2, tb.height - 6)
     }
 
+    ctx.restore()
+  }
+
+  // A single browser-style tab. The active tab's fill matches the panel
+  // body and it has no bottom border, so it reads as fused with the grid
+  // immediately below; the inactive tab is dimmer with a full outline.
+  private _drawTab(ctx: Ctx2D, b: BBox | null, label: string, active: boolean): void {
+    if (b === null) return
+    ctx.save()
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, [TAB_R, TAB_R, 0, 0])
+    ctx.fillStyle = active ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.30)'
+    ctx.fill()
+    if (active) {
+      ctx.fillStyle = ACCENT
+      ctx.beginPath()
+      ctx.roundRect(b.x, b.y, b.width, 3, [TAB_R, TAB_R, 0, 0])
+      ctx.fill()
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.14)'
+      ctx.lineWidth   = 1
+      ctx.beginPath()
+      ctx.roundRect(b.x + 0.5, b.y + 0.5, b.width - 1, b.height - 1, [TAB_R, TAB_R, 0, 0])
+      ctx.stroke()
+    }
+    ctx.fillStyle    = active ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.40)'
+    ctx.font         = '10px monospace'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(label, b.x + b.width / 2, b.y + b.height / 2 + 1)
     ctx.restore()
   }
 

@@ -487,11 +487,21 @@ The `dragover` handler just sets `dropEffect = 'copy'`; no existing layer state 
 
 All per-type setup that runs after a new layer is inserted — auto-binding
 (`applyDefaultBindings`), hidden-helper wiring, AnimPath Clock/Rate creation,
-CollectionLayer eject callbacks, TutorialLayer wiring, etc. — lives in
+CollectionLayer eject/delete callbacks, TutorialLayer wiring, etc. — lives in
 `postInsertLayer(newLayer)`. Every creation path (MenuLayer's `onAdded`,
 `wireTutorialLayer`, OS file drop, the mask-drop clipping shortcut) calls it,
 so layers behave identically regardless of how they were created. The caller
 is responsible for calling `refreshStack` afterwards.
+
+**Exception**: the `'c'` key handler (`interaction.setCollectionAction`) —
+the primary way users create a `CollectionLayer` — constructs it inline and
+does **not** call `postInsertLayer`; it wires `setEjectCallback`/
+`setDeleteCallback` by hand instead. Any future per-CollectionLayer wiring
+added to `postInsertLayer` must also be added here, or it will silently
+never run for freshly-created collections (only for ones restored from a
+save file, which do go through the `applyLoadedSession` scan loop). This
+already caused one bug: a callback wired only in `postInsertLayer` looked
+correct but was a no-op for every collection actually created via `'c'`.
 
 ## Infrastructure layers
 
@@ -776,27 +786,21 @@ none of these are worth the effort on that basis:
 - ClockLayer — play/pause + reset, already reasonably spaced with only 2
   buttons; no real problem to fix.
 
-## Status/readout pill removal pass (in progress)
+## Status/readout pill removal pass (done)
 
-Many layers draw a narrow, read-only "status" pill above the value-binding
+Many layers drew a narrow, read-only "status" pill above the value-binding
 controls (shape dimensions, rotation angle, current coordinates, etc.) that
-restates information the user is already controlling elsewhere and doesn't
-help operate the layer. Full candidate list, review status, and per-item
-notes: `spec/status-pill-candidates.md` — that file is the source of truth
-for what's left; work through it top to bottom, one layer at a time, each
-confirmed with the user before removing.
+restated information the user was already controlling elsewhere and didn't
+help operate the layer. All 13 candidates have been reviewed; full per-item
+notes and reasoning: `spec/status-pill-candidates.md`.
 
-**Done**: ShapeLayer (Rect/Ellipse) — removed `width × height` / `∠ angle°`
-pill; PathLayer — removed `"N pts"` / `∠ angle°` pill; AnimPathLayer —
-removed the `"AnimPath"` label/CW-CCW-icon/coordinates pill (the real CW/CCW
-toggle lives in `renderSlots`, untouched). All three: deleted the `_drawPill`
-method and the `renderPanel` override that only called it (falls back to
-`Layer`'s no-op default), plus the orphaned `DIR_ACCENT` constant where it
-was now unused.
-
-**Remaining** (see the spec file for line numbers and exact treatment):
-AnimationPathLayer, ClockLayer, DeletionLayer, DirectionLayer, ColourLayer,
-RotateLayer, TempoLayer, TraceLayer, PointLayer, TransformLayer.
+Removed: ShapeLayer (Rect/Ellipse), PathLayer, AnimPathLayer,
+AnimationPathLayer, DirectionLayer, PointLayer, TransformLayer, TraceLayer
+(status text only — the DETECT button and pill background stayed). Kept
+after review: DeletionLayer, ClockLayer, ColourLayer (hex readout stays,
+slot-indicator dots removed), TempoLayer (relocated and simplified rather
+than removed). Skipped as dead code: RotateLayer (unreachable — no menu
+button constructs one anymore).
 
 ## Known issues / pre-existing tech debt
 

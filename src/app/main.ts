@@ -189,6 +189,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof CollectionLayer) {
     newLayer.setEjectCallback(() => refreshStack())
+    newLayer.setDeleteCallback((layer) => deletionLayer.archive(layer))
   }
   if (newLayer instanceof TutorialLayer) {
     wireTutorialLayer(newLayer)
@@ -1017,7 +1018,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
 
   let scanL: Layer | null = root
   while (scanL !== null) {
-    if (scanL instanceof CollectionLayer)  scanL.setEjectCallback(() => refreshStack())
+    if (scanL instanceof CollectionLayer)  { scanL.setEjectCallback(() => refreshStack()); scanL.setDeleteCallback((layer) => deletionLayer.archive(layer)) }
     if (scanL instanceof AmountLayer)      wireCalcButton(scanL)
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
     if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
@@ -1082,7 +1083,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     scanL = scanL.layerAbove
   }
   for (const archived of deletionLayer.archivedLayers) {
-    if (archived instanceof CollectionLayer) archived.setEjectCallback(() => refreshStack())
+    if (archived instanceof CollectionLayer) { archived.setEjectCallback(() => refreshStack()); archived.setDeleteCallback((layer) => deletionLayer.archive(layer)) }
     if (archived instanceof AmountLayer)     wireCalcButton(archived)
     if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
     if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
@@ -1320,6 +1321,7 @@ interaction.setCollectionAction(() => {
       Layer.assignDebugName(collection)
       collection.bounds = { x: X, y: 24, width: W, height: 36 }
       collection.setEjectCallback(() => refreshStack())
+      collection.setDeleteCallback((layer) => deletionLayer.archive(layer))
       collection.insertAbove(selected)
       collection.ingest(selected)
       refreshStack(collection)

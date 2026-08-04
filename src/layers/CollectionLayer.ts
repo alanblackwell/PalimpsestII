@@ -11,6 +11,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 import { contentLeft } from '../interaction/layout.js'
+import { drawIcon } from '../ui/icons.js'
 
 // ------------------------------------------------------------
 // CollectionLayer — sub-stack that outputs a composite image
@@ -24,8 +25,12 @@ import { contentLeft } from '../interaction/layout.js'
 // The composite is exposed as an ImageSource so it can be fed
 // into any image-accepting slot (ClipLayer, TileLayer, …).
 //
-// Double-clicking a thumbnail in the grid ejects that layer
-// back into the main stack, above the CollectionLayer.
+// Double-clicking a thumbnail in the grid ejects that layer back into the
+// main stack, above the CollectionLayer. Clicking a thumbnail's × button
+// instead removes it straight to DeletionLayer's archive, bypassing the
+// main stack entirely — same archive a normal stack deletion uses, so the
+// layer is still restorable (double-click) or permanently purgeable (×)
+// from there.
 //
 // Visual layout (canvas-side):
 //
@@ -45,6 +50,8 @@ const MIN_TW    = 60         // minimum thumbnail width (determines max columns)
 const MAX_TW    = 120        // maximum thumbnail width (caps growth on wide screens)
 const TH_RATIO  = 0.75       // height/width ratio (original 60/80)
 const EMPTY_COLS = 3         // column count shown when grid is empty
+const TRASH_SZ  = 20         // × (delete-to-archive) button size — matches DeletionLayer
+const TRASH_M   = 3          // margin from thumbnail top-right corner
 
 // _gridBounds() returns this so callers share the same computed layout.
 type GridLayout = {
@@ -52,12 +59,15 @@ type GridLayout = {
   tw: number; th: number; cols: number
 }
 
+type BBox = { x: number; y: number; width: number; height: number }
+
 export class CollectionLayer extends Layer implements ImageSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
 
   private _layers:          Layer[] = []
   private _compositeCanvas: OffscreenCanvas | null = null
   private _ejectCallback:   (() => void) | null = null
+  private _deleteCallback:  ((layer: Layer) => void) | null = null
   private _snapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null
 
   // When bound and active, selects a single item (by index, mod N) as the
@@ -102,6 +112,12 @@ export class CollectionLayer extends Layer implements ImageSource {
     this._ejectCallback = fn
   }
 
+  // Called after deleteItem() sends a layer straight to the deletion
+  // archive — caller (main.ts) is responsible for actually archiving it.
+  setDeleteCallback(fn: (layer: Layer) => void): void {
+    this._deleteCallback = fn
+  }
+
   // Ingest a layer from the main stack into this collection.
   ingest(layer: Layer): void {
     if (this._layers.includes(layer)) return
@@ -136,6 +152,18 @@ export class CollectionLayer extends Layer implements ImageSource {
     layer.insertAbove(this)
     this.markDirty()
     this._ejectCallback?.()
+  }
+
+  // Remove the layer at index from the collection and send it straight to
+  // the deletion archive — unlike eject(), it never re-enters the main
+  // stack. Triggered by the × button on a thumbnail.
+  deleteItem(idx: number): void {
+    if (idx < 0 || idx >= this._layers.length) return
+    const layer = this._layers[idx]!
+    this._layers.splice(idx, 1)
+    layer.removeDependent(this)
+    this.markDirty()
+    this._deleteCallback?.(layer)
   }
 
   // Exposed for InteractionSystem duck-typing — drop zone for ingest.
@@ -244,6 +272,17 @@ export class CollectionLayer extends Layer implements ImageSource {
   handlePointerDown(point: Point): boolean {
     const gb = this._gridBounds()
     if (!boundingBoxContains(gb, point)) return false
+
+    // × button takes priority over thumbnail click/drag.
+    const trashV = this._trashIndexAt(point, gb)
+    if (trashV >= 0 && trashV < this._layers.length) {
+      this.deleteItem(this._layers.length - 1 - trashV)   // visual index → array index
+      this._lastClickIdx  = -1
+      this._lastClickTime = 0
+      this._downIdx = -1
+      this._downPt  = null
+      return true
+    }
 
     const idx = this._thumbIndexAt(point, gb)   // visual index (0 = top-left = newest)
     if (idx >= 0 && idx < this._layers.length) {
@@ -370,6 +409,34 @@ export class CollectionLayer extends Layer implements ImageSource {
     return { x: leftX, y: cb.y + cb.height + 8, width: gridW, height: gridH, tw, th, cols }
   }
 
+  // Top-left of the cell at visual position v (0 = top-left = newest).
+  private _cellOrigin(v: number, gb: GridLayout): { tx: number; ty: number } {
+    const { x, y, tw, th, cols } = gb
+    const col = v % cols
+    const row = Math.floor(v / cols)
+    return { tx: x + GRID_PAD + col * (tw + CELL_GAP), ty: y + GRID_PAD + row * (th + CELL_GAP) }
+  }
+
+  private _trashBounds(v: number, gb: GridLayout): BBox {
+    const { tx, ty } = this._cellOrigin(v, gb)
+    return {
+      x:      tx + gb.tw - TRASH_M - TRASH_SZ,
+      y:      ty + TRASH_M,
+      width:  TRASH_SZ,
+      height: TRASH_SZ,
+    }
+  }
+
+  private _trashIndexAt(point: Point, gb: GridLayout): number {
+    const n = this._layers.length
+    for (let v = 0; v < n; v++) {
+      const b = this._trashBounds(v, gb)
+      if (point.x >= b.x && point.x <= b.x + b.width &&
+          point.y >= b.y && point.y <= b.y + b.height) return v
+    }
+    return -1
+  }
+
   private _thumbIndexAt(point: Point, gb: GridLayout): number {
     const relX = point.x - gb.x - GRID_PAD
     const relY = point.y - gb.y - GRID_PAD
@@ -461,11 +528,8 @@ export class CollectionLayer extends Layer implements ImageSource {
       for (let v = 0; v < n; v++) {
         if (isReordering && v === this._dragIdx) continue  // skip ghost source slot
 
-        const i   = n - 1 - v
-        const col = v % cols
-        const row = Math.floor(v / cols)
-        const tx  = x + GRID_PAD + col * (tw + CELL_GAP)
-        const ty  = y + GRID_PAD + row * (th + CELL_GAP)
+        const i        = n - 1 - v
+        const { tx, ty } = this._cellOrigin(v, gb)
 
         const thumb    = new OffscreenCanvas(tw, th)
         const thumbCtx = thumb.getContext('2d')!
@@ -486,6 +550,16 @@ export class CollectionLayer extends Layer implements ImageSource {
         ctx.beginPath()
         ctx.roundRect(tx + 0.5, ty + 0.5, tw - 1, th - 1, 4)
         ctx.stroke()
+
+        // × button — removes the layer from the collection and sends it
+        // straight to the deletion archive.
+        const tb = this._trashBounds(v, gb)
+        ctx.fillStyle = 'rgba(180,50,50,0.75)'
+        ctx.beginPath()
+        ctx.roundRect(tb.x, tb.y, tb.width, tb.height, 3)
+        ctx.fill()
+        ctx.fillStyle = 'rgba(255,255,255,0.90)'
+        drawIcon(ctx, 'x', tb.x + tb.width / 2, tb.y + tb.height / 2, tb.height - 6)
       }
 
       // Insertion line
