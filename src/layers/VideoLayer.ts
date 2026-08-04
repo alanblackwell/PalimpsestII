@@ -49,10 +49,6 @@ const NAV_M   = 4    // margin inside the right section
 const MIR_W   = 32
 const MIR_GAP = 4
 
-// File controls
-const BTN   = 22     // load button size
-const BTN_M = 6      // load button margin from right edge
-
 // File playback control bar
 const BAR_MARGIN = 16
 const BAR_H      = 36
@@ -137,12 +133,20 @@ export class VideoLayer extends Layer implements ImageSource {
   // Enable slot — rising edge toggles freeze (stream) or play/pause (file)
   readonly enableSlot:  ParameterSlot
   readonly opacitySlot: ParameterSlot
+  readonly volumeSlot:  ParameterSlot
   private _lastEventTime: EventValue = null
 
   // Opacity — computed each recompute from slot; _manualOpacity when unbound
   private _opacity = 1.0
   private _manualOpacity = 1.0
   private readonly _opacityWidget: SliderSlot
+
+  // Volume (file playback only) — computed each recompute from slot;
+  // _manualVolume when unbound. Camera/screen streams are always captured
+  // with audio:false, so this only ever produces audible output for 'file'.
+  private _volume = 1.0
+  private _manualVolume = 1.0
+  private readonly _volumeWidget: SliderSlot
 
   // ── Display transform ─────────────────────────────────────────
   private _cx              = 0
@@ -184,7 +188,6 @@ export class VideoLayer extends Layer implements ImageSource {
   private _fitBtnB:           BBox | null = null
   private _prevBtnB:          BBox | null = null
   private _nextBtnB:          BBox | null = null
-  private _loadBtnB:          BBox | null = null
   private _playBtnB:          BBox | null = null
   private _scrubTrackB:       BBox | null = null
   private _stallRestartBounds: BBox | null = null
@@ -202,9 +205,10 @@ export class VideoLayer extends Layer implements ImageSource {
     super()
     this.debugName = 'Video'
 
-    this.enableSlot  = new ParameterSlot(ValueType.Event,  this, 'enable toggle')
+    this.enableSlot  = new ParameterSlot(ValueType.Event,  this, 'pause')
     this.opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
-    this.slots.push(this.enableSlot, this.opacitySlot)
+    this.volumeSlot  = new ParameterSlot(ValueType.Amount, this, 'volume')
+    this.slots.push(this.enableSlot, this.opacitySlot, this.volumeSlot)
 
     this._opacityWidget = new SliderSlot(
       this.opacitySlot, 'opacity', AM_COL,
@@ -212,6 +216,17 @@ export class VideoLayer extends Layer implements ImageSource {
       (v) => {
         if (this.opacitySlot.state === SlotState.Bound) BindingLayer.findForSlot(this.opacitySlot)?.toggle()
         this._manualOpacity = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+
+    this._volumeWidget = new SliderSlot(
+      this.volumeSlot, 'volume', AM_COL,
+      () => this._manualVolume,
+      (v) => {
+        if (this.volumeSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.volumeSlot)?.toggle()
+        this._manualVolume = v
         this.markDirty()
       },
       () => this.markDirty(),
@@ -262,6 +277,7 @@ export class VideoLayer extends Layer implements ImageSource {
   getImage(): ImageValue { return this._result }
 
   get opacityWidget(): SliderSlot { return this._opacityWidget }
+  get volumeWidget():  SliderSlot { return this._volumeWidget }
 
   override getSnapBounds() {
     if (this._displayW <= 0 || this._displayH <= 0) return null
@@ -274,6 +290,7 @@ export class VideoLayer extends Layer implements ImageSource {
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this.opacitySlot) return this._manualOpacity
+    if (slot === this.volumeSlot)  return this._manualVolume
     return null
   }
 
@@ -312,6 +329,7 @@ export class VideoLayer extends Layer implements ImageSource {
     return {
       addTrackDone:    this._addTrackDone,
       manualOpacity:   this._manualOpacity,
+      manualVolume:    this._manualVolume,
       sourceType:      this._sourceType,
       deviceIdx:       this._deviceIdx,
       frozen:          this._frozen,
@@ -361,6 +379,7 @@ export class VideoLayer extends Layer implements ImageSource {
     if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
     if (typeof state.addTrackDone === 'boolean')    this._addTrackDone    = state.addTrackDone
     if (typeof state.manualOpacity === 'number')    this._manualOpacity   = state.manualOpacity
+    if (typeof state.manualVolume === 'number')     this._manualVolume    = state.manualVolume
 
     // Restart the camera stream after restoring deviceIdx so the correct
     // device is selected. Screen and file sources can't be auto-restarted.
@@ -378,6 +397,15 @@ export class VideoLayer extends Layer implements ImageSource {
     this._opacity = this.opacitySlot.isActive
       ? (this.opacitySlot.source as AmountSource).getAmount() as Amount
       : this._manualOpacity
+
+    this._volume = this.volumeSlot.isActive
+      ? (this.volumeSlot.source as AmountSource).getAmount() as Amount
+      : this._manualVolume
+    // Camera/screen streams are always captured with audio:false, so only
+    // file playback is ever actually audible — but recompute unconditionally
+    // so switching source types can't leave a stale unmuted element behind.
+    this._video.volume = Math.max(0, Math.min(1, this._volume))
+    this._video.muted  = this._sourceType !== 'file' || this._volume <= 0
 
     // Rising edge on enable slot toggles freeze (stream) or play/pause (file).
     if (this.enableSlot.isActive) {
@@ -1046,7 +1074,7 @@ export class VideoLayer extends Layer implements ImageSource {
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standard = this.slots.filter(s => s !== this.opacitySlot)
+    const standard = this.slots.filter(s => s !== this.opacitySlot && s !== this.volumeSlot)
     this.renderSlotGroup(ctx, standard, this.panelBottom)
 
     // Toggle button drawn over the enableSlot row (index 0 in standard group)
@@ -1085,7 +1113,7 @@ export class VideoLayer extends Layer implements ImageSource {
     const paused = (this._sourceType === 'file' && !this._playing) ||
                    ((this._sourceType === 'camera' || this._sourceType === 'screen') && this._frozen)
     ctx.fillStyle    = isActive ? ACCENT : isSuspended ? 'rgba(255,255,255,0.35)' : ACCENT
-    drawIcon(ctx, paused ? 'pause' : 'record', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
+    drawIcon(ctx, paused ? 'play' : 'pause', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
     ctx.restore()
 
     // Opacity SliderSlot pill — below the standard slot group
@@ -1098,13 +1126,29 @@ export class VideoLayer extends Layer implements ImageSource {
     ctx.restore()
     this._slotBounds.set(this.opacitySlot, ob)
     this._opacityWidget.render(ctx, ob)
+
+    // Volume SliderSlot pill — below the opacity pill
+    const vb = this._volumePillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(vb.x, vb.y, vb.width, vb.height, 6)
+    ctx.fill()
+    ctx.restore()
+    this._slotBounds.set(this.volumeSlot, vb)
+    this._volumeWidget.render(ctx, vb)
   }
 
   private _opacityPillBounds() {
     const cb = this.canvasBounds
-    const standard = this.slots.filter(s => s !== this.opacitySlot)
+    const standard = this.slots.filter(s => s !== this.opacitySlot && s !== this.volumeSlot)
     const standardH = standard.length * (30 + 4) - 4
     return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
+  }
+
+  private _volumePillBounds() {
+    const ob = this._opacityPillBounds()
+    return { x: ob.x, y: ob.y + ob.height + 4, width: ob.width, height: 30 }
   }
 
   // ── Transform handles ─────────────────────────────────────────
@@ -1191,7 +1235,6 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._fileBtnB    !== null && boundingBoxContains(this._fileBtnB,    point)) return this
     if (this._prevBtnB    !== null && boundingBoxContains(this._prevBtnB,    point)) return this
     if (this._nextBtnB    !== null && boundingBoxContains(this._nextBtnB,    point)) return this
-    if (this._loadBtnB    !== null && boundingBoxContains(this._loadBtnB,    point)) return this
     if (this._fitBtnB     !== null && boundingBoxContains(this._fitBtnB,     point)) return this
     if (this._mirrorBtnB  !== null && boundingBoxContains(this._mirrorBtnB,  point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
@@ -1205,6 +1248,7 @@ export class VideoLayer extends Layer implements ImageSource {
       if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     }
     if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
+    if (this._volumeWidget.hitZone(point, this._volumePillBounds()) !== null) return this
     return null
   }
 
@@ -1275,11 +1319,6 @@ export class VideoLayer extends Layer implements ImageSource {
       this.markDirty()
       return true
     }
-    // File controls
-    if (this._loadBtnB !== null && boundingBoxContains(this._loadBtnB, point)) {
-      this._openFilePicker()
-      return true
-    }
     if (this._playBtnB !== null && boundingBoxContains(this._playBtnB, point)) {
       this._handleToggle()
       return true
@@ -1319,12 +1358,19 @@ export class VideoLayer extends Layer implements ImageSource {
     if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) {
       return this._opacityWidget.handlePointerDown(point, this._opacityPillBounds())
     }
+    if (this._volumeWidget.hitZone(point, this._volumePillBounds()) !== null) {
+      return this._volumeWidget.handlePointerDown(point, this._volumePillBounds())
+    }
     return false
   }
 
   handlePointerMove(point: Point): void {
     if (this._opacityWidget.isDragging) {
       this._opacityWidget.handlePointerMove(point, this._opacityPillBounds())
+      return
+    }
+    if (this._volumeWidget.isDragging) {
+      this._volumeWidget.handlePointerMove(point, this._volumePillBounds())
       return
     }
     if (this._drag !== null) {
@@ -1361,6 +1407,7 @@ export class VideoLayer extends Layer implements ImageSource {
 
   handlePointerUp(): void {
     this._opacityWidget.handlePointerUp()
+    this._volumeWidget.handlePointerUp()
     if (this._drag !== null) {
       this._drag = null
       this._edgeSnapX = null
@@ -1512,47 +1559,57 @@ export class VideoLayer extends Layer implements ImageSource {
 
     const midY = lowerB.y + lowerB.height / 2
 
-    // Fit/fill and mirror toggle buttons — far right, always visible
+    // Fit/fill and mirror toggle buttons — camera/screen only. A loaded
+    // file's framing and orientation are properties of the media itself,
+    // not something to fit/fill or mirror against the canvas, so these
+    // don't apply to file playback.
     const FIT_W = 28
     const FIT_M = 4
-    const fitX  = lowerB.x + lowerB.width - FIT_M - FIT_W
     const fitY  = lowerB.y + (lowerB.height - SRC_W) / 2
-    this._fitBtnB = { x: fitX, y: fitY, width: FIT_W, height: SRC_W }
+    let mirX = lowerB.x + lowerB.width - FIT_M   // right edge when hidden
 
-    ctx.fillStyle = this._fillMode ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
-    ctx.beginPath()
-    ctx.roundRect(fitX, fitY, FIT_W, SRC_W, 4)
-    ctx.fill()
-    if (this._fillMode) {
-      ctx.strokeStyle = ACCENT
-      ctx.lineWidth   = 1
+    if (this._sourceType !== 'file') {
+      const fitX = lowerB.x + lowerB.width - FIT_M - FIT_W
+      this._fitBtnB = { x: fitX, y: fitY, width: FIT_W, height: SRC_W }
+
+      ctx.fillStyle = this._fillMode ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
       ctx.beginPath()
-      ctx.roundRect(fitX + 0.5, fitY + 0.5, FIT_W - 1, SRC_W - 1, 4)
-      ctx.stroke()
-    }
-    ctx.font         = '9px monospace'
-    ctx.fillStyle    = this._fillMode ? ACCENT : 'rgba(255,255,255,0.45)'
-    ctx.textAlign    = 'center'
-    ctx.textBaseline = 'middle'
-    ctx.fillText(this._fillMode ? 'fill' : 'fit', fitX + FIT_W / 2, fitY + SRC_W / 2)
+      ctx.roundRect(fitX, fitY, FIT_W, SRC_W, 4)
+      ctx.fill()
+      if (this._fillMode) {
+        ctx.strokeStyle = ACCENT
+        ctx.lineWidth   = 1
+        ctx.beginPath()
+        ctx.roundRect(fitX + 0.5, fitY + 0.5, FIT_W - 1, SRC_W - 1, 4)
+        ctx.stroke()
+      }
+      ctx.font         = '9px monospace'
+      ctx.fillStyle    = this._fillMode ? ACCENT : 'rgba(255,255,255,0.45)'
+      ctx.textAlign    = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(this._fillMode ? 'fill' : 'fit', fitX + FIT_W / 2, fitY + SRC_W / 2)
 
-    // Mirror toggle [↔] — to the left of the fit button
-    const mirX = fitX - MIR_GAP - MIR_W
-    this._mirrorBtnB = { x: mirX, y: fitY, width: MIR_W, height: SRC_W }
+      // Mirror toggle [↔] — to the left of the fit button
+      mirX = fitX - MIR_GAP - MIR_W
+      this._mirrorBtnB = { x: mirX, y: fitY, width: MIR_W, height: SRC_W }
 
-    ctx.fillStyle = this._mirrored ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
-    ctx.beginPath()
-    ctx.roundRect(mirX, fitY, MIR_W, SRC_W, 4)
-    ctx.fill()
-    if (this._mirrored) {
-      ctx.strokeStyle = ACCENT
-      ctx.lineWidth   = 1
+      ctx.fillStyle = this._mirrored ? ACCENT + '40' : 'rgba(255,255,255,0.06)'
       ctx.beginPath()
-      ctx.roundRect(mirX + 0.5, fitY + 0.5, MIR_W - 1, SRC_W - 1, 4)
-      ctx.stroke()
+      ctx.roundRect(mirX, fitY, MIR_W, SRC_W, 4)
+      ctx.fill()
+      if (this._mirrored) {
+        ctx.strokeStyle = ACCENT
+        ctx.lineWidth   = 1
+        ctx.beginPath()
+        ctx.roundRect(mirX + 0.5, fitY + 0.5, MIR_W - 1, SRC_W - 1, 4)
+        ctx.stroke()
+      }
+      ctx.fillStyle = this._mirrored ? ACCENT : 'rgba(255,255,255,0.45)'
+      drawIcon(ctx, 'arrows-left-right', mirX + MIR_W / 2, fitY + SRC_W / 2, SRC_W - 10)
+    } else {
+      this._fitBtnB    = null
+      this._mirrorBtnB = null
     }
-    ctx.fillStyle = this._mirrored ? ACCENT : 'rgba(255,255,255,0.45)'
-    drawIcon(ctx, 'arrows-left-right', mirX + MIR_W / 2, fitY + SRC_W / 2, SRC_W - 10)
 
     // Left side of the lower pill: on mobile, small screen/file selector
     // buttons (deprioritised — camera has its own big buttons above); on
@@ -1610,7 +1667,7 @@ export class VideoLayer extends Layer implements ImageSource {
           ctx.fillStyle = 'rgba(255,255,255,0.80)'
           ctx.textAlign = 'left'
           ctx.fillText(name, leftX + 4, midY)
-          this._prevBtnB = this._nextBtnB = this._loadBtnB = null
+          this._prevBtnB = this._nextBtnB = null
         } else {
           this._drawCameraControls(ctx, leftX, rightW, lowerB.y, lowerB.height, midY)
         }
@@ -1618,14 +1675,17 @@ export class VideoLayer extends Layer implements ImageSource {
         ctx.fillStyle = 'rgba(255,255,255,0.80)'
         ctx.textAlign = 'left'
         ctx.fillText('screen share', leftX + 4, midY)
-        this._prevBtnB = this._nextBtnB = this._loadBtnB = null
+        this._prevBtnB = this._nextBtnB = null
       } else if (this._sourceType === 'file') {
-        this._drawFileControls(ctx, leftX, rightW, lowerB.y, lowerB.height, midY)
+        // Filename/dims/status and the small load-file button are hidden in
+        // file mode — reloading a different file is done via the big File
+        // button above; nothing left here is file-playback-relevant.
+        this._prevBtnB = this._nextBtnB = null
       } else {
         ctx.fillStyle = 'rgba(255,255,255,0.30)'
         ctx.textAlign = 'left'
         ctx.fillText('select a source', leftX + 4, midY)
-        this._prevBtnB = this._nextBtnB = this._loadBtnB = null
+        this._prevBtnB = this._nextBtnB = null
       }
 
       ctx.restore()
@@ -1642,7 +1702,6 @@ export class VideoLayer extends Layer implements ImageSource {
     const nb: BBox = { x: rx + rw - NAV_M - NAV_SZ, y: btnY, width: NAV_SZ, height: NAV_SZ }
     this._prevBtnB = pb
     this._nextBtnB = nb
-    this._loadBtnB = null
 
     const canNav = this._devices.length > 1
     const col    = canNav ? ACCENT : 'rgba(255,255,255,0.20)'
@@ -1663,42 +1722,16 @@ export class VideoLayer extends Layer implements ImageSource {
     this._drawBtn(ctx, nb, '▶', col)
   }
 
-  private _drawFileControls(
-    ctx: Ctx2D, rx: number, rw: number, py: number, ph: number, midY: number,
-  ): void {
-    const loadB: BBox = { x: rx + rw - BTN_M - BTN, y: py + (ph - BTN) / 2, width: BTN, height: BTN }
-    this._loadBtnB = loadB
-    this._prevBtnB = this._nextBtnB = null
-
-    const textW = loadB.x - rx - 4
-    if (textW > 0) {
-      ctx.textAlign = 'left'
-      if (this._objectUrl === null) {
-        ctx.fillStyle = 'rgba(255,255,255,0.30)'
-        ctx.fillText('no file loaded', rx + 4, midY)
-      } else {
-        ctx.fillStyle = 'rgba(255,255,255,0.85)'
-        ctx.fillText(this._filename, rx + 4, midY - 5)
-        ctx.fillStyle = 'rgba(255,255,255,0.45)'
-        ctx.font      = '9px monospace'
-        const vw = this._video.videoWidth, vh = this._video.videoHeight
-        const dims = vw && vh ? `${vw}×${vh} · ` : ''
-        ctx.fillText(`${dims}${this._status}`, rx + 4, midY + 5)
-      }
-    }
-
-    this._drawBtn(ctx, loadB, '📁', 'rgba(255,255,255,0.75)')
-  }
-
   private _renderControlBar(ctx: Ctx2D): void {
     if (this._objectUrl === null) {
       this._playBtnB = this._scrubTrackB = null
       return
     }
 
-    const cw  = Node.canvasWidth
-    const ch  = Node.canvasHeight
-    const bar: BBox = { x: BAR_MARGIN, y: ch - BAR_H - BAR_MARGIN, width: cw - BAR_MARGIN * 2, height: BAR_H }
+    const cw   = Node.canvasWidth
+    const ch   = Node.canvasHeight
+    const left = contentLeft(cw)
+    const bar: BBox = { x: left, y: ch - BAR_H - BAR_MARGIN, width: cw - left - BAR_MARGIN, height: BAR_H }
     if (bar.width <= 0) return
 
     const playB: BBox = { x: bar.x + 4, y: bar.y + (BAR_H - PLAY_SZ) / 2, width: PLAY_SZ, height: PLAY_SZ }

@@ -722,6 +722,35 @@ CompositeLayer `_opacitySlot` → `'opacity'`; AnimationPathLayer `_posSlot` →
 `'position'`; RateLayer `_timeSlot` → `'time'`; SequencerLayer `_rateSlot` →
 `'rate'`; MathLayer `_slotA` → `'a'`, `_slotB` → `'b'`.
 
+### `VideoLayer` — file audio, pause control, camera-only pill cleanup
+
+File-sourced video now plays with audio by default. Previously `_video.muted`
+was hardcoded `true` for every source type; `recompute()` now sets
+`_video.muted`/`_video.volume` every frame from a new `volumeSlot` (Amount) +
+`_volumeWidget` (`SliderSlot`, the same combined slider/binding widget class
+`opacitySlot` uses) — draggable manually or bindable to any `Amount` source,
+suspend-on-touch like every other slot/manual pair, rendered in its own pill
+below the opacity pill. Muted is forced `true` whenever `sourceType !==
+'file'` (camera/screen streams are always captured with `audio: false`) or
+volume is 0, computed unconditionally each `recompute()` so switching source
+types can't leave a stale unmuted element behind.
+
+The `enableSlot` row — labelled `'enable toggle'` — is now labelled
+`'pause'`, and its button icon shows the *action* a click performs (▶ while
+paused, ⏸ while playing) rather than the previous pause/record pairing.
+
+The lower source-controls pill's fit/mirror buttons, and its filename/
+dimensions/status readout plus small load-file button, are now camera/
+screen-only — none of it applies to file playback (a loaded file's framing
+and orientation are properties of the media itself, not something to
+fit/fill or mirror against the canvas; reloading a different file is done
+via the big **File** button in the source-selector row above, which already
+reopens the file picker when file is already the active source).
+`_drawFileControls` was deleted as dead code once its content was removed
+for file mode. The file-playback scrub/control bar at the bottom of the
+viewport now starts at `contentLeft(cw)` instead of a fixed left margin, so
+it's no longer hidden under the `LayerStackWidget` strip.
+
 ### `FilterLayer` — `gradient-map` filter
 
 The `gradient-map` filter has a bidirectional control: `t = 0.5` is

@@ -376,6 +376,7 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof VideoLayer) {
     wireVideoTrackButton(newLayer)
     newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
   }
   if (newLayer instanceof TrackRectLayer || newLayer instanceof TrackEllipseLayer ||
       newLayer instanceof TrackPathLayer  || newLayer instanceof TrackDrawingLayer) {
@@ -1023,7 +1024,11 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
     if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
     if (scanL instanceof ImageLayer) { wireImageLayer(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
-    if (scanL instanceof VideoLayer) { wireVideoTrackButton(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+    if (scanL instanceof VideoLayer) {
+      wireVideoTrackButton(scanL)
+      scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+      scanL.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    }
     if (scanL instanceof TileLayer) {
       scanL.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
       scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
@@ -1089,7 +1094,11 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
     if (archived instanceof ImageLayer)      { wireImageLayer(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
-    if (archived instanceof VideoLayer)      { wireVideoTrackButton(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+    if (archived instanceof VideoLayer) {
+      wireVideoTrackButton(archived)
+      archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+      archived.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    }
     if (archived instanceof TileLayer) {
       archived.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
       archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
