@@ -771,6 +771,17 @@ export class LayerStackWidget {
     Node.scheduleFrame?.()
   }
 
+  // Swap the floating placeholder for a different layer instance at the
+  // same position — used when the real file type (known for certain only
+  // at drop) turns out to differ from the dragover-time guess (e.g. MIME
+  // sniffing of a dragged OS file is unreliable on some browsers).
+  replaceExternalDragLayer(oldLayer: Layer, newLayer: Layer): void {
+    const i = this._layers.indexOf(oldLayer)
+    if (i >= 0) this._layers[i] = newLayer
+    if (this._dragLayer === oldLayer) this._dragLayer = newLayer
+    Node.scheduleFrame?.()
+  }
+
   // Track the pointer during an external drag.
   updateExternalDrag(pt: Point): void {
     if (this._dragLayer === null) return

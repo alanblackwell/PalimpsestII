@@ -259,9 +259,18 @@ export abstract class Layer extends Node {
                     && slot.state === SlotState.Unbound)
       // Doesn't satisfy the slot's type directly, but the app layer knows
       // how to bind it via an auto-created adapter (see adapterCompatible) —
-      // highlight amber rather than green.
-      const isAdapterCompat = !isCompat && dragSourceOk
-        && this.adapterCompatible(slot, drag.source!.types)
+      // highlight amber rather than green. An OS file drag hovering this
+      // layer's own file-drop target region (see fileDropTarget) gets the
+      // same amber treatment — e.g. EventLayer/TempoLayer's audio-onset
+      // pill, where dropping a video file creates a VideoLayer and binds
+      // its audio tap rather than the plain same-type bind the green case
+      // implies. We don't know the file's actual type this early (MIME
+      // sniffing during dragover is unreliable — see isVideoDrag in
+      // main.ts), so this fires for any file hovering the region.
+      const isAdapterCompat = !isCompat && (
+        (dragSourceOk && this.adapterCompatible(slot, drag.source!.types))
+        || (Node.fileDragActive && slot === this.fileDropTarget())
+      )
 
       const b = { x: PANEL_X, y, width: PANEL_W, height: SLOT_H }
       this._slotBounds.set(slot, b)
@@ -483,6 +492,18 @@ export abstract class Layer extends Node {
   // actually performs the conversion — this is display-only.
   adapterCompatible(_slot: ParameterSlot, _sourceTypes: ReadonlySet<ValueType>): boolean {
     return false
+  }
+
+  // The slot that should amber-highlight (via renderSlotGroup, alongside
+  // adapterCompatible above) while an OS file is being dragged over some
+  // layer-specific region other than the slot's own row — e.g. EventLayer/
+  // TempoLayer override this to return their audioSlot while the drag point
+  // is anywhere over the whole audio-onset pill (header + row + scope), not
+  // just the thin slot row itself. Null means no such region is active.
+  // Driven by main.ts's dragover handler calling a layer-specific setter
+  // (e.g. setAudioDropHover) — this method just reports the result.
+  fileDropTarget(): ParameterSlot | null {
+    return null
   }
 
   // Default bindings to create when this layer is first added to the stack.

@@ -131,6 +131,12 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
   private _tempoGateBtnBounds: { x: number; y: number; width: number; height: number } | null = null
 
+  // Whole audio-onset pill bounds (header + audioSlot row + scope), cached
+  // from the last render — used by main.ts's dragover handler to decide
+  // whether the drag point falls inside the pill (see setAudioDropHover).
+  private _audioPillBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _audioDropHover = false
+
   // True once the user drags the rate slider directly while tap/audio
   // tempo is driving it — hands control back to the manual slider, same
   // suspend-on-touch convention as a suspended ParameterSlot binding.
@@ -177,6 +183,30 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   get timeSlot():  ParameterSlot { return this._timeSlot }
   get rateSlot():  ParameterSlot { return this._rateSlot }
   get audioSlot(): ParameterSlot { return this._audioSlot }
+
+  // ----------------------------------------------------------
+  // OS file drag — audio-onset pill drop target
+  // ----------------------------------------------------------
+
+  // Whole audio-onset pill bounds, for main.ts's dragover handler to hit-test
+  // the drag point against. Null until this layer has rendered at least once
+  // (i.e. been selected) — same "stale but fine" caching every other cached
+  // bounds field in this codebase uses for hit-testing.
+  audioPillBounds(): { x: number; y: number; width: number; height: number } | null {
+    return this._audioPillBounds
+  }
+
+  // Called from main.ts's dragover/dragleave/drop handlers while this layer
+  // is selected and an OS file is being dragged — true whenever the drag
+  // point is anywhere inside the audio-onset pill, regardless of the
+  // dragged file's actual type (unknown/unreliable this early — see
+  // Layer.fileDropTarget). Purely a display hint; the real type check
+  // happens at drop, in main.ts.
+  setAudioDropHover(v: boolean): void { this._audioDropHover = v }
+
+  override fileDropTarget(): ParameterSlot | null {
+    return (this._audioDropHover && this._audioSlot.state === SlotState.Unbound) ? this._audioSlot : null
+  }
 
   // ----------------------------------------------------------
   // Called by the embedded SliderRegion when the user drags.
@@ -276,7 +306,11 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     // see AudioRhythm.currentPhase); every other case keeps the original
     // continuous real-time-from-_timeValue formula unchanged.
     if (this._audioSlot.isActive && audioRhythm.periodMs !== null) {
-      this._phase = audioRhythm.currentPhase(performance.now())
+      // displayNowMs (not performance.now() directly), same convention
+      // AudioScopeWidget uses — freezes this output under the global 'p'
+      // pause instead of sweeping forward off wall-clock time regardless
+      // of audioRhythm.paused.
+      this._phase = audioRhythm.currentPhase(audioRhythm.displayNowMs)
     } else {
       this._phase = this._rateHz > 0 ? wrap01(this._timeValue * this._rateHz) : 0
     }
@@ -512,6 +546,7 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   private _renderAudioPill(ctx: Ctx2D, y: number, PANEL_X: number, PANEL_W: number): number {
     const HEAD_H = 18
     const totalH = HEAD_H + SLOT_H + SLOT_GAP + AudioScopeWidget.HEIGHT + 8
+    this._audioPillBounds = { x: PANEL_X, y, width: PANEL_W, height: totalH }
 
     ctx.save()
     ctx.textBaseline = 'middle'

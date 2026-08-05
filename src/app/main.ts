@@ -3,7 +3,7 @@ import { Evaluator }         from '../dataflow/Evaluator.js'
 import { InteractionSystem } from '../interaction/InteractionSystem.js'
 import { Layer }             from '../core/Layer.js'
 import { Node }              from '../core/Node.js'
-import { ValueType, SlotState } from '../core/types.js'
+import { ValueType, SlotState, boundingBoxContains } from '../core/types.js'
 import type { Point, Direction, Colour } from '../core/types.js'
 import { ParameterSlot }     from '../core/ParameterSlot.js'
 import { rndColour, OUTLINE_COLOUR } from '../core/colour.js'
@@ -1678,8 +1678,20 @@ refreshStack(startupLayer)
 //     current layer has an
 //     empty Image slot        → new layer inserted below current layer,
 //                                bound to that slot; current layer stays selected
+//   • Video file dropped on
+//     an Audio slot (e.g. the
+//     audio-onset pill of a
+//     selected EventLayer/
+//     TempoLayer)              → VideoLayer inserted below current layer,
+//                                bound to that slot; current layer stays selected
 //   • Otherwise                → new layer inserted above current layer,
 //                                new layer becomes selected
+//
+// The Image/Audio slot type is only ever read from the real dropped File's
+// type (reliable at the `drop` event) — never from dragover-time MIME
+// sniffing (DataTransferItem.type, unreliable on some browsers, see the
+// LayerStackWidget ghost-drag branch below) — so this placement decision
+// can't be thrown off by that.
 
 // Placeholder layer for a drag currently hovering the stack widget — not
 // yet linked into the live stack (outsideStack) until the drop commits.
@@ -1714,6 +1726,38 @@ function isVideoDrag(e: DragEvent): boolean {
   return item !== undefined && item.kind === 'file' && item.type.startsWith('video/')
 }
 
+// Amber-highlights the audioSlot row of a selected EventLayer/TempoLayer
+// while an OS file is being dragged anywhere inside its audio-onset pill —
+// see Layer.fileDropTarget. Deliberately not gated on the dragged file's
+// type: MIME sniffing during dragover is unreliable (isVideoDrag below),
+// and the actual type check happens at drop regardless, so this is just a
+// hover hint that can afford to be generous about what triggers it.
+// Tracks which layer it last set true on, independent of what's currently
+// selected, so a mid-drag selection change can't leave a stale highlight
+// on a layer that's no longer being dragged over.
+// Returns true if the hover state actually changed (so the caller only
+// needs to schedule a frame when there's something new to draw).
+let audioDropHoverLayer: EventLayer | TempoLayer | null = null
+function updateAudioDropHover(pt: Point | null): boolean {
+  const selected = widget.selected
+  const eligible = (selected instanceof EventLayer || selected instanceof TempoLayer) ? selected : null
+  const bounds   = eligible?.audioPillBounds() ?? null
+  const hover    = pt !== null && bounds !== null && boundingBoxContains(bounds, pt)
+  let changed    = false
+
+  if (audioDropHoverLayer !== null && (audioDropHoverLayer !== eligible || !hover)) {
+    audioDropHoverLayer.setAudioDropHover(false)
+    audioDropHoverLayer = null
+    changed = true
+  }
+  if (eligible !== null && hover && audioDropHoverLayer === null) {
+    eligible.setAudioDropHover(true)
+    audioDropHoverLayer = eligible
+    changed = true
+  }
+  return changed
+}
+
 canvas.addEventListener('dragover', (e) => {
   if (!e.dataTransfer?.types.includes('Files')) return
   e.preventDefault()
@@ -1726,6 +1770,7 @@ canvas.addEventListener('dragover', (e) => {
       Node.fileDragActive = false
       Node.scheduleFrame?.()
     }
+    if (updateAudioDropHover(null)) Node.scheduleFrame?.()
     if (fileDragGhost === null) {
       fileDragGhost = isVideoDrag(e) ? new VideoLayer() : new ImageLayer()
       fileDragGhost.bounds = { ...menuLayer.bounds }
@@ -1746,6 +1791,7 @@ canvas.addEventListener('dragover', (e) => {
     Node.fileDragActive = true
     Node.scheduleFrame?.()
   }
+  if (updateAudioDropHover(pt)) Node.scheduleFrame?.()
 })
 
 canvas.addEventListener('dragleave', () => {
@@ -1758,23 +1804,39 @@ canvas.addEventListener('dragleave', () => {
     Node.fileDragActive = false
     Node.scheduleFrame?.()
   }
+  if (updateAudioDropHover(null)) Node.scheduleFrame?.()
 })
 
 canvas.addEventListener('drop', (e) => {
   e.preventDefault()
   Node.fileDragActive = false
+  updateAudioDropHover(null)
 
   const files = e.dataTransfer?.files
   const file  = files?.[0]
 
   if (fileDragGhost !== null) {
-    const ghost = fileDragGhost
+    let ghost = fileDragGhost
     fileDragGhost = null
     if (file) {
+      // DataTransferItem.type during dragover (used by isVideoDrag to pick
+      // the ghost's type) is unreliable for local OS file drags on some
+      // browsers; File.type on the real File object at drop is not. Re-derive
+      // the type now and swap the placeholder if dragover guessed wrong, so
+      // e.g. an .mp4 dragged over the stack widget still commits as a
+      // VideoLayer rather than whatever the ghost happened to be.
+      const wantsVideo = file.type.startsWith('video/')
+      if (wantsVideo !== (ghost instanceof VideoLayer)) {
+        graph.unregister(ghost)
+        const corrected = wantsVideo ? new VideoLayer() : new ImageLayer()
+        corrected.bounds = { ...ghost.bounds }
+        widget.replaceExternalDragLayer(ghost, corrected)
+        ghost = corrected
+      }
       Layer.assignDebugName(ghost)
       widget.commitExternalDrag()
       ghost.loadFile(file)
-      if (ghost instanceof ImageLayer) wireImageLayer(ghost)
+      postInsertLayer(ghost)
       insertAdditionalImageFiles(files, ghost, 1)
       refreshStack(ghost)
     } else {
@@ -1803,13 +1865,28 @@ canvas.addEventListener('drop', (e) => {
     newLayer.insertAbove(below ?? lowestAnchor())
   } else if (selected !== null) {
     const hitSlot = selected.hitTestSlot(dropPoint)
-    const slot = (hitSlot !== null && hitSlot.type === ValueType.Image)
-      ? hitSlot
-      : selected.findEmptySlot(ValueType.Image)
+    let slot: ParameterSlot | null =
+      (hitSlot !== null && hitSlot.type === ValueType.Image) ? hitSlot : null
+
+    // A video file dropped anywhere inside an EventLayer/TempoLayer's whole
+    // audio-onset pill (not just the thin audioSlot row itself — matching
+    // the amber hover highlight's target region, see Layer.fileDropTarget/
+    // audioPillBounds) binds to its audioSlot, same "no empty-slot fallback,
+    // has to land in the region" rule the Image case doesn't need.
+    if (slot === null && newLayer instanceof VideoLayer
+        && (selected instanceof EventLayer || selected instanceof TempoLayer)) {
+      const pillBounds = selected.audioPillBounds()
+      if (pillBounds !== null && boundingBoxContains(pillBounds, dropPoint)
+          && selected.audioSlot.state === SlotState.Unbound) {
+        slot = selected.audioSlot
+      }
+    }
+
+    if (slot === null) slot = selected.findEmptySlot(ValueType.Image)
 
     if (slot !== null) {
-      // Dropped onto an Image-type slot, or the current layer has an empty
-      // image slot — insert below selected, then bind.
+      // Dropped onto an Image- or Audio-type slot, or the current layer has
+      // an empty image slot — insert below selected, then bind.
       targetSlot = slot
       newLayer.insertAbove(selected.layerBelow ?? lowestAnchor())
     } else {
@@ -1826,7 +1903,7 @@ canvas.addEventListener('drop', (e) => {
     BindingLayer.create(newLayer, targetSlot)
   }
 
-  if (newLayer instanceof ImageLayer) wireImageLayer(newLayer)
+  postInsertLayer(newLayer)
 
   // For multi-file drops, insert additional image files below the first layer.
   insertAdditionalImageFiles(files, newLayer, 1)

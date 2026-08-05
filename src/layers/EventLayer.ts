@@ -166,6 +166,12 @@ export class EventLayer extends Layer implements EventSource {
   private _tempoGateBtnBounds: { x: number; y: number; width: number; height: number } | null = null
   private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
 
+  // Whole audio-onset pill bounds (header + audioSlot row + scope), cached
+  // from the last render — used by main.ts's dragover handler to decide
+  // whether the drag point falls inside the pill (see setAudioDropHover).
+  private _audioPillBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _audioDropHover = false
+
   // True once the user drags the rate slider directly while tap/audio
   // tempo is driving it — hands control back to the manual slider, same
   // suspend-on-touch convention TempoLayer's TAP uses. Cleared (re-engaged)
@@ -210,6 +216,30 @@ export class EventLayer extends Layer implements EventSource {
   get imageASlot():   ParameterSlot { return this._imageASlot }
   get imageBSlot():   ParameterSlot { return this._imageBSlot }
   get audioSlot():    ParameterSlot { return this._audioSlot }
+
+  // ----------------------------------------------------------
+  // OS file drag — audio-onset pill drop target
+  // ----------------------------------------------------------
+
+  // Whole audio-onset pill bounds, for main.ts's dragover handler to hit-test
+  // the drag point against. Null until this layer has rendered at least once
+  // (i.e. been selected) — same "stale but fine" caching every other cached
+  // bounds field in this codebase uses for hit-testing.
+  audioPillBounds(): { x: number; y: number; width: number; height: number } | null {
+    return this._audioPillBounds
+  }
+
+  // Called from main.ts's dragover/dragleave/drop handlers while this layer
+  // is selected and an OS file is being dragged — true whenever the drag
+  // point is anywhere inside the audio-onset pill, regardless of the
+  // dragged file's actual type (unknown/unreliable this early — see
+  // Layer.fileDropTarget). Purely a display hint; the real type check
+  // happens at drop, in main.ts.
+  setAudioDropHover(v: boolean): void { this._audioDropHover = v }
+
+  override fileDropTarget(): ParameterSlot | null {
+    return (this._audioDropHover && this._audioSlot.state === SlotState.Unbound) ? this._audioSlot : null
+  }
 
   // ----------------------------------------------------------
   // SliderRegion callback — called when user drags the rate slider
@@ -300,13 +330,22 @@ export class EventLayer extends Layer implements EventSource {
     }
 
     // ── Mode 1b: internal timer when no rate slot bound ────
+    // Gated on the global pause (Node.clock?.paused, same convention as
+    // PointLayer/DirectionLayer's wander/rotate sims) so this wall-clock
+    // timer actually stops firing under the 'p' key — without the check it
+    // would keep advancing off performance.now() regardless of anything
+    // else in the graph being paused. Keep re-dirtying (and _lastAutoFire
+    // frozen, not reset) while paused so it resumes cleanly from where it
+    // left off rather than bursting missed fires on resume.
     if (this._running && !this._rateSlot.isActive) {
-      const now = performance.now()
-      const intervalMs = 1000 / sliderToHz(this._rateSlider.value)
-      if (this._lastAutoFire === null) this._lastAutoFire = now - intervalMs
-      if (now - this._lastAutoFire >= intervalMs) {
-        this._eventTime    = now
-        this._lastAutoFire = now
+      if (!Node.clock?.paused) {
+        const now = performance.now()
+        const intervalMs = 1000 / sliderToHz(this._rateSlider.value)
+        if (this._lastAutoFire === null) this._lastAutoFire = now - intervalMs
+        if (now - this._lastAutoFire >= intervalMs) {
+          this._eventTime    = now
+          this._lastAutoFire = now
+        }
       }
       queueMicrotask(() => this.forceDirty())
     } else if (!this._running) {
@@ -846,6 +885,7 @@ export class EventLayer extends Layer implements EventSource {
   private _renderAudioPill(ctx: Ctx2D, y: number, PANEL_X: number, PANEL_W: number): void {
     const HEAD_H  = 18
     const totalH  = HEAD_H + SLOT_H + SLOT_GAP + AudioScopeWidget.HEIGHT + 8
+    this._audioPillBounds = { x: PANEL_X, y, width: PANEL_W, height: totalH }
 
     ctx.save()
     ctx.textBaseline = 'middle'
