@@ -32,14 +32,23 @@ const NORM_HEADROOM  = 4    // total deviation range (both directions) the axis 
 // onset of interest sits above the mean, so most of the height (80%) is
 // given to headroom above it, and little to below.
 const MEAN_Y_FRAC    = 0.2
-const Q_DX           = 28   // fixed horizontal span of the Q guide line
-const FREQ_ROW_H     = 14   // band-centre-frequency mini-slider row
+const FREQ_ROW_H     = 14   // band-centre-frequency + selectivity row
 const FREQ_ROW_GAP   = 4
 
 const FILTER_FREQ_MIN = 40     // Hz
 const FILTER_FREQ_MAX = 2000   // Hz
 const FILTER_Q_MIN    = 0.5
 const FILTER_Q_MAX    = 8
+
+// Q is shown as whiskers either side of the band-centre line, sized by
+// half-bandwidth in octaves — a visual approximation (not exact biquad
+// magnitude-response math), just enough to be monotonic and to give a
+// meaningfully different width across the Q range. Since the frequency
+// axis is linear in log(f), a fixed octave width maps to a fixed pixel
+// width regardless of where the band centre currently sits.
+const FILTER_OCTAVE_RANGE = Math.log2(FILTER_FREQ_MAX / FILTER_FREQ_MIN)
+const Q_HALF_OCTAVE_MIN   = 0.5 / FILTER_Q_MAX   // narrowest whiskers (highest Q)
+const Q_HALF_OCTAVE_MAX   = 0.5 / FILTER_Q_MIN   // widest whiskers (lowest Q)
 
 const MAX_PREDICTED_BEATS = 300   // loop safety cap, well above what HISTORY_LEN can show
 
@@ -52,9 +61,10 @@ export class AudioScopeWidget {
 
   private _scopeBounds:   BBox | null = null
   private _levelHandlePos: Point | null = null
-  private _qHandlePos:     Point | null = null
+  private _qLeftPos:       Point | null = null
+  private _qRightPos:      Point | null = null
   private _freqRowBounds:  BBox | null = null
-  private _scopeDrag: 'level' | 'q' | 'freq' | null = null
+  private _scopeDrag: 'level' | 'qLeft' | 'qRight' | 'freq' | null = null
 
   // Draws the freq-slider row + scope (waveform, onset markers, predicted
   // beat grid, level/Q handles) at (x, y, width). Returns the total height
@@ -65,9 +75,13 @@ export class AudioScopeWidget {
     ctx.save()
     ctx.textBaseline = 'middle'
 
-    // Band-centre-frequency mini-slider — full-width drag track, not a
-    // circular handle, since its range (40 Hz - 2 kHz, log) needs a wider
-    // grab target than the scope's vertical threshold handles.
+    // Band-centre-frequency + selectivity (Q) — one integrated control.
+    // A vertical line marks the band centre (drag anywhere on the row's
+    // background to retune it, full-width track since the range needs a
+    // wider grab target than a circular handle); horizontal whiskers
+    // either side show the filter's selectivity — narrow whiskers = high
+    // Q (tight band), wide whiskers = low Q (broad band). Each whisker
+    // end is independently draggable; both drive the same symmetric Q.
     const freqRowY = y
     const freqX    = x + SCOPE_PAD
     const freqW    = width - SCOPE_PAD * 2
@@ -76,13 +90,23 @@ export class AudioScopeWidget {
     ctx.fillStyle = 'rgba(255,255,255,0.06)'
     ctx.beginPath(); ctx.roundRect(freqX, freqRowY, freqW, FREQ_ROW_H, 3); ctx.fill()
 
-    const freqT = Math.log(audioRhythm.filterFreq / FILTER_FREQ_MIN) / Math.log(FILTER_FREQ_MAX / FILTER_FREQ_MIN)
-    const freqFillW = Math.max(2, freqT * freqW)
-    ctx.fillStyle = AUDIO_TC + '33'
-    ctx.beginPath(); ctx.roundRect(freqX, freqRowY, freqFillW, FREQ_ROW_H, 3); ctx.fill()
+    const centerX   = this._freqToX(audioRhythm.filterFreq, freqX, freqW)
+    const midY      = freqRowY + FREQ_ROW_H / 2
+    const whiskerPx = this._qToWhiskerPx(audioRhythm.filterQ, freqW)
+    const leftX     = Math.max(freqX, centerX - whiskerPx)
+    const rightX    = Math.min(freqX + freqW, centerX + whiskerPx)
+    this._qLeftPos  = { x: leftX, y: midY }
+    this._qRightPos = { x: rightX, y: midY }
+
+    ctx.strokeStyle = AUDIO_TC + 'aa'
+    ctx.lineWidth   = 1.5
+    ctx.beginPath(); ctx.moveTo(leftX, midY); ctx.lineTo(rightX, midY); ctx.stroke()
+    for (const wx of [leftX, rightX]) {
+      ctx.beginPath(); ctx.moveTo(wx, midY - 4); ctx.lineTo(wx, midY + 4); ctx.stroke()
+    }
 
     ctx.fillStyle = 'rgba(255,255,255,0.85)'
-    ctx.beginPath(); ctx.roundRect(freqX + freqFillW - 1.5, freqRowY - 2, 3, FREQ_ROW_H + 4, 1.5); ctx.fill()
+    ctx.beginPath(); ctx.roundRect(centerX - 1.5, freqRowY - 2, 3, FREQ_ROW_H + 4, 1.5); ctx.fill()
 
     ctx.font      = '8px monospace'
     ctx.fillStyle = 'rgba(255,255,255,0.55)'
@@ -175,9 +199,10 @@ export class AudioScopeWidget {
       ctx.beginPath(); ctx.moveTo(lineX, scopeY); ctx.lineTo(lineX, scopeY + SCOPE_H); ctx.stroke()
     }
 
-    // Level threshold — horizontal dashed line + draggable handle at right edge.
-    // Positioned via the same auto-normalised transform as the waveform, so
-    // the dashed line always tracks where it actually crosses the live trace.
+    // Level threshold — horizontal dashed line + draggable handle at
+    // mid-width. Positioned via the same auto-normalised transform as the
+    // waveform, so the dashed line always tracks where it actually crosses
+    // the live trace.
     const levelY = this._envToY(audioRhythm.onset.levelThreshold, scopeY)
     ctx.strokeStyle = AUDIO_TC + '88'
     ctx.lineWidth   = 1
@@ -185,31 +210,16 @@ export class AudioScopeWidget {
     ctx.beginPath(); ctx.moveTo(scopeX, levelY); ctx.lineTo(scopeX + scopeW, levelY); ctx.stroke()
     ctx.setLineDash([])
 
-    const levelHx = scopeX + scopeW - 8
+    const levelHx = scopeX + scopeW / 2
     this._levelHandlePos = { x: levelHx, y: levelY }
     ctx.beginPath(); ctx.arc(levelHx, levelY, 5, 0, Math.PI * 2)
     ctx.fillStyle = AUDIO_TC
     ctx.fill()
 
-    // Q — diagonal guide line + draggable handle, anchored bottom-left.
-    const anchorX = scopeX + 8
-    const anchorY = scopeY + SCOPE_H - 4
-    const qHx = anchorX + Q_DX
-    const qT  = Math.min(1, Math.max(0, (audioRhythm.filterQ - FILTER_Q_MIN) / (FILTER_Q_MAX - FILTER_Q_MIN)))
-    const qHy = anchorY - qT * (SCOPE_H - 8)
-    this._qHandlePos = { x: qHx, y: qHy }
-
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)'
-    ctx.lineWidth   = 1.25
-    ctx.beginPath(); ctx.moveTo(anchorX, anchorY); ctx.lineTo(qHx, qHy); ctx.stroke()
-    ctx.beginPath(); ctx.arc(qHx, qHy, 5, 0, Math.PI * 2)
-    ctx.fillStyle = 'rgba(255,255,255,0.85)'
-    ctx.fill()
-
     ctx.font      = '9px monospace'
     ctx.fillStyle = 'rgba(255,255,255,0.32)'
     ctx.textAlign = 'left'
-    ctx.fillText('level / Q', scopeX + 4, scopeY + 9)
+    ctx.fillText('level', scopeX + 4, scopeY + 9)
 
     ctx.restore()
     return totalH
@@ -220,11 +230,13 @@ export class AudioScopeWidget {
   // handlePointerDown / handlePointerMove / handlePointerUp.
   // ----------------------------------------------------------
 
-  hitTest(point: Point): 'level' | 'q' | 'freq' | null {
+  hitTest(point: Point): 'level' | 'qLeft' | 'qRight' | 'freq' | null {
     if (this._levelHandlePos
         && Math.hypot(point.x - this._levelHandlePos.x, point.y - this._levelHandlePos.y) <= HANDLE_HIT_R) return 'level'
-    if (this._qHandlePos
-        && Math.hypot(point.x - this._qHandlePos.x, point.y - this._qHandlePos.y) <= HANDLE_HIT_R) return 'q'
+    if (this._qLeftPos
+        && Math.hypot(point.x - this._qLeftPos.x, point.y - this._qLeftPos.y) <= HANDLE_HIT_R) return 'qLeft'
+    if (this._qRightPos
+        && Math.hypot(point.x - this._qRightPos.x, point.y - this._qRightPos.y) <= HANDLE_HIT_R) return 'qRight'
     if (this._freqRowBounds
         && point.x >= this._freqRowBounds.x && point.x <= this._freqRowBounds.x + this._freqRowBounds.width
         && point.y >= this._freqRowBounds.y && point.y <= this._freqRowBounds.y + this._freqRowBounds.height) return 'freq'
@@ -243,14 +255,14 @@ export class AudioScopeWidget {
     const { y: scopeY } = this._scopeBounds
     if (this._scopeDrag === 'level') {
       audioRhythm.onset.levelThreshold = Math.max(0, Math.min(1, this._yToEnv(point.y, scopeY)))
-    } else if (this._scopeDrag === 'q') {
-      const anchorY = scopeY + SCOPE_H - 4
-      const t = Math.max(0, Math.min(1, (anchorY - point.y) / (SCOPE_H - 8)))
-      audioRhythm.filterQ = FILTER_Q_MIN + t * (FILTER_Q_MAX - FILTER_Q_MIN)
+    } else if (this._scopeDrag === 'qLeft' || this._scopeDrag === 'qRight') {
+      if (this._freqRowBounds === null) return
+      const { x: rowX, width: rowW } = this._freqRowBounds
+      const centerX = this._freqToX(audioRhythm.filterFreq, rowX, rowW)
+      audioRhythm.filterQ = this._whiskerPxToQ(Math.abs(point.x - centerX), rowW)
     } else if (this._scopeDrag === 'freq' && this._freqRowBounds !== null) {
       const row = this._freqRowBounds
-      const t = Math.max(0, Math.min(1, (point.x - row.x) / row.width))
-      audioRhythm.filterFreq = FILTER_FREQ_MIN * Math.pow(FILTER_FREQ_MAX / FILTER_FREQ_MIN, t)
+      audioRhythm.filterFreq = this._xToFreq(point.x, row.x, row.width)
     }
   }
 
@@ -282,6 +294,34 @@ export class AudioScopeWidget {
     const scale  = audioRhythm.onset.normScale * NORM_HEADROOM
     const norm   = (scopeY + SCOPE_H - y) / SCOPE_H
     return center + (norm - MEAN_Y_FRAC) * 2 * scale
+  }
+
+  // Band-centre frequency <-> row-x, log-mapped over [FILTER_FREQ_MIN,
+  // FILTER_FREQ_MAX]. Shared by render (centre line + whisker anchor) and
+  // pointer handling (freq-row drag, and re-deriving the centre for a
+  // whisker drag in progress).
+  private _freqToX(freq: number, rowX: number, rowW: number): number {
+    const t = Math.log(freq / FILTER_FREQ_MIN) / Math.log(FILTER_FREQ_MAX / FILTER_FREQ_MIN)
+    return rowX + Math.min(1, Math.max(0, t)) * rowW
+  }
+
+  private _xToFreq(x: number, rowX: number, rowW: number): number {
+    const t = Math.max(0, Math.min(1, (x - rowX) / rowW))
+    return FILTER_FREQ_MIN * Math.pow(FILTER_FREQ_MAX / FILTER_FREQ_MIN, t)
+  }
+
+  // Q <-> whisker half-width in px, via half-bandwidth in octaves. Since
+  // _freqToX is affine in log(f), a fixed octave width is a fixed pixel
+  // width regardless of where the band centre currently sits — no need to
+  // convert through actual Hz values on each side.
+  private _qToWhiskerPx(q: number, rowW: number): number {
+    const halfOctave = Math.min(Q_HALF_OCTAVE_MAX, Math.max(Q_HALF_OCTAVE_MIN, 0.5 / q))
+    return (halfOctave / FILTER_OCTAVE_RANGE) * rowW
+  }
+
+  private _whiskerPxToQ(px: number, rowW: number): number {
+    const halfOctave = Math.min(Q_HALF_OCTAVE_MAX, Math.max(Q_HALF_OCTAVE_MIN, (px / rowW) * FILTER_OCTAVE_RANGE))
+    return Math.min(FILTER_Q_MAX, Math.max(FILTER_Q_MIN, 0.5 / halfOctave))
   }
 
   // Fixed time-axis transform: age is ticks-since-capture, scaled against

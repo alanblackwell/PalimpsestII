@@ -120,7 +120,7 @@ export interface SaveFile {
   // saves from before this feature, and beat/phase tracking state isn't
   // included — that's live, recomputed state that re-locks quickly once
   // audio is playing again, not "manual/fallback" state worth persisting.
-  audioRhythm?: { filterFreq: number; filterQ: number; levelThreshold: number }
+  audioRhythm?: { filterFreq: number; filterQ: number; levelThreshold: number; tempoGate: boolean }
   layers: LayerRecord[]
   stack: number[]
   background: number[]
@@ -351,6 +351,7 @@ export async function serialize(ctx: PersistenceContext): Promise<SaveFile> {
       filterFreq:     audioRhythm.filterFreq,
       filterQ:        audioRhythm.filterQ,
       levelThreshold: audioRhythm.onset.levelThreshold,
+      tempoGate:      audioRhythm.tempoGate,
     },
     layers,
     stack: stackIds,
@@ -552,6 +553,7 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
     if (typeof json.audioRhythm.filterFreq === 'number')     audioRhythm.filterFreq = json.audioRhythm.filterFreq
     if (typeof json.audioRhythm.filterQ === 'number')        audioRhythm.filterQ = json.audioRhythm.filterQ
     if (typeof json.audioRhythm.levelThreshold === 'number') audioRhythm.onset.levelThreshold = json.audioRhythm.levelThreshold
+    if (typeof json.audioRhythm.tempoGate === 'boolean')     audioRhythm.tempoGate = json.audioRhythm.tempoGate
   }
 
   // Phase 9 — finish. Caller is responsible for refreshStack()/selection.

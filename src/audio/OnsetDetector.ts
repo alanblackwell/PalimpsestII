@@ -92,6 +92,26 @@ export class OnsetDetector {
     return { envelope, onset }
   }
 
+  // Advances the ring buffer + tick counter from the wall clock alone, with
+  // no real signal to sample — lets a caller's scope keep rendering/
+  // animating (tap markers, predicted-beat grid, both keyed off history's
+  // timing) when no live analyser is available yet, e.g. tap-tempo used
+  // before any audio is bound. Flatlines the trace at the current running
+  // mean rather than jumping to 0, so it reads as "no signal" rather than
+  // a discontinuity, and runs no onset detection — there's nothing to
+  // detect against.
+  sampleSilent(nowMs: number): void {
+    this.history.push(this._avgEnvelope)
+    if (this.history.length > OnsetDetector.HISTORY_LEN) this.history.shift()
+    this.historyTimesMs.push(nowMs)
+    if (this.historyTimesMs.length > OnsetDetector.HISTORY_LEN) this.historyTimesMs.shift()
+
+    this._tick++
+    while (this._onsetTicks.length > 0 && this._tick - this._onsetTicks[0]! > OnsetDetector.HISTORY_LEN) {
+      this._onsetTicks.shift()
+    }
+  }
+
   // Ages (in samples/ticks since firing) of every onset still within the
   // visible history, oldest first — each one travels as the buffer scrolls
   // and drops out once its age exceeds HISTORY_LEN.

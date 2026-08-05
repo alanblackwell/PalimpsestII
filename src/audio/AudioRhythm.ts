@@ -37,6 +37,18 @@ const REFRACTORY_FRACTION = 0.6    // of periodMs — rejects anything faster th
 const AUDIO_DRIFT_RATE           = 0.1    // default period-drift blend for live audio-detected onsets
 const AUDIO_DRIFT_RATE_CONFIDENT = 0.02   // once a tap has set the period: much stickier — a tap is more reliable evidence of "this is the beat" than raw signal, so audio onsets mostly just refine phase
 
+// Tempo gate — rejects an onset unless it lands within this fraction of a
+// beat cycle of the current prediction. Shared (not per-layer) because it
+// has to run inside _registerBeatOnset, below, to be useful: gating only
+// EventLayer's downstream fire decision (the original placement of this
+// check) does nothing to protect the estimate itself, since by the time a
+// caller can check it the onset has already been blended into periodMs/
+// _phaseAnchorMs — busy/syncopated material would already have corrupted
+// the very estimate the gate was meant to defend. Applying it here instead
+// protects the shared estimate for both EventLayer and TempoLayer at once,
+// since both funnel through this same update() -> _registerBeatOnset path.
+const TEMPO_GATE_TOLERANCE = 0.15
+
 function wrap01(v: number): number {
   return ((v % 1) + 1) % 1
 }
@@ -72,6 +84,10 @@ export class AudioRhythm {
   // Shared band-pass filter tuning.
   filterFreq = 120   // Hz — near a kick drum's fundamental
   filterQ    = 1.5
+
+  // Tempo gate toggle — off by default (passes everything), same as before
+  // this was shared. See TEMPO_GATE_TOLERANCE above and _registerBeatOnset.
+  tempoGate = false
 
   // Beat-induction prior — null until locked (bootstrapped from the first
   // two onsets, or seeded directly via tap()). All wall-clock (ms) based:
@@ -118,6 +134,17 @@ export class AudioRhythm {
     return onset
   }
 
+  // Keeps the shared history/tick clock advancing purely off wall time,
+  // with no real signal — for tap-tempo used before any audioSlot is
+  // bound anywhere, so the scope (tap markers, predicted-beat grid) still
+  // renders/animates. A live update() call always supersedes this once one
+  // starts; callers only invoke this in the absence of an active audioSlot
+  // of their own (see EventLayer/TempoLayer recompute()).
+  tickSilent(nowMs: number): void {
+    if (this.paused) return
+    this.onset.sampleSilent(nowMs)
+  }
+
   currentPhase(nowMs: number): number {
     if (this.periodMs === null) return 0
     return wrap01((nowMs - this._phaseAnchorMs) / this.periodMs)
@@ -125,6 +152,17 @@ export class AudioRhythm {
 
   currentRateHz(): number {
     return this.periodMs === null ? 0 : 1000 / this.periodMs
+  }
+
+  // Same gate _registerBeatOnset applies to protect the estimate, exposed
+  // for a caller with its own discrete trigger to filter (EventLayer's
+  // pulse fire) — by the time this is checked the estimate itself is
+  // already gated, so this mostly reconfirms rather than duplicates the
+  // decision. Passes everything until the gate is on and a period exists.
+  passesTempoGate(nowMs: number): boolean {
+    if (!this.tempoGate || this.periodMs === null) return true
+    const phase = this.currentPhase(nowMs)
+    return Math.min(phase, 1 - phase) <= TEMPO_GATE_TOLERANCE
   }
 
   // Tap-tempo — (re)seeds the prior directly from recent tap intervals,
@@ -186,6 +224,20 @@ export class AudioRhythm {
     // refractory (update()) already keeps intervals from landing much
     // below REFRACTORY_FRACTION × periodMs — kept as defense in depth.
     if (interval < this.periodMs * 0.5 || interval > this.periodMs * 1.5) return
+
+    // Tempo gate (opt-in): reject onsets that don't land near where a beat
+    // is currently predicted, before they're allowed to influence the
+    // estimate at all — a much tighter check than the interval-ratio one
+    // above, since it's phase-aware rather than just duration-aware. This
+    // is what actually keeps a busy/syncopated pattern (ghost notes, hi-hats
+    // between the main hits) from walking the locked tempo away from what
+    // it should be. Computed against the pre-update anchor/period, i.e.
+    // exactly what a caller would see from currentPhase(nowMs) right now.
+    if (this.tempoGate) {
+      const rawPhase   = wrap01((nowMs - this._phaseAnchorMs) / this.periodMs)
+      const phaseError = Math.min(rawPhase, 1 - rawPhase)
+      if (phaseError > TEMPO_GATE_TOLERANCE) return
+    }
 
     // Slow drift toward the freshly measured interval — much slower once
     // a tap has established the period (AUDIO_DRIFT_RATE_CONFIDENT), so

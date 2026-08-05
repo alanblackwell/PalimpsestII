@@ -1537,6 +1537,25 @@ interaction.setSlotClickCallback((consumer, slot) => {
       return
     }
 
+    // Empty Audio-typed slots (EventLayer/TempoLayer's audioSlot): create a
+    // fresh VideoLayer as the audio source. Inserted below the consumer —
+    // unlike every other case above, which inserts above — since there's
+    // no reason for the video's own image output to sit over whatever the
+    // user is already working on; audio is the only thing this binding
+    // cares about. postInsertLayer wires up the Track button/inspectors
+    // like any other VideoLayer creation path, and selecting it
+    // immediately lets the user pick a source file with no extra click.
+    if (slot.type === ValueType.Audio) {
+      const newLayer = new VideoLayer()
+      Layer.assignSlotCreatedName(newLayer, consumer, slot)
+      newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+      newLayer.insertBelow(consumer)
+      BindingLayer.create(newLayer, slot)
+      postInsertLayer(newLayer)
+      refreshStack(newLayer)
+      return
+    }
+
     const factory = DEFAULT_VALUE_LAYER[slot.type]
     if (factory === undefined) return
 

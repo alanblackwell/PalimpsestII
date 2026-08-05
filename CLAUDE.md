@@ -467,7 +467,17 @@ pixel-pick):
 - **Empty slot** — looks up the slot's type in `DEFAULT_VALUE_LAYER`
   (`main.ts`), constructs the canonical default layer for that type (e.g.
   `AmountLayer(0.5)`, `ColourLayer(...)`, `PointLayer(centre)`), inserts it
-  above the consumer, binds it, and selects it.
+  above the consumer, binds it, and selects it. **Exception**: an empty
+  `Audio`-typed slot (`EventLayer`/`TempoLayer`'s `audioSlot` — the only
+  consumers of this type) isn't in `DEFAULT_VALUE_LAYER` at all; it's a
+  dedicated special case in `setSlotClickCallback` that creates a
+  `VideoLayer` and inserts it **below** the consumer instead of above —
+  the video's own image output isn't the point of this binding, only its
+  audio tap, so there's no reason for it to sit over whatever the user is
+  already looking at. Runs the new layer through `postInsertLayer` (Track
+  button/inspector wiring) like any other `VideoLayer` creation path before
+  selecting it, so the source-picker (File/Camera/Screen) is immediately
+  in view.
 - **Bound slot** — selects the layer feeding it, restoring it from
   `DeletionLayer`'s archive first if it's currently archived.
 
@@ -897,10 +907,11 @@ for confirming the TAP button is actually registering clicks at all.
 
 **`AudioScopeWidget`** — the part of the tuning UI that's identical
 wherever it's shown and reads/writes `audioRhythm` directly: the
-band-centre-frequency mini-slider (log-mapped 40 Hz – 2 kHz, full-width
+band-centre-frequency + selectivity row (log-mapped 40 Hz – 2 kHz, full-width
 drag track rather than a small circular handle, since its range needs a
-wider grab target), the scope box (waveform + onset markers + predicted-beat
-grid), and the level/Q drag handles. **Not** included: the `audioSlot`
+wider grab target — see below for the Q whiskers), the scope box (waveform
++ onset markers + predicted-beat grid), and the level drag handle. **Not**
+included: the `audioSlot`
 binding row and pill header, which stay layer-specific (each layer still
 decides which `VideoLayer` feeds the shared analysis) — callers draw a
 header (label + TAP/gate buttons) then render the `audioSlot` row via the
@@ -914,8 +925,8 @@ pill backdrop before calling `render`). `EventLayer` and `TempoLayer`'s
 audio pills are now deliberately identical in structure this way — header,
 `audioSlot` row, scope, all one pill — see both below. Each host layer
 constructs its **own** `AudioScopeWidget` instance — the widget holds only
-this-instance drag/UI state (`_scopeBounds`, `_levelHandlePos`, `_qHandlePos`,
-`_freqRowBounds`, `_scopeDrag`), never analysis state — so `EventLayer`'s
+this-instance drag/UI state (`_scopeBounds`, `_levelHandlePos`, `_qLeftPos`,
+`_qRightPos`, `_freqRowBounds`, `_scopeDrag`), never analysis state — so `EventLayer`'s
 and `TempoLayer`'s scopes can be dragged independently while staying
 visually and numerically in sync (both mutate the same `audioRhythm`).
 Waveform trace and onset markers are positioned horizontally via
@@ -940,8 +951,33 @@ where it actually crosses the trace regardless of loudness (the absolute
 with `levelThreshold = 0.05`, chosen so the handle starts at roughly 50% up
 this axis given `OnsetDetector`'s initial (pre-adaptation) EMA seed values
 — a reasonable starting drag position before real audio has streamed in
-and shifted the live centre/scale to something track-specific. The scope
-**always** draws a yellow
+and shifted the live centre/scale to something track-specific. The level
+drag handle sits at the scope's horizontal mid-point (not the right edge)
+— purely a grab-target placement choice, `handlePointerMove`'s `'level'`
+case only ever reads `point.y`, so it behaves identically wherever it's
+drawn.
+
+The frequency row is one integrated band-centre + selectivity control
+rather than a plain slider: a vertical centre-line thumb marks
+`filterFreq` (drag anywhere on the row's background to retune it, same
+full-width track as before), flanked by two horizontal **whiskers**
+showing `filterQ` — narrow whiskers read as high Q (tight, selective
+band), wide whiskers as low Q (broad band). Each whisker end is
+independently draggable and both drive the same symmetric Q value. Whisker
+half-width is derived from Q via a half-bandwidth-in-octaves
+approximation (`_qToWhiskerPx`/`_whiskerPxToQ`, `0.5 / Q`, clamped to
+`[Q_HALF_OCTAVE_MIN, Q_HALF_OCTAVE_MAX]`) — deliberately not exact biquad
+magnitude-response math, just enough to be monotonic and visually distinct
+across the Q range; since `_freqToX` is affine in `log(f)`, a fixed octave
+width is a fixed pixel width regardless of where the band centre currently
+sits, so both whiskers are always equal length. This replaced an earlier
+design (a single diagonal guide line + handle in the scope's corner,
+controlling Q alone, disconnected from the frequency row) that worked but
+read as unrelated to frequency and was easy to mistake for a leftover
+rise-time onset heuristic — it wasn't; it wasn't even doing anything with
+onset detection at all, just Q.
+
+The scope **always** draws a yellow
 (`#ffe000`) vertical line per entry in `onsetAges` — every detected onset
 gets its own persistent marker that travels leftward with the waveform and
 only disappears once it ages out (not replaced by the next onset) — and,
@@ -958,24 +994,63 @@ so showing it unconditionally keeps the widget's API simple.
 
 **`EventLayer`** (mode 4 of its four independent trigger modes): calls
 `audioRhythm.update(analyser, nowMs)` each `recompute()`, and on a fire,
-optionally gates it through `_passesTempoGate` — when the `_tempoGate`
-toggle (small button in the "audio onset" pill header, plain boolean, not
-tied to a `ParameterSlot`) is on and a tempo estimate has locked in, an
-onset is only accepted if `audioRhythm.currentPhase(nowMs)` is within
-`TEMPO_GATE_TOLERANCE` (0.15, a fixed constant) of a beat — rejecting
-onsets that don't land near a predicted beat, e.g. bounces/reverb trailing
-a real hit. Passes everything through until a tempo estimate exists. The
-pill header also has a **TAP** button (plain text glyph — no tap/metronome
-icon exists in `src/ui/icons.ts`), next to the gate toggle: calls
-`audioRhythm.tap(performance.now())` directly, no suspend-on-touch needed
-(unlike `TempoLayer`, `EventLayer` has no manual Hz control competing with
-`audioRhythm`'s prior). Useful even though `EventLayer` doesn't display a
-tempo: for rhythmic material, manually seeding the inter-onset-interval
-estimate is what makes the tempo gate above accurate, without needing a
-`TempoLayer` in the stack at all. Level threshold/filter freq/Q are **not**
-serialized per-`EventLayer` instance any more (see `AudioRhythm`
-persistence below) — `serializeState` only keeps `tempoGate` alongside its
-pre-existing fields.
+optionally gates it through `audioRhythm.passesTempoGate(nowMs)` — when
+`audioRhythm.tempoGate` (small toggle button in the "audio onset" pill
+header, plain boolean, not tied to a `ParameterSlot`) is on and a tempo
+estimate has locked in, an onset is only accepted if it's within
+`TEMPO_GATE_TOLERANCE` (0.15, a fixed constant in `AudioRhythm.ts`) of a
+beat. **The gate is shared `AudioRhythm` state, not per-layer** — both the
+toggle and the tolerance moved out of `EventLayer` entirely. This matters
+beyond code-sharing: the gate is applied *inside*
+`AudioRhythm._registerBeatOnset()`, before an accepted onset is blended
+into `periodMs`/`_phaseAnchorMs`, not only as a downstream check on
+whether to fire. Gating only the fire decision (the original design) did
+nothing to protect the estimate itself — by the time `EventLayer` could
+check it, the onset had already unconditionally corrupted `periodMs` for
+busy/syncopated material (ghost notes, hi-hats between the main hits).
+Gating at the source protects the shared estimate for both `EventLayer`
+and `TempoLayer` at once, since both funnel through this same `update()` →
+`_registerBeatOnset` path — `EventLayer`'s own `passesTempoGate` check
+downstream is now largely a reconfirmation rather than the actual
+protection. The pill header also has a **TAP** button (plain text glyph —
+no tap/metronome icon exists in `src/ui/icons.ts`), next to the gate
+toggle: calls `audioRhythm.tap(performance.now())`. Useful even though
+`EventLayer` doesn't display a tempo: for rhythmic material, manually
+seeding the inter-onset-interval estimate is what makes the tempo gate
+above accurate, without needing a `TempoLayer` in the stack at all.
+
+**Tap-tempo without any audio bound**: `EventLayer`'s mode-1b internal
+timer (its own manual rate slider, used when `rateSlot` isn't bound) can
+now be driven by TAP alone, with no `audioSlot` ever bound. A `tapDriving`
+condition in `recompute()` (`!rateSlot.isActive && !_tapSuspended &&
+audioRhythm.tapMarkerTimesMs.length > 0`) — true from the very first TAP
+press, before a period estimate even exists — calls
+`audioRhythm.tickSilent(nowMs)` (skipped if mode 4 already has a live
+analyser feeding history that frame) so the scope's tap markers and
+predicted-beat grid render/animate purely off tapped timestamps, and once
+`periodMs` is set (second tap onward) pushes `hzToSlider(audioRhythm.
+currentRateHz())` into both `_rateSlider.setValue()` *and* `this.
+setValue()` — the same pair of calls a real drag's `_applyPointer` makes,
+so the tap-driven update is indistinguishable from the user having dragged
+the slider. `_tapSuspended` (cleared by `_tap()`, set by the slider's
+`setOnDragStart`) is the suspend-on-touch escape hatch: grabbing the
+slider directly hands control back to manual, same convention as a
+suspended `ParameterSlot` binding, generalized here to a non-slot shared
+estimate. `OnsetDetector.sampleSilent(nowMs)`/`AudioRhythm.tickSilent(nowMs)`
+advance the shared history ring buffer and tick counter from the wall
+clock alone (flatlined at the running mean, no onset detection run) —
+exactly what a live `update()` does for timing purposes, minus the actual
+signal.
+
+Level threshold/filter freq/Q/tempo gate are **not** serialized
+per-`EventLayer` instance (see `AudioRhythm` persistence below) —
+`serializeState` only keeps `running`/`rateSliderValue`.
+
+**Convenience creation**: clicking `EventLayer`'s or `TempoLayer`'s empty
+`audioSlot` creates a `VideoLayer` and binds it — see the `Audio`-typed
+exception in "assignDebugName and slot click-to-create/select" above
+(inserted below the consumer, not above, and immediately selected so the
+user can pick a source file right away).
 
 **`TempoLayer`**: audio branch calls the same `audioRhythm.update(...)` and
 reads `periodMs`/`currentRateHz()` to drive `_rateHz`, at lowest priority —
@@ -984,25 +1059,40 @@ before this feature. Phase: when the audio slot is active and locked,
 `_phase = audioRhythm.currentPhase(nowMs)` directly, bypassing the
 `_timeValue`-based formula entirely for that case; every other case
 (rate-slot-bound, manual slider) keeps the original `wrap01(_timeValue *
-_rateHz)` formula unchanged. `renderSlots` pulls `audioSlot` out of the main
-`timeSlot`/`rateSlot` group and renders it in its own `_renderAudioPill`
-pill (own `AudioScopeWidget` instance, `this._scope`) below — **structured
-identically to `EventLayer`'s audio-onset pill**: header + `audioSlot` row
-+ scope, one continuous backdrop — so tuning `audioRhythm` looks and works
-the same from either layer. Wired through the same `hitTestSelf`/
+_rateHz)` formula unchanged. Below the audio-slot branch, a third
+`recompute()` case — tap-tempo with no audio bound anywhere — mirrors it:
+when `!_rateSlot.isActive && !_audioSlot.isActive && !_tapSuspended &&
+audioRhythm.tapMarkerTimesMs.length > 0`, it calls
+`audioRhythm.tickSilent(nowMs)` and drives `_rateHz`/the slider from
+`audioRhythm.currentRateHz()` exactly like the live-audio branch, so TAP
+alone (no `VideoLayer` ever bound) is enough to set this layer's tempo;
+`_rateSlider.interactive` is false while this is driving, same as the
+audio-slot case, and a manual drag (`setOnDragStart`) sets `_tapSuspended`
+to hand control back — cleared again by the next `tap()`. `renderSlots`
+pulls `audioSlot` out of the main `timeSlot`/`rateSlot` group and renders
+it in its own `_renderAudioPill` pill (own `AudioScopeWidget` instance,
+`this._scope`) below — **structured identically to `EventLayer`'s
+audio-onset pill**: header + `audioSlot` row + scope, one continuous
+backdrop — so tuning `audioRhythm` looks and works the same from either
+layer. This now includes the same tempo-gate toggle button `EventLayer`
+has (same position left of TAP, same style, both read/write the single
+shared `audioRhythm.tempoGate`) — it belongs here too since the gate
+protects the shared estimate itself (see `EventLayer` above), not just a
+per-layer firing decision. Wired through the same `hitTestSelf`/
 `handlePointerDown`/`handlePointerMove`/`handlePointerUp` delegation
 pattern as `EventLayer`. Its own **TAP** button sits in the pill header
 (same position/style as `EventLayer`'s); `tap()` suspends `_rateSlot` if
-bound (same suspend-on-touch convention the rate slider already uses) then
-calls `audioRhythm.tap(performance.now())` — deliberately does **not**
-suspend `_audioSlot`: tap reseeds the shared prior, it doesn't disable the
-ongoing audio tracking that keeps refining it afterward. Dragging the rate
-slider directly, by contrast, suspends both `_rateSlot` and `_audioSlot` —
-a full manual takeover.
+bound (same suspend-on-touch convention the rate slider already uses),
+clears `_tapSuspended`, then calls `audioRhythm.tap(performance.now())` —
+deliberately does **not** suspend `_audioSlot`: tap reseeds the shared
+prior, it doesn't disable the ongoing audio tracking that keeps refining
+it afterward. Dragging the rate slider directly, by contrast, suspends
+`_rateSlot`, `_audioSlot`, and tap-driving all at once — a full manual
+takeover.
 
 **Persistence**: `AudioRhythm`'s tunables (`filterFreq`, `filterQ`, `onset.
-levelThreshold`) are saved/restored as a flat top-level `SaveFile.
-audioRhythm` field in `src/persistence/Persistence.ts` — unlike `ClockLayer`
+levelThreshold`, `tempoGate`) are saved/restored as a flat top-level
+`SaveFile.audioRhythm` field in `src/persistence/Persistence.ts` — unlike `ClockLayer`
 (which threads through `PersistenceContext` and a dedicated restore phase
 since it's referenced structurally by id), `audioRhythm` is a plain
 importable singleton with no cross-references to other layers, so it's just

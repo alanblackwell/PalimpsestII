@@ -129,6 +129,13 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // EventLayer's identical setup and src/audio/AudioScopeWidget.ts).
   private readonly _scope = new AudioScopeWidget()
   private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+  private _tempoGateBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+
+  // True once the user drags the rate slider directly while tap/audio
+  // tempo is driving it — hands control back to the manual slider, same
+  // suspend-on-touch convention as a suspended ParameterSlot binding.
+  // Cleared (re-engaged) by the next tap().
+  private _tapSuspended = false
 
   // Layers whose sliders directly control this Tempo's Hz (tracked externally
   // by those layers; not a ParameterSlot binding).
@@ -149,6 +156,7 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     this._rateSlider.setOnDragStart(() => {
       if (this._rateSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._rateSlot)?.toggle()
       if (this._audioSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._audioSlot)?.toggle()
+      this._tapSuspended = true
     })
     this.slots.push(this._timeSlot, this._rateSlot, this._audioSlot)
     this.debugName = 'TempoLayer'
@@ -196,8 +204,10 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
   // median of recent tap intervals, same convention as music software.
   // Does NOT suspend _audioSlot: the point is to reseed the prior, not to
   // disable the ongoing audio tracking that keeps refining it afterward.
+  // Re-engages tap-driven rate control if a manual drag had suspended it.
   tap(): void {
     if (this._rateSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._rateSlot)?.toggle()
+    this._tapSuspended = false
     audioRhythm.tap(performance.now())
     this.markDirty()
   }
@@ -233,10 +243,25 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
         : sliderToHz(this._rateSlider.value)
       this._rateSlider.setValue(hzToSlider(this._rateHz))
       queueMicrotask(() => this.forceDirty())   // keep tracking even without a time-slot dependent
+    } else if (!this._tapSuspended && audioRhythm.tapMarkerTimesMs.length > 0) {
+      // Tap-only tempo — no live audio bound anywhere, but the user has
+      // tapped at least once. Keeps the shared history/tick clock advancing
+      // off wall time alone (no real signal) so the scope's tap markers and
+      // predicted-beat grid still render from the very first tap; once a
+      // period estimate exists (second tap onward), drives the rate exactly
+      // like the live-audio branch above.
+      audioRhythm.tickSilent(performance.now())
+      this._rateHz = audioRhythm.periodMs !== null
+        ? Math.max(MIN_RATE, Math.min(MAX_RATE, audioRhythm.currentRateHz()))
+        : sliderToHz(this._rateSlider.value)
+      this._rateSlider.setValue(hzToSlider(this._rateHz))
+      queueMicrotask(() => this.forceDirty())
     } else {
       this._rateHz = sliderToHz(this._rateSlider.value)
     }
-    this._rateSlider.interactive  = !this._rateSlot.isActive && !this._audioSlot.isActive
+    const tapDriving = !this._rateSlot.isActive && !this._audioSlot.isActive
+      && !this._tapSuspended && audioRhythm.tapMarkerTimesMs.length > 0
+    this._rateSlider.interactive  = !this._rateSlot.isActive && !this._audioSlot.isActive && !tapDriving
     this._rateSlider.displayValue = this._rateSlider.value
 
     // Time — from bound source, or zero if unbound.
@@ -451,6 +476,11 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
       this.tap()
       return true
     }
+    if (this._tempoGateBtnBounds && boundingBoxContains(this._tempoGateBtnBounds, point)) {
+      audioRhythm.tempoGate = !audioRhythm.tempoGate
+      this.markDirty()
+      return true
+    }
     if (this._scope.handlePointerDown(point)) return true
     return false
   }
@@ -466,6 +496,7 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
 
   protected override hitTestSelf(point: Point) {
     if (this._tapBtnBounds && boundingBoxContains(this._tapBtnBounds, point)) return this
+    if (this._tempoGateBtnBounds && boundingBoxContains(this._tempoGateBtnBounds, point)) return this
     if (this._scope.hitTest(point) !== null) return this
     return this._rateSlider.hitTest(point)
   }
@@ -507,6 +538,20 @@ export class TempoLayer extends Layer implements AmountSource, RateSource {
     ctx.font = 'bold 10px monospace'
     ctx.textAlign = 'center'
     ctx.fillText('TAP', tapX + TAP_W / 2, tapY + TAP_H / 2 + 0.5)
+
+    // Tempo-gate toggle — small button left of TAP, identical to
+    // EventLayer's. Drives the shared audioRhythm.tempoGate directly (see
+    // AudioRhythm._registerBeatOnset) — it protects the estimate itself,
+    // not just a per-layer firing decision, so it belongs here too.
+    const GATE_SZ = HEAD_H - 4
+    const gateX   = tapX - GATE_SZ - 4
+    const gateY   = y + 2
+    this._tempoGateBtnBounds = { x: gateX, y: gateY, width: GATE_SZ, height: GATE_SZ }
+    ctx.fillStyle = audioRhythm.tempoGate ? AUDIO_TC + '55' : 'rgba(255,255,255,0.08)'
+    ctx.beginPath(); ctx.roundRect(gateX, gateY, GATE_SZ, GATE_SZ, 3); ctx.fill()
+    ctx.strokeStyle = audioRhythm.tempoGate ? AUDIO_TC : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    ctx.beginPath(); ctx.arc(gateX + GATE_SZ / 2, gateY + GATE_SZ / 2, GATE_SZ / 2 - 4, 0, Math.PI * 2); ctx.stroke()
 
     // audioSlot row — shared generic slot-row renderer, backdrop already
     // painted above.

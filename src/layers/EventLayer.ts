@@ -100,11 +100,6 @@ const PROBE_SIZE           = 64     // collision probe canvas dimensions
 // and trigger a second fire mid-passage.
 const SEPARATION_THRESHOLD = 3
 
-// Tempo gate — rejects a detected onset unless it lands within this
-// fraction of a beat cycle of the shared audioRhythm's predicted beat,
-// to filter out bounces/reverb trailing a real hit.
-const TEMPO_GATE_TOLERANCE = 0.15
-
 // Button geometry
 const BTN_M = 6
 const BTN   = 24
@@ -164,10 +159,18 @@ export class EventLayer extends Layer implements EventSource {
   // sync (see src/audio/AudioRhythm.ts, src/audio/AudioScopeWidget.ts).
   private readonly _scope = new AudioScopeWidget()
 
-  // Tempo gate — see TEMPO_GATE_TOLERANCE / _passesTempoGate.
-  private _tempoGate = false
+  // Tempo gate — toggle button drives the shared audioRhythm.tempoGate
+  // directly (see AudioRhythm._registerBeatOnset / passesTempoGate); no
+  // local copy, since it now protects the shared estimate for both this
+  // layer and TempoLayer, not just this layer's firing decision.
   private _tempoGateBtnBounds: { x: number; y: number; width: number; height: number } | null = null
   private _tapBtnBounds: { x: number; y: number; width: number; height: number } | null = null
+
+  // True once the user drags the rate slider directly while tap/audio
+  // tempo is driving it — hands control back to the manual slider, same
+  // suspend-on-touch convention TempoLayer's TAP uses. Cleared (re-engaged)
+  // by the next TAP press.
+  private _tapSuspended = false
 
   constructor() {
     super()
@@ -185,6 +188,7 @@ export class EventLayer extends Layer implements EventSource {
     this._probe    = new OffscreenCanvas(PROBE_SIZE, PROBE_SIZE)
     this._probeCtx = this._probe.getContext('2d')!
     this._rateSlider = new SliderRegion(this, hzToSlider(1.0))
+    this._rateSlider.setOnDragStart(() => { this._tapSuspended = true })
 
     this.debugName = 'EventLayer'
     graph.register(this)
@@ -224,14 +228,12 @@ export class EventLayer extends Layer implements EventSource {
     return {
       running:         this._running,
       rateSliderValue: this._rateSlider.value,
-      tempoGate:       this._tempoGate,
     }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.running === 'boolean')         this._running = state.running
     if (typeof state.rateSliderValue === 'number')  this._rateSlider.setValue(state.rateSliderValue)
-    if (typeof state.tempoGate === 'boolean')        this._tempoGate = state.tempoGate
   }
 
   // ----------------------------------------------------------
@@ -277,6 +279,24 @@ export class EventLayer extends Layer implements EventSource {
       const phase = (this._rateSlot.source as AmountSource).getAmount() as Amount
       if (this._running && phase < this._prevPhase - 0.5) this._eventTime = performance.now()
       this._prevPhase = phase
+    }
+
+    // ── Tap/audio tempo → rate slider, mirroring a manual drag ──
+    // Feeds mode 1b's timer below. Only relevant when no external rate
+    // source is bound (mode 1 already owns firing in that case) and the
+    // user hasn't manually taken the slider back. tickSilent() is skipped
+    // whenever mode 4 below already has a live analyser feeding history —
+    // no need to also drive the wall-clock fallback in that case.
+    const tapDriving = !this._rateSlot.isActive && !this._tapSuspended
+      && audioRhythm.tapMarkerTimesMs.length > 0
+    if (tapDriving) {
+      if (!this._audioSlot.isActive) audioRhythm.tickSilent(performance.now())
+      if (audioRhythm.periodMs !== null) {
+        const t = hzToSlider(audioRhythm.currentRateHz())
+        this._rateSlider.setValue(t)
+        this.setValue(t)
+      }
+      queueMicrotask(() => this.forceDirty())
     }
 
     // ── Mode 1b: internal timer when no rate slot bound ────
@@ -387,26 +407,17 @@ export class EventLayer extends Layer implements EventSource {
       if (analyser !== null) {
         const nowMs  = performance.now()
         const onset  = audioRhythm.update(analyser, nowMs)
-        if (onset && this._passesTempoGate(nowMs)) this._eventTime = performance.now()
+        if (onset && audioRhythm.passesTempoGate(nowMs)) this._eventTime = performance.now()
       }
       queueMicrotask(() => this.forceDirty())   // keep the live scope animating
     }
   }
 
-  // When enabled, rejects a detected onset unless it lands within
-  // TEMPO_GATE_TOLERANCE of the shared audioRhythm's predicted beat —
-  // filters out bounces/reverb trailing a real hit. Passes everything
-  // through until a tempo estimate has locked in.
-  private _passesTempoGate(nowMs: number): boolean {
-    if (!this._tempoGate || audioRhythm.periodMs === null) return true
-    const phase = audioRhythm.currentPhase(nowMs)
-    return Math.min(phase, 1 - phase) <= TEMPO_GATE_TOLERANCE
-  }
-
   // Tap-tempo — same shared audioRhythm.tap() TempoLayer's TAP button
-  // uses. No suspend-on-touch needed here: unlike TempoLayer, EventLayer
-  // has no manual Hz control competing with audioRhythm's prior.
+  // uses. Re-engages tap-driven rate control (see tapDriving in
+  // recompute()) if a manual slider drag had suspended it.
   private _tap(): void {
+    this._tapSuspended = false
     audioRhythm.tap(performance.now())
     this.markDirty()
   }
@@ -865,14 +876,17 @@ export class EventLayer extends Layer implements EventSource {
     ctx.textAlign = 'center'
     ctx.fillText('TAP', tapX + TAP_W / 2, tapY + TAP_H / 2 + 0.5)
 
-    // Tempo-gate toggle — small button left of TAP.
+    // Tempo-gate toggle — small button left of TAP. Drives the shared
+    // audioRhythm.tempoGate directly (see AudioRhythm._registerBeatOnset) —
+    // TempoLayer draws the identical button in its own audio pill, both
+    // reading/writing the same singleton field.
     const GATE_SZ = HEAD_H - 4
     const gateX   = tapX - GATE_SZ - 4
     const gateY   = y + 2
     this._tempoGateBtnBounds = { x: gateX, y: gateY, width: GATE_SZ, height: GATE_SZ }
-    ctx.fillStyle = this._tempoGate ? AUDIO_TC + '55' : 'rgba(255,255,255,0.08)'
+    ctx.fillStyle = audioRhythm.tempoGate ? AUDIO_TC + '55' : 'rgba(255,255,255,0.08)'
     ctx.beginPath(); ctx.roundRect(gateX, gateY, GATE_SZ, GATE_SZ, 3); ctx.fill()
-    ctx.strokeStyle = this._tempoGate ? AUDIO_TC : 'rgba(255,255,255,0.30)'
+    ctx.strokeStyle = audioRhythm.tempoGate ? AUDIO_TC : 'rgba(255,255,255,0.30)'
     ctx.lineWidth   = 1
     ctx.beginPath(); ctx.arc(gateX + GATE_SZ / 2, gateY + GATE_SZ / 2, GATE_SZ / 2 - 4, 0, Math.PI * 2); ctx.stroke()
 
@@ -911,7 +925,7 @@ export class EventLayer extends Layer implements EventSource {
       return true
     }
     if (this._tempoGateBtnBounds && boundingBoxContains(this._tempoGateBtnBounds, point)) {
-      this._tempoGate = !this._tempoGate
+      audioRhythm.tempoGate = !audioRhythm.tempoGate
       this.markDirty()
       return true
     }
