@@ -36,6 +36,23 @@ import { SliderSlot }    from '../ui/SliderSlot.js'
 //   imageSlot   (Image)  — content rendered during the flash
 //   lengthSlot  (Amount) — flash duration, logarithmic [0, 1] → 16 ms … 4 s
 //                          (SliderSlot row, standard suspend-on-touch)
+//   fadeSlot    (Amount) — opacity decay rate during the flash, [0, 1]
+//                          (SliderSlot row, standard suspend-on-touch).
+//                          0 = no fade (opaque for the whole flash); 1 =
+//                          fades out within one frame; 0.5 = a linear ramp
+//                          from full to zero opacity exactly spanning the
+//                          flash's own duration. Implemented via Schlick's
+//                          rational bias curve (see `schlickBias` below)
+//                          rather than a true exponential — an exponential
+//                          can't hit both "reaches zero at a fixed time"
+//                          and "looks linear at the midpoint" at once,
+//                          while bias's single parameter interpolates
+//                          continuously through exactly those three points.
+//                          The slider value is smoothstep-eased before
+//                          mapping to bias's b parameter, so the flat and
+//                          instant extremes dominate more of the slider's
+//                          range and the transition concentrates around the
+//                          midpoint rather than changing at a uniform rate.
 //
 // Output:
 //   EventSource — slow mode only: two events per flash
@@ -89,14 +106,37 @@ const ROW_PAD = 3
 
 type BBox = { x: number; y: number; width: number; height: number }
 
+// Schlick's rational bias curve (Christophe Schlick, "Fast Alternatives to
+// Perlin's Bias and Gain Functions", 1994). b=0.5 is the identity (x itself,
+// i.e. a straight line); b<0.5 bows the curve toward 0 for most of the
+// range, snapping up to 1 only near x=1; b>0.5 bows it toward 1 for most of
+// the range, dropping to 0 only near x=0. x and b both live in [0, 1].
+function schlickBias(x: number, b: number): number {
+  if (x <= 0) return 0
+  if (x >= 1) return 1
+  return (x * b) / ((1 - 2 * b) * (1 - x) + b)
+}
+
+// Eases the fade slider itself before mapping to schlickBias's b parameter,
+// so the flat ("no fade") and instant ("one frame") extremes dominate a
+// wider stretch of the slider — the transition concentrates around the
+// midpoint instead of changing at a uniform rate — while leaving the three
+// anchor points (0, 0.5, 1) exactly where they were.
+function smoothstep(t: number): number {
+  const c = Math.max(0, Math.min(1, t))
+  return c * c * (3 - 2 * c)
+}
+
 export class FlashLayer extends Layer implements EventSource, RateSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Event, ValueType.Rate])
 
   readonly triggerSlot: ParameterSlot
   readonly imageSlot:   ParameterSlot
   readonly lengthSlot:  ParameterSlot
+  readonly fadeSlot:    ParameterSlot
 
   private _length:            number     = 0.30       // [0, 1] manual fallback for lengthSlot
+  private _fade:              number     = 0           // [0, 1] manual fallback for fadeSlot
   private _currentEventTime:  EventValue = null        // slow-mode output
   private _lastSeenTrigger:   EventValue = null
   private _flashStart:        number | null = null     // wall time (ms)
@@ -104,13 +144,15 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
   private _timeoutId:         ReturnType<typeof setTimeout> | null = null
 
   private readonly _lengthWidget: SliderSlot
+  private readonly _fadeWidget:   SliderSlot
 
   constructor() {
     super()
     this.triggerSlot = new ParameterSlot(ValueType.Event,  this, 'trigger', true)
     this.imageSlot   = new ParameterSlot(ValueType.Image,  this, 'image')
     this.lengthSlot  = new ParameterSlot(ValueType.Amount, this, 'length')
-    this.slots.push(this.triggerSlot, this.imageSlot, this.lengthSlot)
+    this.fadeSlot    = new ParameterSlot(ValueType.Amount, this, 'fade')
+    this.slots.push(this.triggerSlot, this.imageSlot, this.lengthSlot, this.fadeSlot)
     this.debugName = 'Flash'
     this._lengthWidget = new SliderSlot(
       this.lengthSlot, 'length', AM_COL,
@@ -118,6 +160,16 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
       v => {
         if (this.lengthSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.lengthSlot)?.toggle()
         this._length = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+    this._fadeWidget = new SliderSlot(
+      this.fadeSlot, 'fade', AM_COL,
+      () => this._fadeValue,
+      v => {
+        if (this.fadeSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.fadeSlot)?.toggle()
+        this._fade = v
         this.markDirty()
       },
       () => this.markDirty(),
@@ -142,6 +194,12 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
       : this._length
   }
 
+  private get _fadeValue(): number {
+    return this.fadeSlot.isActive
+      ? Math.max(0, Math.min(1, (this.fadeSlot.source as AmountSource).getAmount() as Amount))
+      : this._fade
+  }
+
   private get _durationMs(): number {
     return MIN_DUR_MS * Math.pow(MAX_DUR_MS / MIN_DUR_MS, this._lengthValue)
   }
@@ -150,20 +208,31 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
     return this._lengthValue < FAST_THRESH
   }
 
+  // Opacity multiplier for the current instant of the flash, per the
+  // fadeSlot curve documented at the top of this file.
+  private _fadeOpacity(): number {
+    if (this._flashStart === null) return 1
+    const elapsed   = performance.now() - this._flashStart
+    const remaining = Math.max(0, Math.min(1, 1 - elapsed / this._durationMs))
+    return schlickBias(remaining, 1 - smoothstep(this._fadeValue))
+  }
+
   // ----------------------------------------------------------
   // Persistence
   // ----------------------------------------------------------
 
   override serializeState(): Record<string, unknown> {
-    return { durationParam: this._length }
+    return { durationParam: this._length, fadeParam: this._fade }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     if (typeof state.durationParam === 'number') this._length = state.durationParam
+    if (typeof state.fadeParam === 'number') this._fade = state.fadeParam
   }
 
   override getSlotDefault(slot: ParameterSlot): number | null {
     if (slot === this.lengthSlot) return this._length
+    if (slot === this.fadeSlot) return this._fade
     return null
   }
 
@@ -250,7 +319,12 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
     if (!this.imageSlot.isActive) return
     const img = (this.imageSlot.source as ImageSource).getImage()
     if (img === null) return
+    const opacity = this._fadeOpacity()
+    if (opacity <= 0) return
+    ctx.save()
+    ctx.globalAlpha = opacity
     ctx.drawImage(img as CanvasImageSource, 0, 0, Node.canvasWidth, Node.canvasHeight)
+    ctx.restore()
   }
 
   override get canvasBounds() {
@@ -329,7 +403,7 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
     this._slotBounds.clear()
     const cb    = this.canvasBounds
     const px    = cb.x, py = this.panelBottom, pw = cb.width
-    const pillH = ROW_H + 2 * ROW_PAD
+    const pillH = 2 * ROW_H + 3 * ROW_PAD
 
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
@@ -341,6 +415,10 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
     const lengthRow = this._lengthRow()
     this._slotBounds.set(this.lengthSlot, lengthRow)
     this._lengthWidget.render(ctx, lengthRow)
+
+    const fadeRow = this._fadeRow()
+    this._slotBounds.set(this.fadeSlot, fadeRow)
+    this._fadeWidget.render(ctx, fadeRow)
 
     this.renderSlotGroup(ctx, [this.triggerSlot, this.imageSlot], py + pillH + 8)
   }
@@ -396,8 +474,8 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
   protected override hitTestSelf(point: Point): this | null {
     const cb = this.canvasBounds
     if (boundingBoxContains(cb, point)) return this
-    const lr = this._lengthRow()
-    if (boundingBoxContains(lr, point)) return this
+    if (boundingBoxContains(this._lengthRow(), point)) return this
+    if (boundingBoxContains(this._fadeRow(),   point)) return this
     return null
   }
 
@@ -406,15 +484,18 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
     if (boundingBoxContains(this._frameBtnBounds(),   point)) { this._setFrame();     return true }
     if (boundingBoxContains(this._pulseBtnBounds(),   point)) { this._setPulse();     return true }
     if (this._lengthWidget.handlePointerDown(point, this._lengthRow())) return true
+    if (this._fadeWidget.handlePointerDown(point, this._fadeRow())) return true
     return false
   }
 
   handlePointerMove(point: Point): void {
     this._lengthWidget.handlePointerMove(point, this._lengthRow())
+    this._fadeWidget.handlePointerMove(point, this._fadeRow())
   }
 
   handlePointerUp(): void {
     this._lengthWidget.handlePointerUp()
+    this._fadeWidget.handlePointerUp()
   }
 
   // ----------------------------------------------------------
@@ -438,5 +519,10 @@ export class FlashLayer extends Layer implements EventSource, RateSource {
   private _lengthRow(): BBox {
     const cb = this.canvasBounds
     return { x: cb.x, y: this.panelBottom + ROW_PAD, width: cb.width, height: ROW_H }
+  }
+
+  private _fadeRow(): BBox {
+    const cb = this.canvasBounds
+    return { x: cb.x, y: this.panelBottom + 2 * ROW_PAD + ROW_H, width: cb.width, height: ROW_H }
   }
 }
