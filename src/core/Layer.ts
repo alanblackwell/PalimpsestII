@@ -378,7 +378,6 @@ export abstract class Layer extends Node {
   // (displayBaseName if set, otherwise class name with "Layer" stripped).
   static readonly LAYER_ACRONYMS: ReadonlyMap<string, string> = new Map([
     ['Amount',      'Amt'],
-    ['Animate',     'Anm'],  // AnimationPathLayer
     ['AnimPath',    'APt'],  // AnimPathLayer
     ['Blend',       'Bln'],  // CompositeLayer
     ['Calculate',   'Clc'],  // MathLayer

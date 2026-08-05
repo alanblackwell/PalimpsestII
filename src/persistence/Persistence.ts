@@ -132,7 +132,7 @@ export interface SaveFile {
 // Layer class registry — mechanical, one entry per concrete, persistable
 // layer class. Excluded: RootLayer, ClockLayer, DeletionLayer,
 // BackgroundLayer, MenuLayer, StartupLayer, BindingLayer (singletons /
-// infrastructure, handled structurally) and AnimationPathLayer (dead code).
+// infrastructure, handled structurally).
 // ------------------------------------------------------------
 
 export const LAYER_CLASSES: Record<string, () => Layer> = {
