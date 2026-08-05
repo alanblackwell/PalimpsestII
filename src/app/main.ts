@@ -376,6 +376,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof VideoLayer) {
     wireVideoTrackButton(newLayer)
+    wireVideoEventButton(newLayer)
     newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     newLayer.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
   }
@@ -654,6 +655,21 @@ function wireVideoTrackButton(videoLayer: VideoLayer): void {
     BindingLayer.create(videoLayer, tracker.imageSlot)
     postInsertLayer(tracker)
     refreshStack(tracker)
+  })
+}
+
+// Wire VideoLayer's "Event" convenience button. Creates an EventLayer above
+// the VideoLayer and binds the video's audio tap to its audioSlot (audio-
+// onset trigger mode), then selects the new layer.
+function wireVideoEventButton(videoLayer: VideoLayer): void {
+  videoLayer.setOnAddEvent(() => {
+    const event = new EventLayer()
+    Layer.assignDebugName(event)
+    event.bounds = { x: X, y: 24, width: W, height: 36 }
+    event.insertAbove(videoLayer)
+    BindingLayer.create(videoLayer, event.audioSlot)
+    postInsertLayer(event)
+    refreshStack(event)
   })
 }
 
@@ -1027,6 +1043,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (scanL instanceof ImageLayer) { wireImageLayer(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
     if (scanL instanceof VideoLayer) {
       wireVideoTrackButton(scanL)
+      wireVideoEventButton(scanL)
       scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
       scanL.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     }
@@ -1097,6 +1114,7 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     if (isAnimatableShape(archived))         wireAnimatableShape(archived)
     if (archived instanceof VideoLayer) {
       wireVideoTrackButton(archived)
+      wireVideoEventButton(archived)
       archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
       archived.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
     }

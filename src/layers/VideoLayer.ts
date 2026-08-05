@@ -24,6 +24,8 @@ import { contentLeft, panelWidth } from '../interaction/layout.js'
 const ACCENT     = '#7ecf7e'   // Image type colour
 const ROT_ACCENT = '#7ecfcf'   // Direction type colour for rotation handle
 const AM_COL     = '#4a8fe8'   // Amount type accent
+const POINT_TC   = '#cf7ecf'   // Point type accent — Track convenience button
+const EVENT_TC   = '#e0e060'   // Event type accent — Event convenience button
 const STRIPE     = 4
 
 // Small selector buttons — desktop's lower pill has none of these (the big
@@ -60,6 +62,13 @@ const TIME_W     = 74
 const THUMB_W    = 120
 const THUMB_H    = 68
 const THUMB_GAP  = 8
+
+// Convenience-button row (Track / Event), stacked below the control bar
+const CBTN_W        = 56
+const CBTN_H        = 30
+const CBTN_GAP      = 10   // gap between buttons in the row
+const CBTN_ROW_MARGIN = 14 // gap from the bottom of the viewport
+const CBTN_BAR_GAP  = 10   // gap between the control bar and the button row
 
 // Transform handles
 const HANDLE_R   = 7
@@ -199,12 +208,17 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   private _scrubTrackB:       BBox | null = null
   private _stallRestartBounds: BBox | null = null
 
-  // ── Track button ──────────────────────────────────────────────
+  // ── Track / Event convenience buttons ───────────────────────────
   private _trackBtnB:    BBox | null = null
   private _addTrackDone  = false
   private _onAddTrack: (() => void) | null = null
 
+  private _eventBtnB:    BBox | null = null
+  private _addEventDone  = false
+  private _onAddEvent: (() => void) | null = null
+
   setOnAddTrack(fn: () => void): void { this._onAddTrack = fn }
+  setOnAddEvent(fn: () => void): void { this._onAddEvent = fn }
 
   // ── Construction ─────────────────────────────────────────────
 
@@ -355,6 +369,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   override serializeState(): Record<string, unknown> {
     return {
       addTrackDone:    this._addTrackDone,
+      addEventDone:    this._addEventDone,
       manualOpacity:   this._manualOpacity,
       manualVolume:    this._manualVolume,
       sourceType:      this._sourceType,
@@ -405,6 +420,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (typeof state.fillMode === 'boolean')        this._fillMode        = state.fillMode
     if (typeof state.mirrored === 'boolean')        this._mirrored        = state.mirrored
     if (typeof state.addTrackDone === 'boolean')    this._addTrackDone    = state.addTrackDone
+    if (typeof state.addEventDone === 'boolean')    this._addEventDone    = state.addEventDone
     if (typeof state.manualOpacity === 'number')    this._manualOpacity   = state.manualOpacity
     if (typeof state.manualVolume === 'number')     this._manualVolume    = state.manualVolume
 
@@ -1099,26 +1115,48 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   override renderOverlay(ctx: Ctx2D): void {
     if (this._sourceType !== 'none') this._renderHandles(ctx)
     drawSnapGuides(ctx, this._edgeSnapX, this._edgeSnapY, Node.canvasWidth, Node.canvasHeight)
-    if (!this._addTrackDone && this._sourceType !== 'none') this._renderTrackBtn(ctx)
+    if (this._sourceType !== 'none') this._renderConvenienceButtons(ctx)
   }
 
-  private _renderTrackBtn(ctx: Ctx2D): void {
-    const left = contentLeft(Node.canvasWidth)
-    const TRK_W = 56, TRK_H = 30, TRK_GAP = 14
-    const x = left + Math.max(0, (Node.viewportWidth - left - TRK_W) / 2)
-    const y = Node.viewportHeight - TRK_H - TRK_GAP
-    this._trackBtnB = { x, y, width: TRK_W, height: TRK_H }
+  // Row of "Track" / "Event" convenience buttons, stacked directly below the
+  // file-playback control bar (which itself sits CBTN_BAR_GAP above this row
+  // whenever it's showing — see _renderControlBar). Only undone buttons are
+  // laid out, centred as a group so a single remaining button still centres
+  // itself rather than staying pinned to its original slot.
+  private _renderConvenienceButtons(ctx: Ctx2D): void {
+    this._trackBtnB = null
+    this._eventBtnB = null
 
+    const buttons: { kind: 'track' | 'event'; label: string; accent: string }[] = []
+    if (!this._addTrackDone) buttons.push({ kind: 'track', label: 'Track', accent: POINT_TC })
+    if (!this._addEventDone) buttons.push({ kind: 'event', label: 'Event', accent: EVENT_TC })
+    if (buttons.length === 0) return
+
+    const left    = contentLeft(Node.canvasWidth)
+    const totalW  = buttons.length * CBTN_W + (buttons.length - 1) * CBTN_GAP
+    const x0      = left + Math.max(0, (Node.viewportWidth - left - totalW) / 2)
+    const y       = Node.viewportHeight - CBTN_H - CBTN_ROW_MARGIN
+
+    buttons.forEach((b, i) => {
+      const bounds: BBox = { x: x0 + i * (CBTN_W + CBTN_GAP), y, width: CBTN_W, height: CBTN_H }
+      if (b.kind === 'track') this._trackBtnB = bounds
+      else this._eventBtnB = bounds
+      this._drawConvenienceBtn(ctx, bounds, b.label, b.accent)
+    })
+  }
+
+  private _drawConvenienceBtn(ctx: Ctx2D, b: BBox, label: string, accent: string): void {
+    const { x, y, width: w, height: h } = b
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
-    ctx.beginPath(); ctx.roundRect(x, y, TRK_W, TRK_H, 5); ctx.fill()
-    ctx.fillStyle = '#cf7ecfcc'   // Point accent
-    ctx.beginPath(); ctx.roundRect(x, y, 3, TRK_H, [5, 0, 0, 5]); ctx.fill()
+    ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
+    ctx.fillStyle = accent + 'cc'
+    ctx.beginPath(); ctx.roundRect(x, y, 3, h, [5, 0, 0, 5]); ctx.fill()
     ctx.save()
-    ctx.beginPath(); ctx.rect(x, y, TRK_W, TRK_H); ctx.clip()
+    ctx.beginPath(); ctx.rect(x, y, w, h); ctx.clip()
     ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.font = '11px monospace'
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle'
-    ctx.fillText('Track', x + 10, y + TRK_H / 2)
+    ctx.fillText(label, x + 10, y + h / 2)
     ctx.restore(); ctx.restore()
   }
 
@@ -1289,6 +1327,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._mirrorBtnB  !== null && boundingBoxContains(this._mirrorBtnB,  point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
     if (this._trackBtnB   !== null && boundingBoxContains(this._trackBtnB,   point)) return this
+    if (this._eventBtnB   !== null && boundingBoxContains(this._eventBtnB,   point)) return this
     if (this._scrubHit(point)) return this
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     if (this._displayW > 0) {
@@ -1382,6 +1421,11 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._trackBtnB !== null && boundingBoxContains(this._trackBtnB, point)) {
       this._onAddTrack?.()
       this._addTrackDone = true
+      return true
+    }
+    if (this._eventBtnB !== null && boundingBoxContains(this._eventBtnB, point)) {
+      this._onAddEvent?.()
+      this._addEventDone = true
       return true
     }
     // Transform handles
@@ -1779,9 +1823,12 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
 
     const cw   = Node.canvasWidth
-    const ch   = Node.canvasHeight
     const left = contentLeft(cw)
-    const bar: BBox = { x: left, y: ch - BAR_H - BAR_MARGIN, width: cw - left - BAR_MARGIN, height: BAR_H }
+    // Raised above the bottom margin by the height of the Track/Event
+    // convenience-button row (+ gap) so the bar never overlaps it, whether
+    // or not either button is still showing.
+    const barY = Node.viewportHeight - BAR_H - BAR_MARGIN - CBTN_BAR_GAP - CBTN_H
+    const bar: BBox = { x: left, y: barY, width: cw - left - BAR_MARGIN, height: BAR_H }
     if (bar.width <= 0) return
 
     const playB: BBox = { x: bar.x + 4, y: bar.y + (BAR_H - PLAY_SZ) / 2, width: PLAY_SZ, height: PLAY_SZ }
