@@ -57,6 +57,17 @@ const TOP_MARGIN  = 28   // room for the current-layer label strip above the fir
 const MIN_SPACING = 22      // minimum gap between successive card tops
 const GAP_CURRENT = 40      // gap above the current card (must exceed shadow bleed ~15px)
 
+// ── Hotspot indicator ────────────────────────────────────────
+// A layer is flagged as the "hotspot" when its self-time EMA (Node.evalCostMs)
+// accounts for more than this share of the stack's total per-frame recompute
+// cost — rank-relative rather than an absolute ms budget, since a live
+// performer needs "what's the worst thing right now" rather than a number
+// that needs per-device calibration. Deliberately no pulse/animation: the
+// audience sees the same screen as the performer (live-coding convention),
+// so the signal is a static retint, not motion.
+const HOTSPOT_SHARE = 0.45
+const HOTSPOT_BG    = 'rgba(96,24,24,0.82)'   // dark red — distinct from every ValueType accent colour
+
 // ─────────────────────────────────────────────────────────────
 
 export class LayerStackWidget {
@@ -507,11 +518,28 @@ export class LayerStackWidget {
     ctx.restore()
   }
 
+  // Worst-offender among the visible on-stack layers, by share of total
+  // self-time recompute cost this frame. Returns null when nothing clears
+  // HOTSPOT_SHARE — most frames, since cost is normally spread thinly.
+  private _hotspotLayer(): Layer | null {
+    if (this._layers.length < 2) return null
+    let total = 0
+    let worst: Layer | null = null
+    let worstCost = 0
+    for (const l of this._layers) {
+      const c = l.evalCostMs
+      total += c
+      if (c > worstCost) { worstCost = c; worst = l }
+    }
+    if (total <= 0 || worst === null) return null
+    return worstCost / total >= HOTSPOT_SHARE ? worst : null
+  }
+
   private _drawCurrentLabel(ctx: Ctx2D): void {
     const lh = TOP_MARGIN - 2   // fits exactly in the top margin above the first card
     if (lh < 8) return
     ctx.save()
-    ctx.fillStyle = 'rgba(0,0,0,0.72)'
+    ctx.fillStyle = this._hotspotLayer() !== null ? HOTSPOT_BG : 'rgba(0,0,0,0.72)'
     ctx.fillRect(0, 0, this._widgetW(), lh)
     if (this._selected !== null) {
       const tc = typeColor(this._selected)

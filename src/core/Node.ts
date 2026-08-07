@@ -253,6 +253,20 @@ export abstract class Node {
   // Subclasses implement this to recompute their value from slot inputs.
   protected abstract recompute(): void
 
+  // EMA of this node's own recompute() cost in ms — deliberately *self*
+  // time, not inclusive of dependency evaluation, which is why timing only
+  // wraps the recompute() call below rather than the whole evaluate(): by
+  // the time we reach it, every dirty dependency's own evaluate() (and its
+  // own timing) has already run and returned. Holds its last value between
+  // recomputes rather than decaying, since a node that stopped being dirty
+  // didn't get cheaper — it just stopped running. Used for live-performance
+  // hotspot indication (see LayerStackWidget); not persisted, not exact —
+  // a rough per-frame estimate is all that's needed for that purpose.
+  private _evalCostEma = 0
+  private static readonly EVAL_EMA_ALPHA = 0.2
+
+  get evalCostMs(): number { return this._evalCostEma }
+
   // Evaluate this node (and any dirty dependencies first).
   // Depth-first pull: resolves the dependency order naturally.
   // Feedback slots are skipped — they always read the source's cached
@@ -264,7 +278,10 @@ export abstract class Node {
       }
     }
     if (this._dirty) {
+      const t0 = performance.now()
       this.recompute()
+      const dt = performance.now() - t0
+      this._evalCostEma += (dt - this._evalCostEma) * Node.EVAL_EMA_ALPHA
       this._dirty = false
     }
   }
