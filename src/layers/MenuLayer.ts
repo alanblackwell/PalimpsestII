@@ -222,6 +222,7 @@ type PlacedBtn = { btn: BtnDef; bx: number; by: number; bw: number }
 
 export class MenuLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
+  override readonly hotspotExempt = true
 
   private readonly _onAdded: (layer: Layer, selectAfterCreate: boolean) => void
 

@@ -1198,16 +1198,47 @@ a fixed-position "notice" signal separate from an in-place "locate" signal.
 **Shipped**: `Node.evalCostMs` — an EMA of each node's own `recompute()`
 self-time, timed in `Node.evaluate()` around the `recompute()` call only
 (dependencies are evaluated earlier in the same method, so their cost is
-already excluded without extra bookkeeping). `LayerStackWidget._hotspotLayer()`
-retints the widget's existing top status strip (still shows the *selected*
-layer's name — naming the hotspot itself is deferred to the not-yet-built
-card glow) dark red when one on-stack layer's `evalCostMs` share of the
-stack's total exceeds `HOTSPOT_SHARE` (0.45, unvalidated first guess).
+already excluded without extra bookkeeping). `LayerStackWidget._hotspotState()`
+(called once per `render()`, cached in `_hotspotLayer`/`_hotspotLoad` fields
+for that frame) finds the worst on-stack layer and a continuous `[0,1]` load —
+one on-stack layer's `evalCostMs` share of the stack's total, rescaled so an
+even split across layers maps to `0` and total dominance maps to `1`. The
+top status strip (still shows the *selected* layer's name, not necessarily
+the hotspot's) retints continuously from grey to dark red as load rises —
+a smooth `_hotspotColor(load)` gradient rather than a threshold snap, since
+a binary flip read as too subtle/pulse-like on first live testing.
+`_drawCard` casts a matching static halo (not animated) around whichever
+card is currently the worst — the "locate" half of the two-stage design —
+using the *same technique* as the card's own drop shadow immediately above
+it in the code: a `fillRect` with `shadowColor`/`shadowBlur` set and
+`shadowOffset` zero, `ctx.restore()`'d before the thumbnail is drawn over
+it, so only the shadow's outward gaussian bleed is ever visible (true soft
+falloff, inner edge flush with the card, same as the drop shadow). Drawn
+*after* the drop shadow so it composites on top, and — since it's cast
+from the card's own bounds as an ordinary part of `_drawCard`, not a final
+overlay — whichever card is stacked above this one in the same `render()`
+loop naturally paints over the glow's bleed for the region it occupies,
+same as it already does for the drop shadow. Colour is fixed (a brighter,
+more saturated red than the strip's deliberately muted one) and `load`
+drives only its opacity, not hue — user feedback that colour-coded
+intensity read less clearly than brightness-coded intensity for this
+element. (Revised twice to get here: v1 was a `strokeRect` at the card's
+exact edge, invisible because this stack is an overlapping card fan — see
+`_hitTest`'s own comment — where only the current/topmost cards show their
+full body; v2 moved to a final-overlay pass to force full visibility, which
+fixed that but made the glow ignore the stack's own occlusion order
+entirely. Full history: `spec/live-performance-hotspots.md`.) The ratio is
+computed over `_hotspotCandidates()`, which excludes permanent chrome layers
+(`Layer.hotspotExempt`, overridden on `RootLayer`, `MenuLayer`,
+`DeletionLayer`) — without this, `RootLayer`/`MenuLayer`'s structurally
+near-zero recompute cost made any single real content layer read as ~100%
+of the stack's cost immediately, a measurement artifact rather than a
+genuine hotspot; `DeletionLayer` is excluded because its cost belongs to
+the separate not-yet-built Background/DeletionLayer aggregate warning below.
 
-**Not started**: a static glow on the offending layer's thumbnail card
-(the "locate" half); click-to-jump from the strip/glow to select the
-offender; a parallel aggregate warning for `BackgroundLayer`/`DeletionLayer`
-items, which keep recomputing invisibly off-stack (see "Self-perpetuating
+**Not started**: click-to-jump from the strip/glow to select the offender;
+a parallel aggregate warning for `BackgroundLayer`/`DeletionLayer` items,
+which keep recomputing invisibly off-stack (see "Self-perpetuating
 recompute" above) — flagged as the highest-value remaining piece since it's
 the one case with zero current visibility at all.
 

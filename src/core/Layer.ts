@@ -49,6 +49,16 @@ export abstract class Layer extends Node {
   // LayerStackWidget and excluded from user-facing layer lists.
   readonly isInfrastructure: boolean = false
 
+  // Permanent stack "chrome" (Root, Menu, Deletion) whose recompute() cost
+  // is either structurally near-zero by design or, for DeletionLayer,
+  // reserved for a future separate aggregate warning rather than the
+  // on-stack per-layer hotspot signal (see "Live-performance hotspot
+  // indicator" in CLAUDE.md). Excluded from LayerStackWidget's hotspot
+  // cost ratio — counting them made any real content layer look
+  // artificially dominant, since there was nothing but near-zero-cost
+  // padding to compare it against.
+  readonly hotspotExempt: boolean = false
+
   // When true, the thumbnail card is only rendered while this layer is
   // the currently selected layer; otherwise the card body is left blank.
   get thumbnailOnlyWhenSelected(): boolean { return false }

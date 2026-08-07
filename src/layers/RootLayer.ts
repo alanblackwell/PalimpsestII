@@ -56,6 +56,7 @@ type BBox = { x: number; y: number; width: number; height: number }
 export class RootLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
   override get thumbnailOnlyWhenSelected(): boolean { return true }
+  override readonly hotspotExempt = true
 
   // false = filled (white by default), true = transparent (checkerboard)
   private _transparent = false

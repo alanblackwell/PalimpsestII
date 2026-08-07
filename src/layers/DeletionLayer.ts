@@ -67,6 +67,7 @@ type BBox = { x: number; y: number; width: number; height: number }
 
 export class DeletionLayer extends Layer {
   readonly types: ReadonlySet<ValueType> = new Set()
+  override readonly hotspotExempt = true
 
   private _archived:      Layer[] = []
   private _background:    BackgroundLayer | null = null
