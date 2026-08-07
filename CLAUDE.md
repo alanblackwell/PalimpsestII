@@ -1181,6 +1181,36 @@ slot-indicator dots removed), TempoLayer (relocated and simplified rather
 than removed). Skipped as dead code: RotateLayer (unreachable — no menu
 button constructs one anymore).
 
+## Live-performance hotspot indicator (in progress)
+
+Infrastructure so a performer using Palimpsest live on stage can notice, at
+a glance, when a layer (or a binding chain feeding it) is dominating
+per-frame recompute cost — without stopping to read numbers. Full design
+rationale, what's shipped, and next steps: `spec/live-performance-hotspots.md`.
+
+Constraints driving the design: rank-relative signal only (a performer
+under time pressure needs "what's worst right now," not a number requiring
+per-device calibration); no animation/pulsing (Palimpsest follows the
+live-coding convention that the audience sees the same screen as the
+performer, so signals are static retints, not motion); two-stage design —
+a fixed-position "notice" signal separate from an in-place "locate" signal.
+
+**Shipped**: `Node.evalCostMs` — an EMA of each node's own `recompute()`
+self-time, timed in `Node.evaluate()` around the `recompute()` call only
+(dependencies are evaluated earlier in the same method, so their cost is
+already excluded without extra bookkeeping). `LayerStackWidget._hotspotLayer()`
+retints the widget's existing top status strip (still shows the *selected*
+layer's name — naming the hotspot itself is deferred to the not-yet-built
+card glow) dark red when one on-stack layer's `evalCostMs` share of the
+stack's total exceeds `HOTSPOT_SHARE` (0.45, unvalidated first guess).
+
+**Not started**: a static glow on the offending layer's thumbnail card
+(the "locate" half); click-to-jump from the strip/glow to select the
+offender; a parallel aggregate warning for `BackgroundLayer`/`DeletionLayer`
+items, which keep recomputing invisibly off-stack (see "Self-perpetuating
+recompute" above) — flagged as the highest-value remaining piece since it's
+the one case with zero current visibility at all.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
