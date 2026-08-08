@@ -1091,8 +1091,12 @@ export class InteractionSystem {
     }
     if (this._widget !== null) {
       const key = e.shiftKey ? `Shift+${e.key}` : e.key
+      // Plain ArrowUp/ArrowDown just change the current layer — that already
+      // re-renders in display mode (Evaluator.render uses widget.selected as
+      // renderTop), so no need to drop into edit mode for those. h/H and the
+      // Shift+Arrow reorder keys are structural/UI-chrome changes and still
+      // switch to edit mode first.
       const isEditModeKey = key === 'h' || key === 'H' ||
-                            key === 'ArrowUp' || key === 'ArrowDown' ||
                             key === 'Shift+ArrowUp' || key === 'Shift+ArrowDown'
       if (isEditModeKey && this._getDisplayMode()) this._spaceAction?.()
       if (this._widget.handleKey(key)) e.preventDefault()
