@@ -51,13 +51,24 @@ export abstract class Layer extends Node {
 
   // Permanent stack "chrome" (Root, Menu, Deletion) whose recompute() cost
   // is either structurally near-zero by design or, for DeletionLayer,
-  // reserved for a future separate aggregate warning rather than the
-  // on-stack per-layer hotspot signal (see "Live-performance hotspot
+  // reported separately via backgroundCostMs below rather than folded into
+  // the on-stack per-layer hotspot signal (see "Live-performance hotspot
   // indicator" in CLAUDE.md). Excluded from LayerStackWidget's hotspot
   // cost ratio — counting them made any real content layer look
   // artificially dominant, since there was nothing but near-zero-cost
   // padding to compare it against.
   readonly hotspotExempt: boolean = false
+
+  // For a layer that maintains its own off-stack collection with an
+  // ongoing recompute cost of its own (currently only DeletionLayer, for
+  // the Background collection — self-perpetuating layers there keep
+  // recomputing every frame even though nothing on-stack depends on them
+  // directly, see BackgroundLayer), the raw per-frame ms that collection
+  // is costing. LayerStackWidget folds this into the strip's load-bar
+  // total (so cost hidden off-stack still counts toward "is this actually
+  // hurting frame rate") and into this layer's own card glow, exactly as
+  // if it were this layer's own evalCostMs — see spec/live-performance-hotspots.md.
+  get backgroundCostMs(): number { return 0 }
 
   // When true, the thumbnail card is only rendered while this layer is
   // the currently selected layer; otherwise the card body is left blank.

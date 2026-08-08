@@ -6,6 +6,7 @@ import { typeColor, drawLayerThumbnail } from '../interaction/thumbnail.js'
 import type { BackgroundLayer } from './BackgroundLayer.js'
 import { contentLeft } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow } from '../interaction/hotspot.js'
 
 // ------------------------------------------------------------
 // DeletionLayer — archive for removed layers, and browser for the
@@ -92,6 +93,18 @@ export class DeletionLayer extends Layer {
   // archived layer or the user navigates to it directly.
   override get thumbnailOnlyWhenSelected(): boolean {
     return this._archived.length === 0
+  }
+
+  // Background items keep recomputing every frame (self-perpetuating, see
+  // BackgroundLayer) even though they're invisible off-stack — this is
+  // what lets LayerStackWidget fold that cost into the strip's load bar
+  // and into this layer's own card glow. Scoped to Background only, not
+  // the archive: the archive's own layers also keep evaluating (see
+  // recompute() below), but the user asked specifically about the
+  // Background collection — the archive is a natural follow-up, not yet
+  // covered.
+  override get backgroundCostMs(): number {
+    return sumEvalCost(this._background?.items ?? [])
   }
 
   // Always default to the Background tab on entry — Deleted is now an
@@ -414,11 +427,31 @@ export class DeletionLayer extends Layer {
 
     const ch = Node.canvasHeight
 
+    // Hotspot glow — the "locate" half for the Background collection (see
+    // Layer.backgroundCostMs and spec/live-performance-hotspots.md), only
+    // meaningful on the Background tab: which single item is worst, gated
+    // by whether the Background collection's own total has cleared the
+    // same "still smooth" floor the strip's load bar uses. Computed once
+    // per _drawGrid call, not per item.
+    const bgFrac  = this._showBackground ? hotspotBarFraction(this.backgroundCostMs) : 0
+    const bgWorst = bgFrac > 0 ? hotspotWorst(items) : { node: null, load: 0 }
+
     for (let i = 0; i < n; i++) {
       const layer  = items[i]!
       const c      = this._cellBounds(i)
       const tc     = typeColor(layer)
       const isSel  = i === this._selected
+
+      // Cast before anything opaque covers this cell's footprint (the
+      // thumbnail draw below), so only the shadow's outward bleed past the
+      // rounded card shape remains visible — same technique as the on-stack
+      // card glow in LayerStackWidget._drawCard.
+      if (layer === bgWorst.node) {
+        ctx.save()
+        ctx.translate(c.x, c.y)
+        drawHotspotGlow(ctx, tw, th, bgWorst.load, 6)
+        ctx.restore()
+      }
 
       // Card border / background
       ctx.fillStyle = isSel ? tc + '44' : tc + '1a'

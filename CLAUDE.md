@@ -1186,61 +1186,128 @@ button constructs one anymore).
 Infrastructure so a performer using Palimpsest live on stage can notice, at
 a glance, when a layer (or a binding chain feeding it) is dominating
 per-frame recompute cost — without stopping to read numbers. Full design
-rationale, what's shipped, and next steps: `spec/live-performance-hotspots.md`.
+rationale, revision history, and next steps: `spec/live-performance-hotspots.md`.
 
-Constraints driving the design: rank-relative signal only (a performer
-under time pressure needs "what's worst right now," not a number requiring
-per-device calibration); no animation/pulsing (Palimpsest follows the
-live-coding convention that the audience sees the same screen as the
-performer, so signals are static retints, not motion); two-stage design —
-a fixed-position "notice" signal separate from an in-place "locate" signal.
+Constraints driving the design: no animation/pulsing (Palimpsest follows
+the live-coding convention that the audience sees the same screen as the
+performer, so signals are static, not motion); two-stage design — a
+fixed-position "notice" signal (the top strip) separate from an in-place
+"locate" signal (card/thumbnail glow). The two signals use **different**
+metrics: card/thumbnail glow stays rank-relative (`hotspotWorst` in
+`src/interaction/hotspot.ts` — which layer's `evalCostMs` dominates a
+group's total, as a `[0,1]` share rescaled so an even split maps to `0`),
+while the strip is an **absolute**, FPS-anchored quantity per explicit
+request. Shared constants/math/glow-rendering live in `hotspot.ts` (not
+`LayerStackWidget.ts` alone) because `DeletionLayer` needs the identical
+machinery for the Background collection — see below.
 
 **Shipped**: `Node.evalCostMs` — an EMA of each node's own `recompute()`
 self-time, timed in `Node.evaluate()` around the `recompute()` call only
 (dependencies are evaluated earlier in the same method, so their cost is
-already excluded without extra bookkeeping). `LayerStackWidget._hotspotState()`
-(called once per `render()`, cached in `_hotspotLayer`/`_hotspotLoad` fields
-for that frame) finds the worst on-stack layer and a continuous `[0,1]` load —
-one on-stack layer's `evalCostMs` share of the stack's total, rescaled so an
-even split across layers maps to `0` and total dominance maps to `1`. The
-top status strip (still shows the *selected* layer's name, not necessarily
-the hotspot's) retints continuously from grey to dark red as load rises —
-a smooth `_hotspotColor(load)` gradient rather than a threshold snap, since
-a binary flip read as too subtle/pulse-like on first live testing.
-`_drawCard` casts a matching static halo (not animated) around whichever
-card is currently the worst — the "locate" half of the two-stage design —
-using the *same technique* as the card's own drop shadow immediately above
-it in the code: a `fillRect` with `shadowColor`/`shadowBlur` set and
-`shadowOffset` zero, `ctx.restore()`'d before the thumbnail is drawn over
-it, so only the shadow's outward gaussian bleed is ever visible (true soft
-falloff, inner edge flush with the card, same as the drop shadow). Drawn
-*after* the drop shadow so it composites on top, and — since it's cast
-from the card's own bounds as an ordinary part of `_drawCard`, not a final
-overlay — whichever card is stacked above this one in the same `render()`
-loop naturally paints over the glow's bleed for the region it occupies,
-same as it already does for the drop shadow. Colour is fixed (a brighter,
-more saturated red than the strip's deliberately muted one) and `load`
-drives only its opacity, not hue — user feedback that colour-coded
-intensity read less clearly than brightness-coded intensity for this
-element. (Revised twice to get here: v1 was a `strokeRect` at the card's
-exact edge, invisible because this stack is an overlapping card fan — see
-`_hitTest`'s own comment — where only the current/topmost cards show their
-full body; v2 moved to a final-overlay pass to force full visibility, which
-fixed that but made the glow ignore the stack's own occlusion order
-entirely. Full history: `spec/live-performance-hotspots.md`.) The ratio is
-computed over `_hotspotCandidates()`, which excludes permanent chrome layers
-(`Layer.hotspotExempt`, overridden on `RootLayer`, `MenuLayer`,
-`DeletionLayer`) — without this, `RootLayer`/`MenuLayer`'s structurally
-near-zero recompute cost made any single real content layer read as ~100%
-of the stack's cost immediately, a measurement artifact rather than a
-genuine hotspot; `DeletionLayer` is excluded because its cost belongs to
-the separate not-yet-built Background/DeletionLayer aggregate warning below.
+already excluded without extra bookkeeping).
+
+The top strip (`_drawCurrentLabel`) is a level-meter **load bar**: plain
+grey background, with a bar of colour `HOTSPOT_RGB` growing from the left
+edge as `_hotspotBarFraction()` rises. That fraction sums `evalCostMs`
+across every `_hotspotCandidates()` layer (total, not worst-single-layer —
+what costs frame rate is the sum of every dirty layer's recompute() that
+frame, spread across one layer or several) and maps it linearly from `0`
+at `HOTSPOT_BAR_START_MS` (≈33ms, a 30fps floor) to `1` at
+`HOTSPOT_BAR_JERKY_MS` (100ms, a 10fps ceiling — "video looks very jerky
+around here," calibrated directly to that request). Went through two
+earlier revisions, both found by live testing: v1 was a binary threshold
+(on/off snap, too subtle to notice); v2 was a continuous grey→red *hue*
+gradient driven by the same rank-relative share the card glow uses — an
+improvement, but still imprecise to read, and rank-relative share doesn't
+actually answer "is this costing me frame rate" (several moderately
+expensive layers with no single dominant one could read as fine while
+genuinely hurting FPS). v3 (current) is the fixed-hue bar above.
+
+`_drawCard` casts a matching static halo around whichever card
+`_hotspotState()` currently names as worst — the "locate" half — using the
+*same technique* as the card's own drop shadow immediately above it in the
+code: a `fillRect` with `shadowColor`/`shadowBlur` set and `shadowOffset`
+zero, `ctx.restore()`'d before the thumbnail is drawn over it, so only the
+shadow's outward gaussian bleed is ever visible (true soft falloff, inner
+edge flush with the card, same as the drop shadow). Drawn *after* the drop
+shadow so it composites on top, and — since it's cast from the card's own
+bounds as an ordinary part of `_drawCard`, not a final overlay — whichever
+card is stacked above this one in the same `render()` loop naturally paints
+over the glow's bleed for the region it occupies, same as it already does
+for the drop shadow. Colour is fixed at `HOTSPOT_RGB` — the same constant
+the strip's bar now uses, so the two signals read as visually related —
+and `_hotspotLoad` drives only opacity, not hue, on the same "brightness
+reads more clearly than colour" feedback that shaped the strip's v3.
+Visibility is gated on `_hotspotBarFrac > 0` (the strip's threshold), not
+`_hotspotLoad > 0` (rank-relative share) — the glow only appears once the
+strip's bar has actually started rising, so a "worst" layer with
+negligible absolute cost (e.g. two trivial layers on an otherwise-empty
+canvas) no longer lights up despite being nowhere near hurting frame rate.
+Both quantities are cached once per `render()` call, so gating on one and
+driving intensity from the other is free. (Card glow was itself revised
+twice before this: v1 was a `strokeRect` at the card's exact edge,
+invisible because this stack is an overlapping card fan — see `_hitTest`'s
+own comment — where only the current/topmost cards show their full body;
+v2 moved to a final-overlay pass to force full visibility, which fixed
+that but made the glow ignore the stack's own occlusion order entirely.)
+
+`_hotspotCandidates()` excludes permanent chrome layers (`Layer.hotspotExempt`,
+overridden on `RootLayer`, `MenuLayer`, `DeletionLayer`) from both the bar's
+sum and the glow's ratio — without this, `RootLayer`/`MenuLayer`'s
+structurally near-zero recompute cost made any single real content layer
+read as ~100% of the stack's cost immediately, a measurement artifact
+rather than a genuine hotspot.
+
+**Background collection is folded in, not forgotten.** `Layer.backgroundCostMs`
+(`src/core/Layer.ts`, default `0`) is a generic hook for a layer that
+maintains its own off-stack collection with an ongoing cost of its own;
+`DeletionLayer` overrides it to sum `evalCostMs` across the Background
+collection's items (self-perpetuating — see "Self-perpetuating recompute"
+above — so this is real, ongoing cost, not a one-off). Two consequences:
+(1) `LayerStackWidget._hotspotBarFraction()` adds every on-stack layer's
+`backgroundCostMs` into the strip's total before converting to a fraction,
+so sending an expensive layer to Background to declutter the stack no
+longer makes the strip go quiet — the cost didn't go away, it just left
+the visible stack. (2) `_drawCard`'s hotspot block gained a second trigger
+alongside the on-stack one: `DeletionLayer`'s own card glows once
+`hotspotBarFraction(layer.backgroundCostMs)` clears the same threshold, and
+— once you've opened it, on the Background tab — `DeletionLayer._drawGrid`
+casts the identical glow (via the shared `drawHotspotGlow`, `radius = 6` to
+match its rounded cards) onto whichever specific item is worst *within*
+the collection. Deliberately scoped to the Background collection only, not
+`DeletionLayer`'s own archive (which also keeps evaluating its contents) —
+scoped to what was actually asked for; the archive is a documented,
+not-yet-built follow-up using the exact same `hotspot.ts` machinery.
+
+**`BindingMapLayer` source-vs-consumer glow** — its diagram pill (one
+source thumbnail, one per bound consumer) glows whichever single node
+`hotspotWorst([source, ...consumers])` names as worst, via the same shared
+`drawHotspotGlow`. Unlike every other hotspot glow, **no absolute-cost
+threshold gate** — this diagram is opened deliberately to inspect one
+source's bindings, not glanced at ambiently, so any non-zero cost
+difference is surfaced immediately (`hotspotWorst` already stays quiet
+when everything in the diagram costs nothing). This required generalizing
+`hotspot.ts`'s `sumEvalCost`/`hotspotWorst` from `Layer` to `Node`
+(`evalCostMs` lives on `Node`, and `ParameterSlot.owner` — a
+`BindingMapLayer` consumer — is typed `Node`, not `Layer`);
+`LayerStackWidget._hotspotState()` casts back to `Layer` at its one
+call site rather than threading `Node` through its own fields for no
+benefit there.
+
+**`CollectionLayer` per-item glow** — same "which item inside is worst"
+question as `DeletionLayer`'s Background tab, applied to
+`CollectionLayer._drawGrid`'s own thumbnail grid, gated the same way
+(`hotspotBarFraction(sumEvalCost(this._layers)) > 0`). No
+`backgroundCostMs`-equivalent hook needed here: `CollectionLayer` is an
+ordinary on-stack layer whose `recompute()` calls `layer.evaluate()` on
+its ingested items *synchronously inside* the timed call, so its own
+`evalCostMs` already includes every item's cost and its stack card already
+glows via the existing on-stack path — only the "locate the specific item"
+half was missing.
 
 **Not started**: click-to-jump from the strip/glow to select the offender;
-a parallel aggregate warning for `BackgroundLayer`/`DeletionLayer` items,
-which keep recomputing invisibly off-stack (see "Self-perpetuating
-recompute" above) — flagged as the highest-value remaining piece since it's
-the one case with zero current visibility at all.
+folding `DeletionLayer`'s archive (not just Background) into
+`backgroundCostMs`.
 
 ## Known issues / pre-existing tech debt
 

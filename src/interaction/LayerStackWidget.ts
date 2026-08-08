@@ -4,6 +4,9 @@ import type { Ctx2D, Point } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 import { stackWidgetWidth } from './layout.js'
 import { drawIcon } from '../ui/icons.js'
+import {
+  HOTSPOT_RGB, sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow,
+} from './hotspot.js'
 
 // ------------------------------------------------------------
 // LayerStackWidget — overlapping thumbnail card stack
@@ -58,31 +61,26 @@ const MIN_SPACING = 22      // minimum gap between successive card tops
 const GAP_CURRENT = 40      // gap above the current card (must exceed shadow bleed ~15px)
 
 // ── Hotspot indicator ────────────────────────────────────────
-// The top strip's background hue is a continuous function of "load" — how
-// much the worst on-stack layer's self-time EMA (Node.evalCostMs) dominates
-// the stack's total per-frame recompute cost, rank-relative rather than an
-// absolute ms budget, since a live performer needs "what's the worst thing
-// right now" rather than a number that needs per-device calibration. Load 0
-// (cost spread evenly across layers) reads as plain grey; load 1 (one layer
-// eating everything) reads as red. Deliberately no pulse/animation: the
-// audience sees the same screen as the performer (live-coding convention),
-// so the signal is a static retint, not motion.
-const HOTSPOT_GREY = { r: 110, g: 110, b: 110, a: 0.72 }
-const HOTSPOT_RED  = { r: 150, g: 30,  b: 30,  a: 0.82 }   // dark red — distinct from every ValueType accent colour
+// Shared constants/math/rendering (HOTSPOT_RGB, the FPS calibration, and
+// drawHotspotGlow) live in ./hotspot.ts, since DeletionLayer needs the same
+// machinery for the Background collection's own glow — see there for full
+// rationale.
+const HOTSPOT_GREY = { r: 110, g: 110, b: 110, a: 0.72 }   // strip's neutral/no-load background
+const HOTSPOT_BAR_ALPHA = 0.85
+const HOTSPOT_BAR_THICKNESS = 3   // px — a thin bar along the top edge of the strip, not a full-height fill
 
-// Card glow (the "locate" half — see _drawCard's hotspot block) uses a
-// separate, brighter/more saturated red than the top strip's HOTSPOT_RED:
-// the strip's colour has to stay dark/desaturated to avoid reading as a
-// 12th ValueType accent, but the glow is a soft halo around a card, not a
-// flat fill, so it can afford to be punchier and still read clearly
-// against any thumbnail content. Load is encoded purely as opacity here —
-// colour is fixed. Cast the same way as the card's own drop shadow below
-// (a filled rect whose shadowBlur bleed is the only visible part, since
-// the shape itself gets immediately covered by the thumbnail) so the
-// falloff is a true gaussian blur with no crisp ring, and the inner edge
-// sits flush with the card, exactly where the shadow's does.
-const HOTSPOT_GLOW_RGB  = '255,50,50'
-const HOTSPOT_GLOW_BLUR = 24
+// Strip "load bar" — deliberately *not* the same rank-relative "load"
+// _hotspotState() computes for the card glow (which layer dominates the
+// stack, as a share). This is calibrated in absolute per-frame ms instead,
+// so the strip answers a different question: is the total recompute cost —
+// on-stack layers *and* anything hidden in the Background collection
+// (Layer.backgroundCostMs) — actually enough to hurt the frame rate? Below
+// HOTSPOT_BAR_START_MS the strip stays plain grey — cost this small isn't
+// yet a visible smoothness concern. Above it, a bar of colour HOTSPOT_RGB
+// rises from the strip's left edge, reaching full width at
+// HOTSPOT_BAR_JERKY_MS, "video looks very jerky around here." Deliberately
+// no pulse/animation: the audience sees the same screen as the performer
+// (live-coding convention), so the signal is a static fill, not motion.
 
 // ─────────────────────────────────────────────────────────────
 
@@ -106,9 +104,11 @@ export class LayerStackWidget {
   private _scrollOffset = 0     // px, vertical scroll of the card stack
   private _raisedLayer: Layer | null = null   // temporarily raised (swipe up/down)
 
-  // Hotspot state, recomputed once per render() call — see _hotspotState().
-  private _hotspotLayer: Layer | null = null
-  private _hotspotLoad  = 0
+  // Hotspot state, recomputed once per render() call — see _hotspotState()
+  // and _hotspotBarFraction().
+  private _hotspotLayer:   Layer | null = null
+  private _hotspotLoad     = 0
+  private _hotspotBarFrac  = 0
 
   constructor(canvas: HTMLCanvasElement) {
     this._canvas = canvas
@@ -453,8 +453,9 @@ export class LayerStackWidget {
     const ch = this._cardH()
 
     const hs = this._hotspotState()
-    this._hotspotLayer = hs.layer
-    this._hotspotLoad  = hs.load
+    this._hotspotLayer  = hs.layer
+    this._hotspotLoad   = hs.load
+    this._hotspotBarFrac = this._hotspotBarFraction()
 
     // Clip the scrollable card stack to the strip — cards scrolled out of
     // view must not draw outside it. The label strip and scrollbar are
@@ -555,47 +556,42 @@ export class LayerStackWidget {
   }
 
   // Worst-offender among the candidate layers this frame, and its "load" —
-  // 0 when cost is spread evenly across all candidates (the floor a "worst"
-  // layer can't help clearing even under uniform load), 1 when it accounts
-  // for the candidates' entire recompute cost. Continuous, so both the top
-  // strip's hue and the card glow below can fade smoothly rather than
-  // snapping at a threshold. Computed once per render() call (both
+  // see hotspot.ts's hotspotWorst. Computed once per render() call (both
   // consumers read the cached result) rather than per-card, since it's an
-  // O(n) scan and cards would otherwise repeat it once per card drawn.
+  // O(n) scan and cards would otherwise repeat it once per card drawn. The
+  // cast is safe: hotspotWorst's "worst" node is always drawn from the
+  // Layer[] passed in, hotspotWorst is just expressed in terms of the more
+  // general Node (see hotspot.ts) since not every caller passes Layers.
   private _hotspotState(): { layer: Layer | null; load: number } {
-    const candidates = this._hotspotCandidates()
-    const n = candidates.length
-    if (n < 2) return { layer: null, load: 0 }
-    let total = 0
-    let worst: Layer | null = null
-    let worstCost = 0
-    for (const l of candidates) {
-      const c = l.evalCostMs
-      total += c
-      if (c > worstCost) { worstCost = c; worst = l }
-    }
-    if (total <= 0) return { layer: null, load: 0 }
-    const share    = worstCost / total
-    const baseline = 1 / n
-    const load     = Math.max(0, Math.min(1, (share - baseline) / (1 - baseline)))
-    return { layer: worst, load }
+    const { node, load } = hotspotWorst(this._hotspotCandidates())
+    return { layer: node as Layer | null, load }
   }
 
-  private _hotspotColor(load: number): string {
-    const t = Math.max(0, Math.min(1, load))
-    const r = Math.round(HOTSPOT_GREY.r + (HOTSPOT_RED.r - HOTSPOT_GREY.r) * t)
-    const g = Math.round(HOTSPOT_GREY.g + (HOTSPOT_RED.g - HOTSPOT_GREY.g) * t)
-    const b = Math.round(HOTSPOT_GREY.b + (HOTSPOT_RED.b - HOTSPOT_GREY.b) * t)
-    const a = HOTSPOT_GREY.a + (HOTSPOT_RED.a - HOTSPOT_GREY.a) * t
-    return `rgba(${r},${g},${b},${a.toFixed(2)})`
+  // Progress toward "video looks very jerky" (see hotspot.ts) across the
+  // *entire* app, not just the on-stack candidates: also folds in
+  // Layer.backgroundCostMs (only DeletionLayer ever reports non-zero,
+  // summing the Background collection's items) so a layer moved to
+  // Background to declutter the stack doesn't silently disappear from the
+  // load calculation — it's still recomputing every frame and still
+  // costing real frame time, just off-stack.
+  private _hotspotBarFraction(): number {
+    let total = sumEvalCost(this._hotspotCandidates())
+    for (const l of this._layers) total += l.backgroundCostMs
+    return hotspotBarFraction(total)
   }
 
   private _drawCurrentLabel(ctx: Ctx2D): void {
     const lh = TOP_MARGIN - 2   // fits exactly in the top margin above the first card
     if (lh < 8) return
     ctx.save()
-    ctx.fillStyle = this._hotspotColor(this._hotspotLoad)
+    ctx.fillStyle = `rgba(${HOTSPOT_GREY.r},${HOTSPOT_GREY.g},${HOTSPOT_GREY.b},${HOTSPOT_GREY.a})`
     ctx.fillRect(0, 0, this._widgetW(), lh)
+
+    if (this._hotspotBarFrac > 0) {
+      ctx.fillStyle = `rgba(${HOTSPOT_RGB},${HOTSPOT_BAR_ALPHA})`
+      ctx.fillRect(0, 0, this._widgetW() * this._hotspotBarFrac, HOTSPOT_BAR_THICKNESS)
+    }
+
     if (this._selected !== null) {
       const tc = typeColor(this._selected)
       ctx.fillStyle = tc
@@ -650,27 +646,34 @@ export class LayerStackWidget {
       ctx.restore()   // ← clears shadow before drawing thumbnail
 
       // Hotspot glow — the "locate" half of the two-stage design (see
-      // spec/live-performance-hotspots.md). Cast exactly like the drop
-      // shadow just above (a filled rect whose shadowBlur bleed is the
-      // only visible part, since this same shape is covered by the
-      // thumbnail drawn right after) but drawn *after* it, so it
-      // composites on top, and with shadowOffset (0,0) so the blur spreads
-      // evenly on every side rather than one direction. Because it's
-      // drawn in the ordinary per-card position — not a final overlay —
-      // whichever card the stack draws next (the one visually above this
-      // one) naturally paints over the glow's outward bleed for the
-      // region it occupies, exactly as it already does for the drop
-      // shadow above.
-      if (!floating && layer === this._hotspotLayer && this._hotspotLoad > 0) {
-        const t = this._hotspotLoad
-        ctx.save()
-        ctx.shadowColor   = `rgba(${HOTSPOT_GLOW_RGB},${(0.4 + t * 0.5).toFixed(2)})`
-        ctx.shadowBlur    = HOTSPOT_GLOW_BLUR
-        ctx.shadowOffsetX = 0
-        ctx.shadowOffsetY = 0
-        ctx.fillStyle     = `rgba(${HOTSPOT_GLOW_RGB},1)`
-        ctx.fillRect(0, 0, w, h)
-        ctx.restore()
+      // spec/live-performance-hotspots.md and hotspot.ts). Cast exactly
+      // like the drop shadow just above (a filled rect whose shadowBlur
+      // bleed is the only visible part, since this same shape is covered
+      // by the thumbnail drawn right after) but drawn *after* it, so it
+      // composites on top. Because it's drawn in the ordinary per-card
+      // position — not a final overlay — whichever card the stack draws
+      // next (the one visually above this one) naturally paints over the
+      // glow's outward bleed for the region it occupies, exactly as it
+      // already does for the drop shadow above.
+      //
+      // Two independent triggers, mutually exclusive in practice (only
+      // DeletionLayer ever reports non-zero backgroundCostMs, and it's
+      // hotspotExempt so can never be _hotspotLayer): this card is the
+      // on-stack hotspot (gated on _hotspotBarFrac, not just
+      // _hotspotLoad > 0, so a rank-relative imbalance with negligible
+      // absolute cost doesn't light up a card when nothing's remotely
+      // close to hurting frame rate) — or this card's own
+      // backgroundCostMs (e.g. DeletionLayer, when the Background
+      // collection it browses is itself over the same threshold) clears
+      // it, so a layer moved to Background to declutter the stack still
+      // gets a visible "something in here needs attention" signal on its
+      // own card, not just inside the grid once you've already opened it.
+      if (!floating) {
+        const isOnStackHotspot = layer === this._hotspotLayer && this._hotspotBarFrac > 0
+        const intensity = isOnStackHotspot
+          ? this._hotspotLoad
+          : hotspotBarFraction(layer.backgroundCostMs)
+        drawHotspotGlow(ctx, w, h, intensity)
       }
 
       // Thumbnail, clipped to card bounds.

@@ -10,6 +10,7 @@ import { BindingLayer }   from './BindingLayer.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import { hotspotWorst, drawHotspotGlow } from '../interaction/hotspot.js'
 
 // ── Layout constants ──────────────────────────────────────────────────────
 const THUMB_SZ = 40
@@ -215,6 +216,16 @@ export class BindingMapLayer extends Layer {
     const rows = 1 + bindings.length
     const ph   = PILL_PAD * 2 + rows * ROW_H + Math.max(0, rows - 1) * ROW_GAP
 
+    // Which single node — the source, or one specific consumer — is the
+    // most expensive right now, so its thumbnail alone gets the hotspot
+    // glow (see interaction/hotspot.ts). Unlike the stack widget/strip,
+    // there's no absolute-cost threshold gate here: this diagram is opened
+    // deliberately to inspect one source's bindings, not glanced at
+    // passively, so any non-zero cost difference is worth surfacing —
+    // hotspotWorst itself already stays quiet when every node here costs
+    // exactly nothing.
+    const worst = hotspotWorst([src, ...bindings.map(b => b.slot.owner)])
+
     this._pillBounds = { x: px, y: py, width: pw, height: ph }
 
     ctx.save()
@@ -247,7 +258,7 @@ export class BindingMapLayer extends Layer {
 
       const srcThumb: BB = { x: px + PILL_PAD, y: thY, width: THUMB_SZ, height: THUMB_SZ }
       this._masterThumbBB = srcThumb
-      this._drawThumb(ctx, src, srcThumb, accentCol)
+      this._drawThumb(ctx, src, srcThumb, accentCol, src === worst.node ? worst.load : 0)
 
       ctx.font         = 'bold 10px monospace'
       ctx.fillStyle    = 'rgba(255,255,255,0.88)'
@@ -317,7 +328,7 @@ export class BindingMapLayer extends Layer {
         : 'rgba(255,255,255,0.22)'
       const bThumb: BB = { x: px + PILL_PAD, y: thY, width: THUMB_SZ, height: THUMB_SZ }
       this._bindThumbBB.set(bl, bThumb)
-      this._drawThumb(ctx, cons, bThumb, consCol)
+      this._drawThumb(ctx, cons, bThumb, consCol, cons === worst.node ? worst.load : 0)
 
       // Consumer label
       const lbl = cons instanceof Layer
@@ -373,7 +384,17 @@ export class BindingMapLayer extends Layer {
   // Drawing helpers
   // ----------------------------------------------------------
 
-  private _drawThumb(ctx: Ctx2D, node: Node, b: BB, borderCol: string): void {
+  private _drawThumb(ctx: Ctx2D, node: Node, b: BB, borderCol: string, glow: number): void {
+    // Hotspot glow — cast before anything opaque covers this footprint (the
+    // thumbnail draw right below, or the plain fill for a non-Layer node),
+    // so only the shadow's outward bleed remains visible. Same technique as
+    // every other hotspot glow in the app — see interaction/hotspot.ts.
+    if (glow > 0) {
+      ctx.save()
+      ctx.translate(b.x, b.y)
+      drawHotspotGlow(ctx, b.width, b.height, glow)
+      ctx.restore()
+    }
     if (node instanceof Layer) {
       const oc = new OffscreenCanvas(b.width, b.height)
       drawLayerThumbnail(

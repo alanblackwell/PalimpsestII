@@ -12,6 +12,7 @@ import { graph } from '../dataflow/Graph.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 import { contentLeft } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow } from '../interaction/hotspot.js'
 
 // ------------------------------------------------------------
 // CollectionLayer — sub-stack that outputs a composite image
@@ -523,6 +524,21 @@ export class CollectionLayer extends Layer implements ImageSource {
       const n           = this._layers.length
       const isReordering = this._dragIdx >= 0
 
+      // Hotspot glow — the "locate" half for this collection (same pattern
+      // as DeletionLayer's Background tab, see interaction/hotspot.ts):
+      // which single item is worst, gated by whether the collection's own
+      // total has cleared the same "still smooth" floor the strip's load
+      // bar uses. Note this is purely a *locate* signal — the collection's
+      // own card in the stack widget already glows via the ordinary
+      // on-stack hotspot path (CollectionLayer isn't hotspotExempt), since
+      // its own evalCostMs already includes every ingested item's cost —
+      // recompute() evaluates them synchronously inside the timed call, so
+      // there's no separate backgroundCostMs-style total to fold in here,
+      // unlike the Background collection (which is off-stack and would
+      // otherwise be invisible to LayerStackWidget entirely).
+      const collFrac = hotspotBarFraction(sumEvalCost(this._layers))
+      const worst    = collFrac > 0 ? hotspotWorst(this._layers) : { node: null, load: 0 }
+
       // Iterate by visual position v (0 = top-left = most-recently-added).
       // Array index i = n-1-v so that _layers[n-1] (newest) appears first.
       for (let v = 0; v < n; v++) {
@@ -530,6 +546,17 @@ export class CollectionLayer extends Layer implements ImageSource {
 
         const i        = n - 1 - v
         const { tx, ty } = this._cellOrigin(v, gb)
+
+        // Cast before anything opaque covers this cell's footprint (the
+        // thumbnail draw below), so only the shadow's outward bleed past
+        // the rounded card shape remains visible — same technique as
+        // every other hotspot glow in the app.
+        if (this._layers[i] === worst.node) {
+          ctx.save()
+          ctx.translate(tx, ty)
+          drawHotspotGlow(ctx, tw, th, worst.load, 4)
+          ctx.restore()
+        }
 
         const thumb    = new OffscreenCanvas(tw, th)
         const thumbCtx = thumb.getContext('2d')!
