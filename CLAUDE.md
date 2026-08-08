@@ -1110,6 +1110,29 @@ palette (deep purple → hot pink → neon lime → electric yellow). Both the C
 fallback (`FilterLayer.ts`) and the WebGL path (`FilterGL.ts`) use identical
 palettes and blend logic.
 
+### `WarpLayer` — GPU warp (`WarpGL.ts`)
+
+`WarpLayer.recompute()` prefers a WebGL path (`warpGL.apply(...)`, `src/layers/
+WarpGL.ts`) over the original CPU implementation (`WarpLayer._applyWarp`, kept
+as the fallback when `warpGL.supported` is `false`). Unlike `FilterGL`'s
+multi-pass ping-pong pipeline, this is a single shader pass: the inverse-distance-
+weighted displacement sum *and* the inverse-mapped source sample both happen
+per-fragment, so the CPU path's two CPU-specific tricks — a quarter-resolution
+displacement map (`DISP_SCALE`) and a hand-rolled bilinear resample loop — are
+unnecessary on the GPU. `LINEAR` texture filtering plus `CLAMP_TO_EDGE`
+wrapping (set once on the source texture) give bilinear sampling and edge-clamping
+for free.
+
+Control pairs (`{init, curr}`, from bound handles + shape-perimeter samples +
+zero-displacement boundary anchors) are passed as a plain `vec4[64]` uniform
+array rather than a data texture — simpler, and sized well above WarpLayer's
+actual worst case (5 handles + 16 shape samples + 32 boundary anchors = 53).
+`WARP_MAX_PAIRS = 64` in `WarpGL.ts` is a hard cap: `apply()` silently drops
+any pairs beyond it. The fragment shader loops over a constant bound
+(`WARP_MAX_PAIRS`) with a runtime `break` at `uCount`, the same
+constant-loop-bound-plus-dynamic-exit idiom `FilterGL.ts`'s `blur_h`/`blur_v`
+shaders already use for their runtime-variable radius.
+
 ## Big-button mobile touch-target pass (wound down)
 
 Ongoing multi-session effort to replace small/cramped panel buttons with

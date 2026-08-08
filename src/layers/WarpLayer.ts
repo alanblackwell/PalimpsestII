@@ -12,6 +12,7 @@ import { graph }        from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { PointLayer }   from './PointLayer.js'
 import { contentLeft }  from '../interaction/layout.js'
+import { warpGL }       from './WarpGL.js'
 
 // ------------------------------------------------------------
 // WarpLayer — non-linear image warp driven by control points or shape
@@ -219,9 +220,17 @@ export class WarpLayer extends Layer implements ImageSource {
       }
     }
 
+    if (warpGL.supported) {
+      warpGL.apply(src as CanvasImageSource, pairs, W, H, MIN_DIST_SQ)
+      ctx.clearRect(0, 0, W, H)
+      ctx.drawImage(warpGL.canvas, 0, 0)
+      return
+    }
+
     this._applyWarp(ctx as OffscreenCanvasRenderingContext2D, src, pairs)
   }
 
+  // CPU fallback — used only when WebGL is unavailable (warpGL.supported === false).
   private _applyWarp(
     ctx: OffscreenCanvasRenderingContext2D,
     src: ImageBitmap | OffscreenCanvas,
