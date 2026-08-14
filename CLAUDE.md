@@ -504,6 +504,25 @@ Dropping an image file from the OS onto the canvas always **creates a new
 
 The `dragover` handler just sets `dropEffect = 'copy'`; no existing layer state is modified.
 
+**Dropping onto the Startup screen**: if `widget.selected instanceof StartupLayer`
+when any of these drops (image/video, text, or JSON) lands, `promoteStartupToMenu()`
+runs first — same effect as pressing StartupLayer's "Menu" button
+(`widget.setVisible(true)`, `startupLayer.removeFromStack()`,
+`menuLayer.insertAbove(deletionLayer)`) — before the normal placement rule
+applies with `selected` now `menuLayer`. This is necessary because
+`StartupLayer` has no slots and isn't `MenuLayer`, so without it a drop would
+silently insert the new layer above the still-present StartupLayer instead of
+replacing the startup screen.
+
+**JSON drop — full session vs. collection export**: a `.json` drop is
+distinguished by parsed shape, not extension/MIME. Checked in order: (1) a
+full session save (has `version`/`stack`/`canvas`/`clock`, no `kind` field) —
+loaded via `applyLoadedSession()`, identical to pressing MenuLayer's Load
+button (teardown + full stack reconstruction, see "Persistence" below); (2)
+a collection export (`kind === 'palimpsest-collection'`) — existing
+`deserializeCollection` handling, placed via the same MenuLayer-selected /
+current-layer / lowest-anchor rules as an image/video drop.
+
 ### `postInsertLayer` (main.ts)
 
 All per-type setup that runs after a new layer is inserted — auto-binding
@@ -876,6 +895,67 @@ and `_video` persists across camera/screen/file source switches, so this is
 safe regardless of when the first consumer binds. No source-type gating: when
 not playing file audio the signal is simply near-silent, which consumers
 already have to tolerate.
+
+### `VideoLayer` file-source persistence — relink via File System Access
+
+Video bytes are never embedded in saved session JSON (unlike `ImageLayer`,
+which embeds its bitmap as a base64 PNG data URL — see "Persistence"
+below) — only `filename`/transform/playback metadata. Historically this
+meant a reloaded file-sourced `VideoLayer` just rendered blank forever,
+since the browser can't regain access to the original `File`/blob without
+the user re-picking it and nothing prompted for that.
+
+`_openFilePicker()` (the panel's File button, and — since `sourceType`
+stays `'file'` after reload — also the entry point for manually relinking a
+missing one) now tries the File System Access API first
+(`window.showOpenFilePicker`, typed via the ambient declarations in
+`src/types/file-system-access.d.ts` since TypeScript's bundled `dom` lib
+doesn't cover this Chromium-only extension) and falls back to the original
+`<input type=file>` flow when unsupported
+(`VideoFileHandleStore.fileSystemAccessSupported`). A successful pick's
+`FileSystemFileHandle` is stored in `src/persistence/VideoFileHandleStore.ts`
+— its own small IndexedDB (separate DB from `MobileStore`'s save gallery, so
+their `onupgradeneeded`/version bumps never interact) — keyed by a
+`_fileHandleId` (`crypto.randomUUID()`, minted on first capture and
+persisted in `serializeState`/`deserializeState`). This is a **new** stable
+per-layer id, not reused from anything existing: `Node.creationIndex` is a
+runtime-only counter that resets every page load, and `LayerRecord.id`
+(`Persistence.ts`) is a positional index recomputed fresh on every save —
+neither survives a save/load round trip.
+
+`Persistence.deserialize()`'s per-record state-restore loop calls
+`await layer.tryAutoRelink()` right after `layer.deserializeState(decoded)`
+for any `VideoLayer` (kept as an explicit `instanceof` branch there rather
+than folded into `VideoLayer.deserializeState` itself, since that method's
+contract with the rest of the persistence layer is synchronous and shared
+by every layer type). `tryAutoRelink()` looks up the stored handle and
+checks `handle.queryPermission?.({mode:'read'})` — which never itself
+prompts the user, so this is always safe to run unconditionally on load —
+and silently reconnects (`handle.getFile()` → `loadFile(file, handle)`) if
+already granted. When that's not possible (handle missing, permission would
+need an interactive `requestPermission` prompt that has no user gesture to
+attach to here, or — for a drag-and-dropped file, or an older save — no
+handle was ever captured in the first place), the layer instead sets
+`_needsRelink = true`: the File big-button's label swaps to `'Relink'`
+(`VideoLayer.ts`'s big-button spec loop), and since `_renderControlBar`
+otherwise draws nothing at all once `_objectUrl === null`, it now also
+draws a one-line "Missing: ‹filename› — click File to relink" bar in the
+normal scrub-bar's position — `_missingBarB`, wired into `hitTestSelf`/
+`handlePointerDown` alongside the other bar/button bounds, so a click
+anywhere on that readout (not just the small File button) also opens the
+picker.
+
+Purging a `VideoLayer` from the Deletion archive
+(`deletionLayer.setPurgeCallback` in `main.ts`) also deletes its
+`VideoFileHandleStore` entry when `fileHandleId !== null`, so the handle
+store doesn't grow unboundedly as videos are picked and later discarded.
+
+**Deliberately out of scope**: drag-and-dropped video files never capture a
+handle (`DataTransferItem.getAsFileSystemHandle()` isn't typed in the
+bundled `dom` lib either, and is Chromium-only) — they stay filename-only,
+same as before this feature, and still get the manual Relink prompt on
+reload rather than erroring. `ImageLayer` has no equivalent reconnect
+problem to solve, since its content is already fully embedded in the save.
 
 ### Audio-onset detection and beat induction — stage-performance sync
 
