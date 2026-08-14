@@ -11,7 +11,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { drawLayerThumbnail, typeColor } from '../interaction/thumbnail.js'
 import { contentLeft } from '../interaction/layout.js'
-import { drawIcon } from '../ui/icons.js'
+import { drawIcon, type IconName } from '../ui/icons.js'
 import { sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow } from '../interaction/hotspot.js'
 
 // ------------------------------------------------------------
@@ -69,6 +69,8 @@ export class CollectionLayer extends Layer implements ImageSource {
   private _compositeCanvas: OffscreenCanvas | null = null
   private _ejectCallback:   (() => void) | null = null
   private _deleteCallback:  ((layer: Layer) => void) | null = null
+  private _onSave: (() => void) | null = null
+  private _onLoad: (() => void) | null = null
   private _snapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null
 
   // When bound and active, selects a single item (by index, mod N) as the
@@ -117,6 +119,14 @@ export class CollectionLayer extends Layer implements ImageSource {
   // archive — caller (main.ts) is responsible for actually archiving it.
   setDeleteCallback(fn: (layer: Layer) => void): void {
     this._deleteCallback = fn
+  }
+
+  // Save/Load buttons in the header pill — export/import this collection's
+  // contents as a standalone file. No file I/O happens in this layer; it
+  // just calls back into main.ts, same as setEjectCallback/setDeleteCallback.
+  setSaveLoadCallbacks(onSave: () => void, onLoad: () => void): void {
+    this._onSave = onSave
+    this._onLoad = onLoad
   }
 
   // Ingest a layer from the main stack into this collection.
@@ -271,6 +281,16 @@ export class CollectionLayer extends Layer implements ImageSource {
   }
 
   handlePointerDown(point: Point): boolean {
+    const { save, load } = this._saveLoadBtnBounds()
+    if (boundingBoxContains(save, point)) {
+      if (this._layers.length > 0) this._onSave?.()
+      return true
+    }
+    if (boundingBoxContains(load, point)) {
+      this._onLoad?.()
+      return true
+    }
+
     const gb = this._gridBounds()
     if (!boundingBoxContains(gb, point)) return false
 
@@ -451,6 +471,28 @@ export class CollectionLayer extends Layer implements ImageSource {
     return row * cols + col
   }
 
+  // Save/Load button bounds in the header pill, right-aligned. Computed
+  // fresh from canvasBounds (not cached) — same convention as _gridBounds/
+  // _trashBounds below — so render and hit-testing can never disagree.
+  private _saveLoadBtnBounds(): { save: BBox; load: BBox } {
+    const { x, y, width: w, height: h } = this.canvasBounds
+    const midY   = y + h / 2
+    const BTN_SZ = 18
+    const BTN_GAP = 4
+    const load: BBox = { x: x + w - 8 - BTN_SZ, y: midY - BTN_SZ / 2, width: BTN_SZ, height: BTN_SZ }
+    const save: BBox = { x: load.x - BTN_GAP - BTN_SZ, y: midY - BTN_SZ / 2, width: BTN_SZ, height: BTN_SZ }
+    return { save, load }
+  }
+
+  private _drawHeaderBtn(ctx: Ctx2D, b: BBox, icon: IconName, enabled: boolean): void {
+    ctx.fillStyle = enabled ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.05)'
+    ctx.beginPath()
+    ctx.roundRect(b.x, b.y, b.width, b.height, 4)
+    ctx.fill()
+    ctx.fillStyle = enabled ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.3)'
+    drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, b.height - 6)
+  }
+
   private _drawHeaderPill(
     ctx: Ctx2D, x: number, y: number, w: number, h: number,
   ): void {
@@ -474,6 +516,10 @@ export class CollectionLayer extends Layer implements ImageSource {
     ctx.textBaseline = 'middle'
     ctx.fillText('Collect', x + 12, midY)
 
+    const { save, load } = this._saveLoadBtnBounds()
+    this._drawHeaderBtn(ctx, save, 'floppy-disk', this._layers.length > 0)
+    this._drawHeaderBtn(ctx, load, 'folder-open', true)
+
     const n = this._layers.length
     ctx.fillStyle = 'rgba(255,255,255,0.45)'
     ctx.textAlign = 'right'
@@ -482,7 +528,7 @@ export class CollectionLayer extends Layer implements ImageSource {
       this._indexSlot.isActive && n > 0
         ? `#${this.selectedIndex()} of ${countText}`
         : countText,
-      x + w - 8, midY,
+      save.x - 8, midY,
     )
 
     ctx.restore()

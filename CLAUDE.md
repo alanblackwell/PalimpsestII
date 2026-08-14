@@ -653,6 +653,84 @@ manually-set field that isn't fully derived from slot inputs in
   manual save → reload → load round-trip of a stack using the new/changed
   layer.
 
+### Collection save/load (`src/persistence/CollectionExport.ts`)
+
+A `CollectionLayer` can be saved/loaded as its own standalone `.json` file,
+independent of the rest of the session — Save/Load buttons live in the
+`CollectionLayer`'s own header pill (`setSaveLoadCallbacks`), not the main
+menu. `CollectionSaveFile` is a much smaller sibling of `SaveFile` — reuses
+`LayerRecord`/`SlotRecord` unchanged (`{version, kind:
+'palimpsest-collection', rootId, layers}`, no stack/background/archive/
+clock/audioRhythm) — built by `serializeCollection()`/`deserializeCollection()`,
+which share `encodeState`/`decodeState`/`resolveSource`/`hasMaskTracker`
+with `Persistence.ts` (exported from there for this reuse) rather than
+duplicating them.
+
+**What gets exported**: the collection itself, its ingested `items`, and —
+via the same `visit()`/`refId()` lazy-closure-growth pattern
+`Persistence.serialize()` already uses for slot sources not otherwise
+reachable — every layer any of those transitively depend on through a
+`ParameterSlot` binding or a `hiddenHelper` pointer (e.g. a `Clip<Shape>`
+item's mask-tracker). No separate "dependencies" list is needed in the
+format; it falls out of the same per-record `slots`/`itemIds`/
+`hiddenHelperId` fields every `LayerRecord` already carries.
+
+**On load**, `deserializeCollection()` walks the ownership closure (root →
+its own `itemIds`, recursively through nested collections → each owned
+layer's `hiddenHelper`, recursively) to split the result into `itemLayers`
+(top-level items, handed back for the caller to `restoreItems()` into
+whichever `CollectionLayer` actually keeps them) and `backgroundLayers`
+(everything else — layers that only exist because something needed them as
+a slot source or a required mask-tracker helper). The caller always parks
+`backgroundLayers` in the global `BackgroundLayer` — kept evaluating every
+frame, never rendered, no stack-widget thumbnail. This **is** "reloaded as
+a hidden layer": no separate hidden-layer concept was added to
+`CollectionLayer` itself.
+
+Every layer `deserializeCollection()` instantiates — root, items, and
+background dependencies alike — gets a **fresh** `debugName` via
+`Layer.assignDebugName()` (the same incrementing-counter mechanism a
+newly-created layer gets), never the persisted one: a collection file was
+built from a live session, so its saved names are almost always identical
+to some already-live layer's name, which reads as confusing duplication
+rather than useful identity. `debugName` has no functional effect anywhere
+in the codebase (purely a display label, plus a brush-texture hash seed in
+`StrokeLayer`/`PathLayer`/`RectLayer`/`EllipseLayer`), so this is safe.
+
+The freshly-instantiated root `CollectionLayer` is never auto-wired with
+its own items inside `deserializeCollection()` — the caller decides:
+- **OS file-drop onto the canvas** creates a brand-new `CollectionLayer`
+  (placed via the same `selected`-relative rules as an image/video OS
+  drop — see "OS file drag-and-drop" above) and keeps this root, restoring
+  its `indexSlot` binding (but not its name, per above).
+- **Load button on an existing `CollectionLayer`** merges (appends) the
+  file's items into that target instead — the throwaway root is discarded,
+  and `discardImportedCollectionRoot()` (`main.ts`) must sever any
+  `BindingLayer` touching its own slots and `graph.unregister()` it, or
+  both leak (same concern `Persistence.teardownSession` handles for a full
+  session reload, scoped down to one throwaway layer here).
+
+**`wireLoadedLayer` (`main.ts`)**: every per-type post-restore wiring call
+(convenience buttons, `onInspectorRequest` hooks, etc.) that used to be
+duplicated between `applyLoadedSession`'s main-stack and archive scans was
+extracted into this one function so it can also be applied to freshly
+loaded/merged collection items — it recurses into `CollectionLayer.items`,
+which the original two scans never did (a real pre-existing gap: a
+`CollectionLayer`'s ingested items, restored via an ordinary full-session
+load, never got this wiring at all).
+
+**Known gap surfaced by this feature, not fixed by it**:
+`CollectionLayer.ingest()`/`eject()` call `Layer.removeFromStack()`
+directly and never follow `hiddenHelper` — unlike
+`LayerStackWidget._reorderLiveStack()`, which explicitly re-homes a helper
+alongside its host on every main-stack reorder. Ingesting a `Clip<Shape>`
+layer into a collection today leaves its mask-tracker helper behind in the
+main stack (it keeps working — pull-evaluation only cares about
+reachability via `_maskTracker`, not stack membership — but is a
+bookkeeping/visual orphan). `serializeCollection()`'s closure walk still
+finds such helpers correctly via `hiddenHelper` regardless of where they
+live.
+
 ### `MotionBlurLayer`
 
 Temporal accumulation layer that maintains a persistent cache canvas. On each

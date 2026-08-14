@@ -61,6 +61,7 @@ import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
 import { TraceLayer }        from '../layers/TraceLayer.js'
 import * as Persistence      from '../persistence/Persistence.js'
 import * as MobileStore      from '../persistence/MobileStore.js'
+import { serializeCollection, deserializeCollection, type CollectionSaveFile } from '../persistence/CollectionExport.js'
 import { openGallery }       from '../ui/MobileGallery.js'
 
 // Bind a TempoLayer's timeSlot to the shared singleton Clock, if not already
@@ -191,6 +192,10 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof CollectionLayer) {
     newLayer.setEjectCallback(() => refreshStack())
     newLayer.setDeleteCallback((layer) => deletionLayer.archive(layer))
+    newLayer.setSaveLoadCallbacks(
+      () => handleSaveCollection(newLayer),
+      () => handleLoadCollection(newLayer),
+    )
   }
   if (newLayer instanceof TutorialLayer) {
     wireTutorialLayer(newLayer)
@@ -1013,6 +1018,99 @@ const persistenceCtx: Persistence.PersistenceContext = {
   root, clock, deletionLayer, backgroundLayer, menuLayer, selected: null,
 }
 
+// Per-layer post-restore wiring — attaches callbacks/inspector hooks that
+// Persistence.deserialize / CollectionExport.deserializeCollection don't
+// (and can't) set up themselves. Shared by applyLoadedSession's stack/
+// archive scans below AND by the collection-file load paths
+// (handleLoadCollection, the OS JSON-drop handler) — recurses into
+// CollectionLayer.items so a collection restored via any of those routes
+// gets its ingested items wired exactly like a normal on-stack layer,
+// rather than leaving their convenience buttons/inspectors dead.
+const isClipShapeMovable = (l: Layer): l is ClipShapeMovable =>
+  l instanceof ClipRectLayer || l instanceof ClipEllipseLayer ||
+  l instanceof ClipPathLayer || l instanceof ClipDrawingLayer
+
+const isTrackShapeLayer = (l: Layer) =>
+  l instanceof TrackRectLayer || l instanceof TrackEllipseLayer || l instanceof TrackPathLayer
+
+const isAnimatableShape = (l: Layer): l is ShapeLayer =>
+  l instanceof ShapeLayer && !isClipShapeMovable(l) && !isTrackShapeLayer(l)
+
+function wireLoadedLayer(l: Layer): void {
+  if (l instanceof CollectionLayer) {
+    l.setEjectCallback(() => refreshStack())
+    l.setDeleteCallback((layer) => deletionLayer.archive(layer))
+    l.setSaveLoadCallbacks(() => handleSaveCollection(l), () => handleLoadCollection(l))
+    for (const item of l.items) wireLoadedLayer(item)
+  }
+  if (l instanceof AmountLayer)      wireCalcButton(l)
+  if (l instanceof AnimPathLayer)    wireAnimPathLayer(l)
+  if (l instanceof ColourLayer)      { wireColourFillButton(l); wireColourSampleSetup(l) }
+  if (l instanceof ImageLayer) { wireImageLayer(l); l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
+  if (l instanceof VideoLayer) {
+    wireVideoTrackButton(l)
+    wireVideoEventButton(l)
+    l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  }
+  if (l instanceof TileLayer) {
+    l.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  }
+  if (isAnimatableShape(l))          wireAnimatableShape(l)
+  if (l instanceof TrackRectLayer    || l instanceof TrackEllipseLayer ||
+      l instanceof TrackPathLayer    || l instanceof TrackDrawingLayer)
+    wireTrackLayer(l)
+  if (isClipShapeMovable(l))         wireClipShapeLayer(l)
+  if (l instanceof ShapeLayer && !isClipShapeMovable(l) && !isTrackShapeLayer(l)) wireMaskButton(l)
+  if (l instanceof TextLayer) {
+    wireTextMaskButton(l)
+    wirePointButton(l)
+    l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  }
+  if (l instanceof LineLayer) {
+    wireLineMaskButton(l)
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.widthWidget.onInspectorRequest   = wi
+    l.opacityWidget.onInspectorRequest = wi
+  }
+  if (l instanceof TraceLayer)      wireTraceButtons(l)
+  if (l instanceof ShapeLayer && !isClipShapeMovable(l) && !isTrackShapeLayer(l)) wirePointButton(l)
+  if (l instanceof LineLayer)       wirePointButton(l)
+  if (l instanceof StrokeLayer)     wireStrokeSnapPoint(l)
+  if (l instanceof LineLayer)       wireLineSnapPoint(l)
+  if (l instanceof PointLayer) {
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.amountWidget.onInspectorRequest = wi
+    l.speedWidget.onInspectorRequest  = wi
+  }
+  if (l instanceof ShapeLayer) {
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.opacityWidget.onInspectorRequest     = wi
+    l.strokeWidthWidget.onInspectorRequest = wi
+    l.scaleWidget.onInspectorRequest       = wi
+    if (l instanceof PathLayer) l.radiusWidget.onInspectorRequest = wi
+  }
+  if (l instanceof TransformLayer)  l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  if (l instanceof CompositeLayer)  l.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  if (l instanceof FilterLayer)     l.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+  if (l instanceof MathLayer)       l.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
+  if (l instanceof MotionBlurLayer) {
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.fadeWidget.onInspectorRequest  = wi
+    l.delayWidget.onInspectorRequest = wi
+  }
+  if (l instanceof DirectionLayer)  l.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+  if (l instanceof NoiseLayer) {
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.scaleWidget.onInspectorRequest   = wi
+    l.speedWidget.onInspectorRequest   = wi
+    l.detailWidget.onInspectorRequest  = wi
+    l.driftWidget.onInspectorRequest   = wi
+    l.opacityWidget.onInspectorRequest = wi
+  }
+}
+
 // ── Shared: apply a loaded SaveFile to the running session ──────
 async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
   let selected: Layer | null = null
@@ -1022,158 +1120,8 @@ async function applyLoadedSession(json: Persistence.SaveFile): Promise<void> {
     console.warn('Persistence: failed to load save file', err)
     return
   }
-  // Restore callbacks on any layers that need post-insert wiring —
-  // Persistence.deserialize doesn't call main.ts callbacks.
-  const isClipShapeMovable = (l: Layer): l is ClipShapeMovable =>
-    l instanceof ClipRectLayer || l instanceof ClipEllipseLayer ||
-    l instanceof ClipPathLayer || l instanceof ClipDrawingLayer
-
-  const isTrackShapeLayer = (l: Layer) =>
-    l instanceof TrackRectLayer || l instanceof TrackEllipseLayer || l instanceof TrackPathLayer
-
-  const isAnimatableShape = (l: Layer): l is ShapeLayer =>
-    l instanceof ShapeLayer && !isClipShapeMovable(l) && !isTrackShapeLayer(l)
-
-  let scanL: Layer | null = root
-  while (scanL !== null) {
-    if (scanL instanceof CollectionLayer)  { scanL.setEjectCallback(() => refreshStack()); scanL.setDeleteCallback((layer) => deletionLayer.archive(layer)) }
-    if (scanL instanceof AmountLayer)      wireCalcButton(scanL)
-    if (scanL instanceof AnimPathLayer)    wireAnimPathLayer(scanL)
-    if (scanL instanceof ColourLayer)      { wireColourFillButton(scanL); wireColourSampleSetup(scanL) }
-    if (scanL instanceof ImageLayer) { wireImageLayer(scanL); scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
-    if (scanL instanceof VideoLayer) {
-      wireVideoTrackButton(scanL)
-      wireVideoEventButton(scanL)
-      scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (scanL instanceof TileLayer) {
-      scanL.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (isAnimatableShape(scanL))          wireAnimatableShape(scanL)
-    if (scanL instanceof TrackRectLayer    || scanL instanceof TrackEllipseLayer ||
-        scanL instanceof TrackPathLayer    || scanL instanceof TrackDrawingLayer)
-      wireTrackLayer(scanL)
-    if (isClipShapeMovable(scanL))         wireClipShapeLayer(scanL)
-    if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wireMaskButton(scanL)
-    if (scanL instanceof TextLayer) {
-      wireTextMaskButton(scanL)
-      wirePointButton(scanL)
-      scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (scanL instanceof LineLayer) {
-      wireLineMaskButton(scanL)
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.widthWidget.onInspectorRequest   = wi
-      scanL.opacityWidget.onInspectorRequest = wi
-    }
-    if (scanL instanceof TraceLayer)      wireTraceButtons(scanL)
-    if (scanL instanceof ShapeLayer && !isClipShapeMovable(scanL) && !isTrackShapeLayer(scanL)) wirePointButton(scanL)
-    if (scanL instanceof LineLayer)       wirePointButton(scanL)
-    if (scanL instanceof StrokeLayer)     wireStrokeSnapPoint(scanL)
-    if (scanL instanceof LineLayer)       wireLineSnapPoint(scanL)
-    if (scanL instanceof PointLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.amountWidget.onInspectorRequest = wi
-      scanL.speedWidget.onInspectorRequest  = wi
-    }
-    if (scanL instanceof ShapeLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.opacityWidget.onInspectorRequest     = wi
-      scanL.strokeWidthWidget.onInspectorRequest = wi
-      scanL.scaleWidget.onInspectorRequest       = wi
-      if (scanL instanceof PathLayer) scanL.radiusWidget.onInspectorRequest = wi
-    }
-    if (scanL instanceof TransformLayer)  scanL.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (scanL instanceof CompositeLayer)  scanL.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (scanL instanceof FilterLayer)     scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
-    if (scanL instanceof MathLayer)       scanL.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
-    if (scanL instanceof MotionBlurLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.fadeWidget.onInspectorRequest  = wi
-      scanL.delayWidget.onInspectorRequest = wi
-    }
-    if (scanL instanceof DirectionLayer)  scanL.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (scanL instanceof NoiseLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      scanL.scaleWidget.onInspectorRequest   = wi
-      scanL.speedWidget.onInspectorRequest   = wi
-      scanL.detailWidget.onInspectorRequest  = wi
-      scanL.driftWidget.onInspectorRequest   = wi
-      scanL.opacityWidget.onInspectorRequest = wi
-    }
-    scanL = scanL.layerAbove
-  }
-  for (const archived of deletionLayer.archivedLayers) {
-    if (archived instanceof CollectionLayer) { archived.setEjectCallback(() => refreshStack()); archived.setDeleteCallback((layer) => deletionLayer.archive(layer)) }
-    if (archived instanceof AmountLayer)     wireCalcButton(archived)
-    if (archived instanceof AnimPathLayer)   wireAnimPathLayer(archived)
-    if (archived instanceof ColourLayer)     { wireColourFillButton(archived); wireColourSampleSetup(archived) }
-    if (archived instanceof ImageLayer)      { wireImageLayer(archived); archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy) }
-    if (isAnimatableShape(archived))         wireAnimatableShape(archived)
-    if (archived instanceof VideoLayer) {
-      wireVideoTrackButton(archived)
-      wireVideoEventButton(archived)
-      archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (archived instanceof TileLayer) {
-      archived.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (archived instanceof TrackRectLayer    || archived instanceof TrackEllipseLayer ||
-        archived instanceof TrackPathLayer    || archived instanceof TrackDrawingLayer)
-      wireTrackLayer(archived)
-    if (isClipShapeMovable(archived))          wireClipShapeLayer(archived)
-    if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wireMaskButton(archived)
-    if (archived instanceof TextLayer) {
-      wireTextMaskButton(archived)
-      wirePointButton(archived)
-      archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    }
-    if (archived instanceof LineLayer) {
-      wireLineMaskButton(archived)
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.widthWidget.onInspectorRequest   = wi
-      archived.opacityWidget.onInspectorRequest = wi
-    }
-    if (archived instanceof TraceLayer)      wireTraceButtons(archived)
-    if (archived instanceof ShapeLayer && !isClipShapeMovable(archived) && !isTrackShapeLayer(archived)) wirePointButton(archived)
-    if (archived instanceof LineLayer)       wirePointButton(archived)
-    if (archived instanceof StrokeLayer)     wireStrokeSnapPoint(archived)
-    if (archived instanceof LineLayer)       wireLineSnapPoint(archived)
-    if (archived instanceof PointLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.amountWidget.onInspectorRequest = wi
-      archived.speedWidget.onInspectorRequest  = wi
-    }
-    if (archived instanceof ShapeLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.opacityWidget.onInspectorRequest     = wi
-      archived.strokeWidthWidget.onInspectorRequest = wi
-      archived.scaleWidget.onInspectorRequest       = wi
-      if (archived instanceof PathLayer) archived.radiusWidget.onInspectorRequest = wi
-    }
-    if (archived instanceof TransformLayer)  archived.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (archived instanceof CompositeLayer)  archived.blendWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (archived instanceof FilterLayer)     archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
-    if (archived instanceof MathLayer)       archived.wireSliderInspectors((slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy))
-    if (archived instanceof MotionBlurLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.fadeWidget.onInspectorRequest  = wi
-      archived.delayWidget.onInspectorRequest = wi
-    }
-    if (archived instanceof DirectionLayer)  archived.speedWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    if (archived instanceof NoiseLayer) {
-      const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
-      archived.scaleWidget.onInspectorRequest   = wi
-      archived.speedWidget.onInspectorRequest   = wi
-      archived.detailWidget.onInspectorRequest  = wi
-      archived.driftWidget.onInspectorRequest   = wi
-      archived.opacityWidget.onInspectorRequest = wi
-    }
-  }
+  for (let scanL: Layer | null = root; scanL !== null; scanL = scanL.layerAbove) wireLoadedLayer(scanL)
+  for (const archived of deletionLayer.archivedLayers) wireLoadedLayer(archived)
   widget.setVisible(true)
   refreshStack(selected ?? menuLayer)
 }
@@ -1222,6 +1170,76 @@ function handleLoadDesktop(): void {
         return
       }
       await applyLoadedSession(json)
+    })()
+  }
+  input.click()
+}
+
+// ── Collection save/load — scoped to a single CollectionLayer, wired to
+// its own header-pill Save/Load buttons (CollectionLayer.setSaveLoadCallbacks),
+// not the main menu. Desktop file download/upload only, same as the full-
+// session flow above — no mobile gallery for v1. ──────────────────
+async function handleSaveCollection(collection: CollectionLayer): Promise<void> {
+  const saveFile = await serializeCollection(collection, persistenceCtx)
+  const now = new Date()
+  const stamp = now.getFullYear()
+    + '-' + String(now.getMonth() + 1).padStart(2, '0')
+    + '-' + String(now.getDate()).padStart(2, '0')
+    + '_' + String(now.getHours()).padStart(2, '0')
+    + String(now.getMinutes()).padStart(2, '0')
+  const name = collection.debugName.trim().replace(/\s+/g, '_').toLowerCase() || 'collection'
+  downloadJSON(`${name}_${stamp}.json`, JSON.stringify(saveFile))
+}
+
+// deserializeCollection always instantiates a fresh root CollectionLayer
+// for the file's own record; when merging into an existing target that
+// root is discarded. Its constructor already called graph.register(), and
+// if its indexSlot happened to be bound (phase 7 of deserializeCollection),
+// that created a BindingLayer too — both must be torn down here, or they
+// leak into graph.nodes forever (same concern teardownSession handles for
+// a full-session reload, scoped down to just this one throwaway layer).
+function discardImportedCollectionRoot(root: CollectionLayer): void {
+  for (const node of [...graph.nodes]) {
+    if (node instanceof BindingLayer && node.slot.owner === root) node.remove()
+  }
+  graph.unregister(root)
+}
+
+function handleLoadCollection(target: CollectionLayer): void {
+  const input = document.createElement('input')
+  input.type   = 'file'
+  input.accept = 'application/json'
+  input.style.display = 'none'
+  document.body.appendChild(input)
+  input.onchange = () => {
+    const file = input.files?.[0]
+    document.body.removeChild(input)
+    if (!file) return
+    void (async () => {
+      let json: CollectionSaveFile
+      try {
+        json = JSON.parse(await file.text())
+      } catch {
+        console.warn('CollectionExport: failed to parse file')
+        return
+      }
+      if (json.kind !== 'palimpsest-collection') {
+        console.warn('CollectionExport: not a collection save file')
+        return
+      }
+      let result: Awaited<ReturnType<typeof deserializeCollection>>
+      try {
+        result = await deserializeCollection(json, persistenceCtx)
+      } catch (err) {
+        console.warn('CollectionExport: failed to load collection file', err)
+        return
+      }
+      discardImportedCollectionRoot(result.root)
+      target.restoreItems(result.itemLayers)
+      for (const bg of result.backgroundLayers) backgroundLayer.add(bg)
+      for (const item of result.itemLayers)       wireLoadedLayer(item)
+      for (const bg of result.backgroundLayers)   wireLoadedLayer(bg)
+      refreshStack()
     })()
   }
   input.click()
@@ -1744,6 +1762,27 @@ function isVideoDrag(e: DragEvent): boolean {
   return item !== undefined && item.kind === 'file' && item.type.startsWith('video/')
 }
 
+// Gates the stack-widget hover-ghost mechanic (below): only image/video
+// drags get it. A browser cannot reveal a dragged file's actual content
+// before drop — this is a deliberate security restriction, not a gap we
+// can work around: DataTransferItem exposes only a coarse, occasionally
+// wrong `type` guess during dragover (see isVideoDrag above), and neither
+// getAsFile() nor any way to read file bytes/text is available until drop.
+// So rather than trying to positively identify e.g. a collection-export
+// .json this way (unreliable in the other direction too — some OS/browser
+// combos never report "application/json" for a .json file at all, unlike
+// image/video types which are almost always guessed correctly), we only
+// commit to the ghost when the guess confidently looks like an image or
+// video. Everything else (collection files, unknown types) falls through
+// to the generic file-drag affordance and is resolved for real once the
+// actual File is available — at drop, see the collection-file branch
+// there, which reads the file's content, not just its name/MIME.
+function isImageOrVideoDrag(e: DragEvent): boolean {
+  const item = e.dataTransfer?.items[0]
+  return item !== undefined && item.kind === 'file'
+    && (item.type.startsWith('image/') || item.type.startsWith('video/'))
+}
+
 // Amber-highlights the audioSlot row of a selected EventLayer/TempoLayer
 // while an OS file is being dragged anywhere inside its audio-onset pill —
 // see Layer.fileDropTarget. Deliberately not gated on the dragged file's
@@ -1783,7 +1822,13 @@ canvas.addEventListener('dragover', (e) => {
 
   const pt = { x: e.offsetX, y: e.offsetY }
 
-  if (widget.inBounds(pt)) {
+  // Stack-widget hover-ghost mechanic — "choose an exact insert position"
+  // — only for drags that confidently look like image/video (see
+  // isImageOrVideoDrag above for why this is a positive gate rather than
+  // trying to detect e.g. collection files by exclusion). Anything else,
+  // including collection-file drags, falls through to the generic
+  // file-drag-active affordance below and is resolved for real at drop.
+  if (widget.inBounds(pt) && isImageOrVideoDrag(e)) {
     if (Node.fileDragActive) {
       Node.fileDragActive = false
       Node.scheduleFrame?.()
@@ -1865,6 +1910,50 @@ canvas.addEventListener('drop', (e) => {
   }
 
   if (!file) return
+
+  // A .json drop might be a collection export rather than an image/video —
+  // confirmed by the parsed `kind` field, never trusted from
+  // extension/MIME alone (same principle as the video-type re-derivation
+  // above). Branches out entirely before the image/video logic; on any
+  // failure this is a silent no-op rather than falling through to a
+  // nonsensical ImageLayer-from-JSON attempt.
+  if (file.type === 'application/json' || file.name.toLowerCase().endsWith('.json')) {
+    const selectedAtDrop = widget.selected
+    void (async () => {
+      let json: CollectionSaveFile
+      try {
+        json = JSON.parse(await file.text())
+      } catch {
+        return
+      }
+      if (json.kind !== 'palimpsest-collection') return
+
+      let result: Awaited<ReturnType<typeof deserializeCollection>>
+      try {
+        result = await deserializeCollection(json, persistenceCtx)
+      } catch (err) {
+        console.warn('CollectionExport: failed to load collection file', err)
+        return
+      }
+
+      result.root.restoreItems(result.itemLayers)
+      for (const bg of result.backgroundLayers) backgroundLayer.add(bg)
+
+      if (selectedAtDrop instanceof MenuLayer) {
+        result.root.insertAbove(menuLayer.layerBelow ?? lowestAnchor())
+      } else if (selectedAtDrop !== null) {
+        insertAboveSelected(result.root, selectedAtDrop)
+      } else {
+        result.root.insertAbove(lowestAnchor())
+      }
+
+      postInsertLayer(result.root)
+      for (const item of result.itemLayers)     wireLoadedLayer(item)
+      for (const bg of result.backgroundLayers) wireLoadedLayer(bg)
+      refreshStack(result.root)
+    })()
+    return
+  }
 
   const dropPoint  = { x: e.offsetX, y: e.offsetY }
   const selected   = widget.selected

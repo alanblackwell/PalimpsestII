@@ -224,7 +224,7 @@ async function dataURLToBitmap(dataURL: string): Promise<ImageBitmap> {
 
 // Walk a serializeState() result, replacing any OffscreenCanvas/ImageBitmap
 // values with PNG data-URLs so the result is JSON-safe.
-async function encodeState(state: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function encodeState(state: Record<string, unknown>): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(state)) {
     out[key] = isImageSurface(value) ? await surfaceToDataURL(value) : value
@@ -234,7 +234,7 @@ async function encodeState(state: Record<string, unknown>): Promise<Record<strin
 
 // Walk a saved state record, replacing any PNG data-URL strings with decoded
 // ImageBitmaps, ready to pass to deserializeState.
-async function decodeState(state: Record<string, unknown>): Promise<Record<string, unknown>> {
+export async function decodeState(state: Record<string, unknown>): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(state)) {
     out[key] = (typeof value === 'string' && value.startsWith('data:image/'))
@@ -408,15 +408,15 @@ export function teardownSession(ctx: PersistenceContext): void {
 // Load
 // ------------------------------------------------------------
 
-interface MaskTrackerHost {
+export interface MaskTrackerHost {
   setMaskTracker(helper: MaskLayer): void
 }
 
-function hasMaskTracker(layer: Layer): layer is Layer & MaskTrackerHost {
+export function hasMaskTracker(layer: Layer): layer is Layer & MaskTrackerHost {
   return typeof (layer as unknown as { setMaskTracker?: unknown }).setMaskTracker === 'function'
 }
 
-function resolveSource(id: number, idToLayer: Map<number, Layer>, ctx: PersistenceContext): Node | null {
+export function resolveSource(id: number, idToLayer: Map<number, Layer>, ctx: PersistenceContext): Node | null {
   switch (id) {
     case SENTINEL_CLOCK:      return ctx.clock
     case SENTINEL_DELETION:   return ctx.deletionLayer
