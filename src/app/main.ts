@@ -1695,6 +1695,15 @@ startupLayer.insertAbove(deletionLayer)
 
 refreshStack(startupLayer)
 
+// Promotes the Startup screen into the normal Menu state — used when a file
+// is dropped directly onto the startup screen (see drag-and-drop handlers
+// below), mirroring the "Menu" button callback above.
+function promoteStartupToMenu(): void {
+  widget.setVisible(true)
+  startupLayer.removeFromStack()
+  menuLayer.insertAbove(deletionLayer)
+}
+
 // ------------------------------------------------------------------
 // Drag-and-drop media loading — always creates a new ImageLayer (for
 // image files) or VideoLayer (for video files)
@@ -1911,26 +1920,43 @@ canvas.addEventListener('drop', (e) => {
 
   if (!file) return
 
-  // A .json drop might be a collection export rather than an image/video —
-  // confirmed by the parsed `kind` field, never trusted from
-  // extension/MIME alone (same principle as the video-type re-derivation
-  // above). Branches out entirely before the image/video logic; on any
-  // failure this is a silent no-op rather than falling through to a
-  // nonsensical ImageLayer-from-JSON attempt.
+  // A .json drop might be a full session save or a collection export rather
+  // than an image/video — confirmed by inspecting the parsed JSON shape,
+  // never trusted from extension/MIME alone (same principle as the
+  // video-type re-derivation above). Branches out entirely before the
+  // image/video logic; on any failure this is a silent no-op rather than
+  // falling through to a nonsensical ImageLayer-from-JSON attempt.
   if (file.type === 'application/json' || file.name.toLowerCase().endsWith('.json')) {
-    const selectedAtDrop = widget.selected
+    let selectedAtDrop = widget.selected
+    if (selectedAtDrop instanceof StartupLayer) {
+      promoteStartupToMenu()
+      selectedAtDrop = menuLayer
+    }
     void (async () => {
-      let json: CollectionSaveFile
+      let json: unknown
       try {
         json = JSON.parse(await file.text())
       } catch {
         return
       }
-      if (json.kind !== 'palimpsest-collection') return
+      if (json === null || typeof json !== 'object') return
+
+      // Full session save — same shape Persistence.serialize() produces,
+      // loaded exactly as if "Load" had been pressed on MenuLayer. Checked
+      // first since it, unlike a collection file, has no `kind` field.
+      const maybeSession = json as Partial<Persistence.SaveFile>
+      if (typeof maybeSession.version === 'number' && Array.isArray(maybeSession.stack)
+          && maybeSession.canvas && maybeSession.clock) {
+        await applyLoadedSession(json as Persistence.SaveFile)
+        return
+      }
+
+      if ((json as { kind?: unknown }).kind !== 'palimpsest-collection') return
+      const collectionJson = json as CollectionSaveFile
 
       let result: Awaited<ReturnType<typeof deserializeCollection>>
       try {
-        result = await deserializeCollection(json, persistenceCtx)
+        result = await deserializeCollection(collectionJson, persistenceCtx)
       } catch (err) {
         console.warn('CollectionExport: failed to load collection file', err)
         return
@@ -1956,7 +1982,11 @@ canvas.addEventListener('drop', (e) => {
   }
 
   const dropPoint  = { x: e.offsetX, y: e.offsetY }
-  const selected   = widget.selected
+  let selected     = widget.selected
+  if (selected instanceof StartupLayer) {
+    promoteStartupToMenu()
+    selected = menuLayer
+  }
 
   const newLayer: ImageLayer | VideoLayer = file.type.startsWith('video/')
     ? new VideoLayer()
@@ -2122,7 +2152,11 @@ canvas.addEventListener('drop', (e) => {
 // layer — or below MenuLayer if MenuLayer is selected. Shared by the OS
 // text-drop handler above and the global system-paste action below.
 function createTextLayerFromText(text: string): void {
-  const selected = widget.selected
+  let selected = widget.selected
+  if (selected instanceof StartupLayer) {
+    promoteStartupToMenu()
+    selected = menuLayer
+  }
 
   const newLayer = new TextLayer()
   Layer.assignDebugName(newLayer)
