@@ -4,6 +4,7 @@ import type { Ctx2D, Point } from '../core/types.js'
 import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 import { stackWidgetWidth } from './layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { AmountLayer } from '../layers/AmountLayer.js'
 import {
   HOTSPOT_RGB, sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow,
 } from './hotspot.js'
@@ -165,12 +166,22 @@ export class LayerStackWidget {
 
   get widgetWidth(): number { return this._widgetW() }
 
-  // Handle a key press. Returns true if the key was consumed.
-  handleKey(key: string): boolean {
+  // Handle a key press. Returns true if the key was consumed. displayMode
+  // widens the ArrowLeft/Right Amount-nudge fallback below to search down
+  // the stack from the current selection, since there's no other layer to
+  // pick in display mode; in edit mode it only fires when the selected
+  // layer is itself the AmountLayer (mouse/slider is already the direct way
+  // to reach any other AmountLayer in the stack).
+  handleKey(key: string, displayMode = false): boolean {
     // Let the selected layer claim ArrowLeft/Right first (e.g. TutorialLayer page nav).
     if (key === 'ArrowLeft' || key === 'ArrowRight') {
       const sel = this.selected as any
       if (typeof sel?.handlePageNavKey === 'function' && sel.handlePageNavKey(key)) return true
+      const amount = this._findAmountTarget(displayMode)
+      if (amount !== null) {
+        amount.adjustValue(key === 'ArrowRight' ? 1 : -1)
+        return true
+      }
     }
     if (key === 'Shift+ArrowUp')   { this.moveUp();      return true }
     if (key === 'Shift+ArrowDown') { this.moveDown();    return true }
@@ -178,6 +189,19 @@ export class LayerStackWidget {
     if (key === 'ArrowDown')       { this.navigateDown(); return true }
     if (key === 'h' || key === 'H') { this.toggleVisible(); return true }
     return false
+  }
+
+  // The AmountLayer an ArrowLeft/Right keypress should nudge, or null if
+  // none applies — see handleKey's displayMode note above.
+  private _findAmountTarget(displayMode: boolean): AmountLayer | null {
+    const sel = this._selected
+    if (sel instanceof AmountLayer) return sel
+    if (!displayMode || sel === null) return null
+    for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
+      if (l.isInfrastructure || l.isHiddenHelper) continue
+      if (l instanceof AmountLayer) return l
+    }
+    return null
   }
 
   toggleVisible(): void { this.setVisible(!this._visible) }

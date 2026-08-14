@@ -1099,7 +1099,10 @@ export class InteractionSystem {
       const isEditModeKey = key === 'h' || key === 'H' ||
                             key === 'Shift+ArrowUp' || key === 'Shift+ArrowDown'
       if (isEditModeKey && this._getDisplayMode()) this._spaceAction?.()
-      if (this._widget.handleKey(key)) e.preventDefault()
+      // ArrowLeft/Right's Amount-nudge fallback (LayerStackWidget.handleKey)
+      // also stays live in display mode without switching to edit mode first —
+      // same "no need to drop into edit mode" reasoning as ArrowUp/ArrowDown above.
+      if (this._widget.handleKey(key, this._getDisplayMode())) e.preventDefault()
     }
   }
 

@@ -287,6 +287,29 @@ when the two dimensions are within 20 px of equal. When snapped: edge handles fi
 dimension to the other; corner handles snap both to their average (preserving the anchor-opposite-edge
 invariant by recomputing `shiftX`/`shiftY` from the snapped sizes before the centre-shift step).
 
+### ArrowLeft/Right — AmountLayer keyboard nudge
+
+`AmountLayer.adjustValue(dir: 1 | -1)` nudges the slider by `ARROW_STEP`
+(0.02), suspending any active slot first (same suspend-on-touch convention
+as dragging the slider). Wired from `LayerStackWidget.handleKey` — checked
+*after* the existing `handlePageNavKey` claim (e.g. `TutorialLayer`'s page
+nav) so an established ArrowLeft/Right binding still wins — via
+`_findAmountTarget(displayMode)`:
+- If the currently selected layer **is** the `AmountLayer`, that's always
+  the target, in either mode.
+- Otherwise, only in **display mode** (no other layer to explicitly select
+  there), it searches down the stack from the selection
+  (`layerBelow`, skipping `isInfrastructure`/`isHiddenHelper`) for the first
+  `AmountLayer` and nudges that instead.
+- In edit mode, no downward search — arrow keys are left free for whatever
+  other layer is currently selected (handle-nudging, etc.) unless that
+  layer itself is the `AmountLayer`.
+
+`InteractionSystem` passes `displayMode` into `handleKey` for exactly this;
+ArrowLeft/Right otherwise needs no edit-mode switch first, same reasoning
+as plain ArrowUp/ArrowDown (layer navigation) already documented at that
+call site.
+
 ### Event-slot toggle buttons
 
 Two conventions for a manual button beside an `Event`-typed slot that flips
@@ -845,6 +868,20 @@ as `ShapeLayer`'s, using `Mask` accent `#cfcf7e`). Because they don't extend
 Wiring: `wireTextMaskButton` / `wireLineMaskButton` in `main.ts`, called from
 `postInsertLayer` and the `applyLoadedSession` scan loop (same pattern as
 `wireMaskButton` for `ShapeLayer`).
+
+### `TextLayer` — canvas-relative font size cap
+
+The size slider/stepper's upper bound is `maxTextSize()` — `2 × max(Node.canvasWidth,
+Node.canvasHeight)` — not a fixed px constant, so a single word (or single
+character) can be scaled up to fill the whole screen regardless of canvas/device
+size. `MIN_SIZE` (12) stays fixed. All five places that previously read the old
+fixed `MAX_SIZE` (the Amount-slot `[0,1]` mapping in both directions, the
+mask-fit binary-search bound, and the scale-handle drag clamp) now call
+`maxTextSize()`. The `−`/`+` size-stepper buttons (`adjustSize(dir: 1 | -1)`)
+step by ~10% of the current size (floor 4px) rather than a fixed 4px — a fixed
+step would take hundreds of clicks to cross the now much wider range; the
+scale-drag handle (`renderOverlay`) remains the fastest way to reach the top
+of the range.
 
 ### Slot label convention
 

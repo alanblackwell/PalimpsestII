@@ -28,7 +28,7 @@ import { drawIcon } from '../ui/icons.js'
 // Input slots:
 //   positionSlot  (Point)  — anchor for unmasked text.
 //   colourSlot    (Colour) — text fill colour.
-//   sizeSlot      (Amount) — maps [0,1] → [MIN_SIZE, MAX_SIZE] px.
+//   sizeSlot      (Amount) — maps [0,1] → [MIN_SIZE, maxTextSize()] px.
 //   maskSlot      (Mask)   — when bound, text flows within the mask
 //                            shape (scanline word-wrap).
 //
@@ -46,8 +46,15 @@ const ACCENT       = '#c8c8e8'
 const DIR_ACCENT   = '#7ecfcf'
 const AM_COL       = '#4a8fe8'   // Amount type accent
 const MIN_SIZE     = 12
-const MAX_SIZE     = 120
 const DEFAULT_SIZE = 48
+
+// Upper bound on font size scales with the canvas so a single word (or a
+// single character) can be blown up to fill the whole screen on any device,
+// rather than a fixed px cap that's generous on mobile but cramped on a
+// large desktop canvas.
+function maxTextSize(): number {
+  return Math.max(Node.canvasWidth, Node.canvasHeight) * 2
+}
 
 // Big keyboard-edit + size-adjust row — top row, mobile-priority controls.
 // Target square size for the edit/size buttons, shrinking to KB_MIN on
@@ -56,7 +63,7 @@ const KB_SZ      = 48
 const KB_MIN     = 36
 const KB_GAP     = 6
 const KB_MARGIN  = 8
-const KB_VALUE_W = 36   // width reserved for the "NNpx" readout between size buttons
+const KB_VALUE_W = 46   // width reserved for the "NNNNpx" readout between size buttons
 
 // Controls-row geometry (font/bold/italic row, and the align/spacing rows below it)
 const CTRL_H   = 28
@@ -364,7 +371,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (slot === this._positionSlot) return this._manualPosition ?? this._position
     if (slot === this._sizeSlot) {
       const size = this._localMaskFittedSize ?? this._manualSize
-      return Math.max(0, Math.min(1, (size - MIN_SIZE) / (MAX_SIZE - MIN_SIZE)))
+      return Math.max(0, Math.min(1, (size - MIN_SIZE) / (maxTextSize() - MIN_SIZE)))
     }
     if (slot === this._rotationSlot)    return { angle: this._rotation, magnitude: 1 }
     if (slot === this._opacitySlot)     return this._manualOpacity
@@ -550,7 +557,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   toggleBold(): void   { this._bold   = !this._bold;   this.markDirty() }
   toggleItalic(): void { this._italic = !this._italic; this.markDirty() }
 
-  adjustSize(delta: number): void {
+  // dir: +1 or -1. Step scales with the current size (≈10%, floor 4px) so the
+  // −/+ buttons stay usable across a range that now spans MIN_SIZE up to a
+  // canvas-filling maxTextSize() — a fixed 4px step would take hundreds of
+  // clicks to reach the top of that range.
+  adjustSize(dir: 1 | -1): void {
     if (this._maskSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._maskSlot)?.toggle()
       this._manualSize = Math.round(this._size)  // seed from auto-fitted size
@@ -558,7 +569,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       this._manualSize = Math.round(this._localMaskFittedSize)
       this._localMaskFittedSize = null  // user takes over from here
     }
-    this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, this._manualSize + delta))
+    const step = Math.max(4, Math.round(this._manualSize * 0.1))
+    this._manualSize = Math.max(MIN_SIZE, Math.min(maxTextSize(), this._manualSize + dir * step))
     this.markDirty()
   }
 
@@ -922,7 +934,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
     if (this._sizeSlot.isActive) {
       const t = (this._sizeSlot.source as AmountSource).getAmount() as Amount
-      this._size = MIN_SIZE + t * (MAX_SIZE - MIN_SIZE)
+      this._size = MIN_SIZE + t * (maxTextSize() - MIN_SIZE)
     } else {
       this._size = this._manualSize
     }
@@ -1086,11 +1098,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       : null
   }
 
-  // Binary-search for the largest integer font size [MIN_SIZE, MAX_SIZE] at
-  // which all of _text fits within the mask scanlines.  Returns MIN_SIZE if
+  // Binary-search for the largest integer font size [MIN_SIZE, maxTextSize()]
+  // at which all of _text fits within the mask scanlines.  Returns MIN_SIZE if
   // even the smallest size overflows (text is not hidden, just not auto-fit).
   private _autoFitSize(rows: Scanline[], ctx: OffscreenCanvasRenderingContext2D): number {
-    let lo = MIN_SIZE, hi = MAX_SIZE, best = MIN_SIZE
+    let lo = MIN_SIZE, hi = maxTextSize(), best = MIN_SIZE
     while (lo <= hi) {
       const mid = (lo + hi) >> 1
       if (this._textFitsInMask(mid, rows, ctx)) { best = mid; lo = mid + 1 }
@@ -1236,11 +1248,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         return true
       }
       if (boundingBoxContains(this._sizeMinusBounds(), point)) {
-        this.adjustSize(-4)
+        this.adjustSize(-1)
         return true
       }
       if (boundingBoxContains(this._sizePlusBounds(), point)) {
-        this.adjustSize(+4)
+        this.adjustSize(+1)
         return true
       }
       return false
@@ -1367,7 +1379,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
       const s = this._drag.startSize * (d / this._drag.startDist)
-      this._manualSize = Math.max(MIN_SIZE, Math.min(MAX_SIZE, s))
+      this._manualSize = Math.max(MIN_SIZE, Math.min(maxTextSize(), s))
     } else {
       // rotate
       const angle  = Math.atan2(point.y - this._drag.center.y, point.x - this._drag.center.x)

@@ -52,6 +52,7 @@ export class AmountLayer extends Layer implements AmountSource {
   private static readonly PAD_X       = 10
   private static readonly PAD_Y       = 6
   private static readonly LABEL_WIDTH = 112  // value label + 3 slot indicators
+  private static readonly ARROW_STEP  = 0.02 // left/right-arrow nudge amount
 
   constructor(initial: Amount = 0.5) {
     super()
@@ -82,6 +83,17 @@ export class AmountLayer extends Layer implements AmountSource {
 
   setValue(v: Amount): void {
     this._value = v
+    this.markDirty()
+  }
+
+  // Left/right-arrow nudge (LayerStackWidget.handleKey — works in both edit
+  // and display mode, see CLAUDE.md). Same suspend-on-touch convention as
+  // dragging the slider directly: an active binding is suspended first so
+  // the keypress reliably takes visible effect.
+  adjustValue(dir: 1 | -1): void {
+    this._suspendActiveSlots()
+    this._value = Math.max(0, Math.min(1, this._value + dir * AmountLayer.ARROW_STEP)) as Amount
+    this._slider.displayValue = this._value
     this.markDirty()
   }
 
