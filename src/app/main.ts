@@ -429,14 +429,29 @@ function postInsertLayer(newLayer: Layer): void {
 }
 
 // Wire an AmountLayer's "Calc" convenience button: creates a MathLayer below,
-// binds the AmountLayer as its input, and selects the new MathLayer.
+// binds the AmountLayer as its input, and selects the new MathLayer. Any slot
+// still bound directly to the AmountLayer is rewired to the MathLayer's
+// output instead, so existing consumers now see the calculated value rather
+// than the raw amount.
 function wireCalcButton(layer: AmountLayer): void {
   layer.setOnAddCalc(() => {
+    // Snapshot every slot currently sourced from `layer` before it gets a
+    // new dependent of its own (the MathLayer's inputSlot).
+    const dependentSlots: ParameterSlot[] = []
+    for (const node of graph.nodes) {
+      for (const slot of node.slotList) {
+        if (slot.source === layer) dependentSlots.push(slot)
+      }
+    }
+
     const math = new MathLayer()
     Layer.assignDebugName(math)
     math.bounds = { x: X, y: 24, width: W, height: 36 }
     math.insertBelow(layer)
     BindingLayer.create(layer, math.inputSlot)
+
+    for (const slot of dependentSlots) BindingLayer.create(math, slot)
+
     postInsertLayer(math)
     refreshStack(math)   // select the new Calc layer
   })
@@ -1526,6 +1541,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
         newLayer.bounds = { x: X, y: 24, width: W, height: DEFAULT_VALUE_HEIGHT[slot.type] ?? 36 }
         newLayer.insertAbove(consumer)
         BindingLayer.create(newLayer, slot)
+        if (newLayer instanceof AmountLayer) postInsertLayer(newLayer)
         refreshStack(newLayer)
         return
       }
@@ -1602,6 +1618,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     newLayer.insertAbove(consumer)
     BindingLayer.create(newLayer, slot)
     if (newLayer instanceof TempoLayer) bindRateClock(newLayer)
+    if (newLayer instanceof AmountLayer) postInsertLayer(newLayer)
     refreshStack(newLayer)
     return
   }
