@@ -458,6 +458,7 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
     layer.helperBelow    = record.helperBelow
     const decoded = await decodeState(record.state)
     layer.deserializeState(decoded)
+    if (layer instanceof VideoLayer) await layer.tryAutoRelink()
   }
 
   // Phase 2b — restore CollectionLayer ingested items (this._layers). These

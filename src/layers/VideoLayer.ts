@@ -18,6 +18,7 @@ import { detectFaces, detectSkin, rgbaToGray, type SkinResult } from './haarFace
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
+import * as VideoFileHandleStore from '../persistence/VideoFileHandleStore.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -126,6 +127,15 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   // File playback
   private _objectUrl:  string | null = null
   private _filename    = ''
+  // Stable id (crypto.randomUUID(), minted on first handle capture) used to
+  // key this layer's FileSystemFileHandle in VideoFileHandleStore — Node has
+  // no stable per-instance id of its own (creationIndex is runtime-only,
+  // LayerRecord.id is a positional index recomputed every save).
+  private _fileHandleId: string | null = null
+  // True once a reload finds this layer's file source unavailable (handle
+  // missing/denied, or a filename-only save with no handle ever captured) —
+  // drives the File button's label/status until the user relinks manually.
+  private _needsRelink = false
   private _playing     = false
   private _duration    = 0
   private _currentTime = 0
@@ -206,6 +216,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   private _nextBtnB:          BBox | null = null
   private _playBtnB:          BBox | null = null
   private _scrubTrackB:       BBox | null = null
+  private _missingBarB:       BBox | null = null
   private _stallRestartBounds: BBox | null = null
 
   // ── Track / Event convenience buttons ───────────────────────────
@@ -337,19 +348,28 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   // ── File loading (public — called from drag-and-drop in main.ts) ──
 
-  loadFile(file: File): void {
+  // `handle` is present only when the file came from the File System Access
+  // picker (see _openFilePicker below) — drag-and-drop and the plain
+  // <input type=file> fallback call this with no handle, same as before.
+  loadFile(file: File, handle?: FileSystemFileHandle): void {
     this._stopCurrentSource()
     this._sourceType = 'file'
 
     if (this._objectUrl !== null) URL.revokeObjectURL(this._objectUrl)
     this._objectUrl   = URL.createObjectURL(file)
     this._filename    = file.name
+    this._needsRelink = false
     this._status      = 'loading…'
     this._duration    = 0
     this._currentTime = 0
     this._scrubbing   = false
     this._previewCanvas = null
     this._previewTime   = null
+
+    if (handle) {
+      this._fileHandleId ??= crypto.randomUUID()
+      void VideoFileHandleStore.putHandle(this._fileHandleId, handle)
+    }
 
     this._video.srcObject = null
     this._video.src = this._objectUrl
@@ -377,6 +397,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       frozen:          this._frozen,
       lastEventTime:   this._lastEventTime,
       filename:        this._filename,
+      fileHandleId:    this._fileHandleId,
       playing:         this._playing,
       currentTime:     this._currentTime,
       cx:              this._cx,
@@ -409,6 +430,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       this._lastEventTime = state.lastEventTime as EventValue
     }
     if (typeof state.filename === 'string')    this._filename     = state.filename
+    if (typeof state.fileHandleId === 'string') this._fileHandleId = state.fileHandleId
     if (typeof state.playing === 'boolean')    this._playing      = state.playing
     if (typeof state.currentTime === 'number') this._currentTime  = state.currentTime
     if (typeof state.cx === 'number')               this._cx             = state.cx
@@ -427,6 +449,15 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     // Restart the camera stream after restoring deviceIdx so the correct
     // device is selected. Screen and file sources can't be auto-restarted.
     if (this._sourceType === 'camera') void this._startCamera()
+
+    // A file source with no captured handle (older save, or a file that was
+    // drag-and-dropped rather than picked) has nothing for tryAutoRelink to
+    // look up — go straight to the manual Relink state rather than waiting
+    // on a lookup that can never succeed.
+    if (this._sourceType === 'file' && this._filename !== '' && this._fileHandleId === null) {
+      this._needsRelink = true
+      this._status = 'missing — click File to relink'
+    }
   }
 
   // ── Node — evaluate & recompute ───────────────────────────────
@@ -878,7 +909,29 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
   }
 
+  // Also the entry point for manually relinking a missing file after reload
+  // (the File button routes here whenever sourceType is already 'file' —
+  // see handlePointerDown below) — capturing a fresh handle here means even
+  // a manual relink restores auto-relink for the *next* reload.
   private _openFilePicker(): void {
+    if (VideoFileHandleStore.fileSystemAccessSupported) {
+      void (async () => {
+        let handles: FileSystemFileHandle[]
+        try {
+          handles = await window.showOpenFilePicker!({
+            types: [{ description: 'Video', accept: { 'video/*': [] } }],
+          })
+        } catch {
+          return // user cancelled the picker
+        }
+        const handle = handles[0]
+        if (!handle) return
+        const file = await handle.getFile()
+        this.loadFile(file, handle)
+      })()
+      return
+    }
+
     const input = document.createElement('input')
     input.type   = 'file'
     input.accept = 'video/*'
@@ -890,6 +943,40 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       if (file) this.loadFile(file)
     }
     input.click()
+  }
+
+  // Called once by Persistence.deserialize right after restoring this
+  // layer's state — not from any UI path. Tries to silently reconnect a
+  // captured FileSystemFileHandle; falls back to the manual Relink button
+  // (via _needsRelink) whenever that isn't possible.
+  async tryAutoRelink(): Promise<void> {
+    if (this._fileHandleId === null) return // nothing captured to retry
+
+    const handle = await VideoFileHandleStore.getHandle(this._fileHandleId)
+    if (handle === null) {
+      this._needsRelink = true
+      this._status = 'missing — click File to relink'
+      this.markDirty()
+      return
+    }
+
+    // queryPermission never itself prompts the user, so this is always safe
+    // to run unconditionally on load — only requestPermission would need an
+    // interactive gesture, which isn't available here.
+    const perm = (await handle.queryPermission?.({ mode: 'read' })) ?? 'granted'
+    if (perm !== 'granted') {
+      this._needsRelink = true
+      this._status = 'missing — click File to relink'
+      this.markDirty()
+      return
+    }
+
+    const file = await handle.getFile()
+    this.loadFile(file, handle)
+  }
+
+  get fileHandleId(): string | null {
+    return this._fileHandleId
   }
 
   // ── Shared helpers ─────────────────────────────────────────────
@@ -1326,6 +1413,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._fitBtnB     !== null && boundingBoxContains(this._fitBtnB,     point)) return this
     if (this._mirrorBtnB  !== null && boundingBoxContains(this._mirrorBtnB,  point)) return this
     if (this._playBtnB    !== null && boundingBoxContains(this._playBtnB,    point)) return this
+    if (this._missingBarB !== null && boundingBoxContains(this._missingBarB, point)) return this
     if (this._trackBtnB   !== null && boundingBoxContains(this._trackBtnB,   point)) return this
     if (this._eventBtnB   !== null && boundingBoxContains(this._eventBtnB,   point)) return this
     if (this._scrubHit(point)) return this
@@ -1410,6 +1498,13 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
     if (this._playBtnB !== null && boundingBoxContains(this._playBtnB, point)) {
       this._handleToggle()
+      return true
+    }
+    // Missing-file readout occupies the same spot the scrub bar normally
+    // does — a click there is a natural mis-click for "relink", so route it
+    // to the same picker the File button opens.
+    if (this._missingBarB !== null && boundingBoxContains(this._missingBarB, point)) {
+      this._openFilePicker()
       return true
     }
     if (this._scrubHit(point)) { this._beginScrub(point); return true }
@@ -1637,7 +1732,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
         if (type === 'camera') this._camBtnB    = bb
         if (type === 'screen') this._screenBtnB = bb
         if (type === 'file')   this._fileBtnB   = bb
-        this._drawBigBtn(ctx, bb, icon, label, this._sourceType === type)
+        // File source missing its handle after a reload — the button
+        // becomes the relink affordance instead of "load a new file".
+        const shownLabel = (type === 'file' && this._needsRelink) ? 'Relink' : label
+        this._drawBigBtn(ctx, bb, icon, shownLabel, this._sourceType === type)
       }
     }
 
@@ -1818,9 +1916,37 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   private _renderControlBar(ctx: Ctx2D): void {
     if (this._objectUrl === null) {
-      this._playBtnB = this._scrubTrackB = null
+      this._playBtnB = this._scrubTrackB = this._missingBarB = null
+      // Same bar position/style as the normal scrub bar below, but with a
+      // one-line "missing" readout instead — otherwise a file source that
+      // failed to auto-relink draws nothing at all and the only visible
+      // affordance is the big File→Relink button's label. Clicking the bar
+      // itself is also wired to relink (see hitTestSelf/handlePointerDown) —
+      // a natural mis-click target since it's exactly where the scrub bar
+      // normally sits.
+      if (this._needsRelink) {
+        const cw   = Node.canvasWidth
+        const left = contentLeft(cw)
+        const barY = Node.viewportHeight - BAR_H - BAR_MARGIN - CBTN_BAR_GAP - CBTN_H
+        const bar: BBox = { x: left, y: barY, width: cw - left - BAR_MARGIN, height: BAR_H }
+        if (bar.width <= 0) return
+        this._missingBarB = bar
+        ctx.save()
+        ctx.fillStyle = 'rgba(0,0,0,0.55)'
+        ctx.beginPath()
+        ctx.roundRect(bar.x, bar.y, bar.width, BAR_H, BAR_H / 2)
+        ctx.fill()
+        ctx.font         = '11px sans-serif'
+        ctx.fillStyle    = 'rgba(255,255,255,0.75)'
+        ctx.textAlign    = 'left'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(`Missing: ${this._filename || 'video'} — click File to relink`,
+                     bar.x + 12, bar.y + BAR_H / 2)
+        ctx.restore()
+      }
       return
     }
+    this._missingBarB = null
 
     const cw   = Node.canvasWidth
     const left = contentLeft(cw)

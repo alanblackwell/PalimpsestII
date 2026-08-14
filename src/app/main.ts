@@ -13,6 +13,7 @@ import { AnimPathLayer }     from '../layers/AnimPathLayer.js'
 import { ClockLayer }        from '../layers/ClockLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
 import { VideoLayer }        from '../layers/VideoLayer.js'
+import * as VideoFileHandleStore from '../persistence/VideoFileHandleStore.js'
 import { audioRhythm }       from '../audio/AudioRhythm.js'
 import { TempoLayer }        from '../layers/TempoLayer.js'
 import { RootLayer }         from '../layers/RootLayer.js'
@@ -1655,6 +1656,9 @@ interaction.setCreateBindingMapCallback((source) => {
 deletionLayer.setPurgeCallback((layer) => {
   const bls = [...layer.dependents].filter(d => d instanceof BindingLayer)
   for (const bl of bls) (bl as BindingLayer).remove()
+  if (layer instanceof VideoLayer && layer.fileHandleId !== null) {
+    void VideoFileHandleStore.deleteHandle(layer.fileHandleId)
+  }
   refreshStack()
 })
 
