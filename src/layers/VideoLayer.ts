@@ -140,6 +140,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   // File playback
   private _objectUrl:  string | null = null
   private _filename    = ''
+  // File size in bytes, captured alongside filename — used together as a
+  // same-file heuristic when relink-sharing across layers (see
+  // _isSameFileAs) can't use a real FileSystemFileHandle comparison.
+  private _fileSize    = 0
   // Stable id (crypto.randomUUID(), minted on first handle capture) used to
   // key this layer's FileSystemFileHandle in VideoFileHandleStore — Node has
   // no stable per-instance id of its own (creationIndex is runtime-only,
@@ -440,6 +444,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._objectUrl !== null) URL.revokeObjectURL(this._objectUrl)
     this._objectUrl   = URL.createObjectURL(file)
     this._filename    = file.name
+    this._fileSize    = file.size
     this._needsRelink = false
     this._status      = 'loading…'
     this._duration    = 0
@@ -516,6 +521,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       frozen:          this._frozen,
       lastEventTime:   this._lastEventTime,
       filename:        this._filename,
+      fileSize:        this._fileSize,
       fileHandleId:    this._fileHandleId,
       playing:         this._playing,
       currentTime:     this._currentTime,
@@ -549,6 +555,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       this._lastEventTime = state.lastEventTime as EventValue
     }
     if (typeof state.filename === 'string')    this._filename     = state.filename
+    if (typeof state.fileSize === 'number')    this._fileSize     = state.fileSize
     if (typeof state.fileHandleId === 'string') this._fileHandleId = state.fileHandleId
     if (typeof state.playing === 'boolean')    this._playing      = state.playing
     if (typeof state.currentTime === 'number') this._currentTime  = state.currentTime
@@ -1134,6 +1141,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
           if (perm === 'granted') {
             const file = await staleHandle.getFile()
             this.relinkFile(file, staleHandle)
+            void this._propagateRelinkToDuplicates(file, staleHandle)
             return
           }
         } catch {
@@ -1159,8 +1167,12 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     const handle = handles[0]
     if (!handle) return
     const file = await handle.getFile()
-    if (isRelinking) this.relinkFile(file, handle)
-    else this.loadFile(file, handle)
+    if (isRelinking) {
+      this.relinkFile(file, handle)
+      void this._propagateRelinkToDuplicates(file, handle)
+    } else {
+      this.loadFile(file, handle)
+    }
   }
 
   private _openLegacyFilePicker(): void {
@@ -1174,11 +1186,56 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       document.body.removeChild(input)
       const file = input.files?.[0]
       if (file) {
-        if (isRelinking) this.relinkFile(file)
-        else this.loadFile(file)
+        if (isRelinking) {
+          this.relinkFile(file)
+          void this._propagateRelinkToDuplicates(file)
+        } else {
+          this.loadFile(file)
+        }
       }
     }
     input.click()
+  }
+
+  // ── Relink-sharing across layers referencing the same file ────────────
+  //
+  // Multiple VideoLayers can end up pointing at the same underlying file
+  // (e.g. the same clip used twice in a session). Decoding can't be
+  // shared — each needs its own independent playback pointer — but the
+  // *relink prompt* can be: once one layer has successfully relinked (via
+  // a user-initiated pick, not the silent auto-relink path — see
+  // tryAutoRelink), every other currently-missing VideoLayer that turns
+  // out to reference the same file is relinked with the same File/handle
+  // too, with no extra prompt.
+  private async _propagateRelinkToDuplicates(file: File, handle?: FileSystemFileHandle): Promise<void> {
+    for (const node of graph.nodes) {
+      if (node === this || !(node instanceof VideoLayer) || !node.needsRelink) continue
+      if (await this._isSameFileAs(node, file, handle)) node.relinkFile(file, handle)
+    }
+  }
+
+  // Prefers a real FileSystemFileHandle comparison (isSameEntry — part of
+  // the base File System API, reliable, no permission needed to check) when
+  // `other` has a stored handle of its own to compare against. Falls back
+  // to a filename+size heuristic otherwise (covers layers with no captured
+  // handle at all — drag-and-dropped originally, or a non-Chromium browser
+  // — as well as a stale/unresolvable handle). Not foolproof, but filename
+  // and size colliding for two genuinely different video files is unlikely.
+  private async _isSameFileAs(
+    other: VideoLayer, file: File, handle?: FileSystemFileHandle,
+  ): Promise<boolean> {
+    if (handle && other.fileHandleId !== null) {
+      const otherHandle = await VideoFileHandleStore.getHandle(other.fileHandleId)
+      if (otherHandle !== null) {
+        try {
+          if (await handle.isSameEntry(otherHandle)) return true
+        } catch {
+          // otherHandle may no longer resolve to a real file — fall
+          // through to the filename/size heuristic below.
+        }
+      }
+    }
+    return other.filename !== '' && other.filename === file.name && other.fileSize === file.size
   }
 
   // Called once by Persistence.deserialize right after restoring this
@@ -1186,6 +1243,13 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   // captured FileSystemFileHandle; falls back to the manual Relink button
   // (via _needsRelink) whenever that isn't possible.
   async tryAutoRelink(): Promise<void> {
+    // Already loaded — either this ran once already, or (more likely) a
+    // sibling VideoLayer referencing the same file relinked first and
+    // propagated to this one (see _propagateRelinkToDuplicates) before this
+    // call reached the front of Persistence.deserialize's per-record queue.
+    // Proceeding here regardless would re-fetch this layer's own (possibly
+    // permission-revoked) handle and could wrongly flag it as missing again.
+    if (this._objectUrl !== null) return
     if (this._fileHandleId === null) return // nothing captured to retry
 
     const handle = await VideoFileHandleStore.getHandle(this._fileHandleId)
@@ -1209,6 +1273,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
     const file = await handle.getFile()
     this.relinkFile(file, handle)
+    void this._propagateRelinkToDuplicates(file, handle)
   }
 
   get fileHandleId(): string | null {
@@ -1221,6 +1286,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   get filename(): string {
     return this._filename
+  }
+
+  get fileSize(): number {
+    return this._fileSize
   }
 
   // Public entry point for triggering this layer's own relink flow from
