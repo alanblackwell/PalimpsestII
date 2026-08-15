@@ -1328,6 +1328,33 @@ any pairs beyond it. The fragment shader loops over a constant bound
 constant-loop-bound-plus-dynamic-exit idiom `FilterGL.ts`'s `blur_h`/`blur_v`
 shaders already use for their runtime-variable radius.
 
+### `PointLayer` — per-axis `xSlot`/`ySlot` override
+
+`PointLayer` no longer has a `Point`-typed input slot for being driven by
+another `PointSource` (removed — a "relay/tap" binding turned out to have no
+real use case, since anything that already produces a combined `Point` can
+just be bound directly wherever the point is consumed). It still implements
+`PointSource` and remains freely usable as an output for other layers to
+bind to — only the ability to be driven *by* another Point source was
+removed.
+
+In its place: `xSlot`/`ySlot` (`Amount`, `[0,1]` scaled to
+`Node.canvasWidth`/`canvasHeight`), for driving each axis from an
+independent scalar source (e.g. two unrelated LFOs) rather than requiring
+one upstream layer that already produces a full `Point`. Position priority,
+highest first (each stage wins outright over what's below it, mirroring the
+shape-slot check already in `recompute()`): (1) `xSlot`/`ySlot` per-axis
+override — either or both may be bound independently; (2) wander-mode
+simulation; (3) free drag. An axis pinned by a bound `xSlot`/`ySlot` ignores
+drag input for that axis only (`setPoint()` only writes the unbound axis/axes),
+so a partially-bound handle (e.g. x bound, y free) can still be dragged along
+its free axis without the bound axis visibly fighting the drag before the
+next `recompute()` pins it back anyway. Rendered as a two-row pill (x, y)
+directly below `canvasBounds`, above the shape-reference and wander pills —
+unchanged in every other respect (shape-reference mode, wander sim,
+mask-tracking, etc. — see the file's own header comment for the full
+picture).
+
 ## Big-button mobile touch-target pass (wound down)
 
 Ongoing multi-session effort to replace small/cramped panel buttons with

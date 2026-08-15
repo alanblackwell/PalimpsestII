@@ -25,19 +25,24 @@ registerPromotionFactory((initial: Point) => new PointLayer(initial))
 // PointLayer — a layer that holds and exposes a Point value
 // ------------------------------------------------------------
 //
-// Two operating modes for the handle:
+// Position priority, highest first (each stage wins outright over
+// everything below it, mirroring the shape-slot check in recompute()):
 //
-//   Unbound — the handle is freely draggable anywhere on the canvas
-//             (or driven by wander mode, below).
+//   1. xSlot / ySlot (Amount, [0,1] scaled to canvas width/height) —
+//      per-axis override. Either or both may be bound independently, e.g.
+//      x driven by an LFO while y stays free-dragged — useful when the
+//      two axes have unrelated sources (two separate Amount producers).
+//   2. wander mode  — per-frame simulation, see below.
+//   3. free drag    — the handle is draggable anywhere on the canvas.
 //
-//   Bound   — the handle is driven by a source layer (the slot);
-//             the handle position is read-only.
+// An axis pinned by a bound xSlot/ySlot ignores drag input for that axis
+// only (see setPoint()), so a partially-bound handle can still be dragged
+// along its free axis.
 //
 // Rendering has these components:
 //
-//   1. A single-row pill at canvasBounds (canvas-space panel) for the
-//      main Point binding (`slot`) — lets another Point source drive
-//      this layer's output, e.g. as a named relay/tap point.
+//   1. A two-row pill at canvasBounds (canvas-space panel) for the
+//      `xSlot`/`ySlot` override rows.
 //
 //   2. The wander pill (below that) — see below.
 //
@@ -123,7 +128,6 @@ const REF_COL     = '#7ecfcf'   // Teal — reference point indicator colour
 // Per-type value-box colour for the slot rows drawn by this layer's
 // renderSlots, matching the type accent colours used throughout the app.
 const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
-  [ValueType.Point]:  ACCENT,
   [ValueType.Event]:  EV_ACCENT,
   [ValueType.Amount]: AM_ACCENT,
   [ValueType.Rate]:   RATE_ACCENT,
@@ -182,7 +186,8 @@ const COARSE_DIM      = 64     // px, side of the downsampled canvas used for th
 export class PointLayer extends Layer implements PointSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
-  private readonly _slot:   ParameterSlot
+  private readonly _xSlot:  ParameterSlot
+  private readonly _ySlot:  ParameterSlot
   private readonly _region: DraggablePointRegion
   private _point: Point
 
@@ -230,7 +235,8 @@ export class PointLayer extends Layer implements PointSource {
   constructor(initial: Point = { x: 200, y: 200 }) {
     super()
     this._point  = { ...initial }
-    this._slot   = new ParameterSlot(ValueType.Point, this)
+    this._xSlot  = new ParameterSlot(ValueType.Amount, this, 'x')
+    this._ySlot  = new ParameterSlot(ValueType.Amount, this, 'y')
     this._region = new DraggablePointRegion(this, initial)
     this._heading   = Math.random() * Math.PI * 2
     this._orbitSpin = Math.random() < 0.5 ? 1 : -1
@@ -244,7 +250,7 @@ export class PointLayer extends Layer implements PointSource {
     this._maskSlot         = new ParameterSlot(ValueType.Mask,   this, 'mask')
 
     this.slots.push(
-      this._slot, this._shapeSlot, this._shapeIndexSlot,
+      this._xSlot, this._ySlot, this._shapeSlot, this._shapeIndexSlot,
       this._wanderToggleSlot, this._amountSlot, this._speedSlot, this._maskSlot,
     )
 
@@ -280,22 +286,31 @@ export class PointLayer extends Layer implements PointSource {
   // ----------------------------------------------------------
 
   // Called by the embedded DraggablePointRegion when the user drags,
-  // or by WarpLayer to move a hidden PointLayer handle.
+  // or by WarpLayer to move a hidden PointLayer handle. An axis currently
+  // driven by a bound xSlot/ySlot ignores the incoming coordinate for that
+  // axis only, so a partially-bound handle (e.g. x bound, y free) can still
+  // be dragged along its free axis without the bound axis visibly fighting
+  // the drag before the next recompute() pins it back anyway.
   setPoint(p: Point): void {
-    this._point = { ...p }
+    const next = { ...this._point }
+    if (!this._xSlot.isActive) next.x = p.x
+    if (!this._ySlot.isActive) next.y = p.y
+    this._point = next
     this._region.setPoint(this._point)  // keep region in sync so recompute() reads back the right value
     this.markDirty()
   }
 
   protected override receiveValue(type: ValueType | null, val: Point | number | Direction): void {
     if (type !== ValueType.Point || typeof val !== 'object' || !('x' in val)) return
-    if (this._slot.state === SlotState.Bound) BindingLayer.findForSlot(this._slot)?.toggle()
+    if (this._xSlot.state === SlotState.Bound) BindingLayer.findForSlot(this._xSlot)?.toggle()
+    if (this._ySlot.state === SlotState.Bound) BindingLayer.findForSlot(this._ySlot)?.toggle()
     this._point = { ...(val as Point) }
     this._region.setPoint(this._point)
     this.markDirty()
   }
 
-  get slot():      ParameterSlot { return this._slot      }
+  get xSlot():     ParameterSlot { return this._xSlot     }
+  get ySlot():     ParameterSlot { return this._ySlot     }
   get shapeSlot(): ParameterSlot { return this._shapeSlot }
   setShapeEnabled(v: boolean):   void { this._shapeEnabled   = v;   this.markDirty() }
   setShapeRefIndex(idx: number): void { this._shapeRefIndex = idx; this.markDirty() }
@@ -314,7 +329,8 @@ export class PointLayer extends Layer implements PointSource {
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the manual control, so the binding starts as a no-op.
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
-    if (slot === this._slot)       return { ...this._point }
+    if (slot === this._xSlot)      return Math.max(0, Math.min(1, this._point.x / Node.canvasWidth))
+    if (slot === this._ySlot)      return Math.max(0, Math.min(1, this._point.y / Node.canvasHeight))
     if (slot === this._amountSlot) return this._amount
     return null
   }
@@ -387,12 +403,23 @@ export class PointLayer extends Layer implements PointSource {
       if (this._shapeEnabled) this._shapeEnabled = false
     }
 
-    if (this._slot.isActive) {
-      const src = this._slot.source as PointSource
-      this._point = src.getPoint()
+    if (this._xSlot.isActive || this._ySlot.isActive) {
+      // Per-axis override — each bound axis reads its Amount source
+      // ([0,1]) scaled to the canvas; an unbound axis keeps whatever value
+      // it last held (from a drag or the default construction value).
+      // Outranks wander.
+      const next = { ...this._point }
+      if (this._xSlot.isActive) {
+        const ax = Math.max(0, Math.min(1, (this._xSlot.source as AmountSource).getAmount() as Amount))
+        next.x = ax * Node.canvasWidth
+      }
+      if (this._ySlot.isActive) {
+        const ay = Math.max(0, Math.min(1, (this._ySlot.source as AmountSource).getAmount() as Amount))
+        next.y = ay * Node.canvasHeight
+      }
+      this._point = next
       this._region.setPoint(this._point)
-      this._region.interactive = false
-      // Don't carry over a stale dt if wander resumes once this slot is unbound.
+      this._region.interactive = !(this._xSlot.isActive && this._ySlot.isActive)
       this._lastTickTime = null
     } else {
       // Wander toggle — each rising edge flips _wanderEnabled.
@@ -420,9 +447,9 @@ export class PointLayer extends Layer implements PointSource {
     // stack (or parked in BackgroundLayer). forceDirty() is called AFTER
     // evaluate() clears our dirty flag, so the next rAF finds us dirty and
     // advances the simulation again (same pattern as VideoLayer's frame loop).
-    if (this._wanderEnabled && !this._slot.isActive && (!this.outsideStack || this.inBackground)) {
+    if (this._wanderEnabled && !this._xSlot.isActive && !this._ySlot.isActive && (!this.outsideStack || this.inBackground)) {
       queueMicrotask(() => {
-        if (this._wanderEnabled && !this._slot.isActive && (!this.outsideStack || this.inBackground)) this.forceDirty()
+        if (this._wanderEnabled && !this._xSlot.isActive && !this._ySlot.isActive && (!this.outsideStack || this.inBackground)) this.forceDirty()
       })
     }
   }
@@ -772,7 +799,7 @@ export class PointLayer extends Layer implements PointSource {
     // a numbered circle always selects that index rather than starting a free drag.
     if (this._shapeSlot.isActive && this._hitTestRefPoint(point) !== null) return this
     // Intercept main handle drag when shape slot is active to provide snap-to-ref.
-    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
+    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._xSlot.isActive && !this._ySlot.isActive) {
       const dx = point.x - this._point.x, dy = point.y - this._point.y
       if (dx * dx + dy * dy <= SHAPE_HANDLE_HIT * SHAPE_HANDLE_HIT) return this
     }
@@ -842,7 +869,7 @@ export class PointLayer extends Layer implements PointSource {
     }
 
     // Main handle drag while shape slot is active — intercept for snap-to-ref.
-    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._slot.isActive) {
+    if (this._shapeSlot.isActive && !this._wanderEnabled && !this._xSlot.isActive && !this._ySlot.isActive) {
       const dx = point.x - this._point.x, dy = point.y - this._point.y
       if (dx * dx + dy * dy <= SHAPE_HANDLE_HIT * SHAPE_HANDLE_HIT) {
         this._shapeHandleDragging = true
@@ -1024,12 +1051,12 @@ export class PointLayer extends Layer implements PointSource {
     return wb.y + wb.height + 8
   }
 
-  // Draws, in order: the main Point-binding row (its own small pill), then
-  // the shape-reference pill (new), then the consolidated wander pill.
+  // Draws, in order: the x/y override pill, then the shape-reference pill
+  // (new), then the consolidated wander pill.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
 
-    // ── Point-source binding row ───────────────────────────
+    // ── x/y override binding pill ────────────────────────────
     const pb = this._pointSlotPillBounds()
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.45)'
@@ -1037,7 +1064,8 @@ export class PointLayer extends Layer implements PointSource {
     ctx.fillStyle = ACCENT
     ctx.beginPath(); ctx.roundRect(pb.x, pb.y, 4, pb.height, [4, 0, 0, 4]); ctx.fill()
     ctx.restore()
-    this._renderSlotRow(ctx, this._slot, pb)
+    this._renderSlotRow(ctx, this._xSlot, this._pointRow(0))
+    this._renderSlotRow(ctx, this._ySlot, this._pointRow(1))
 
     // ── Shape-reference pill ─────────────────────────────────
     this._renderShapePill(ctx)
@@ -1282,11 +1310,18 @@ export class PointLayer extends Layer implements PointSource {
   // Layout
   // ----------------------------------------------------------
 
-  // Single-row pill for the main Point binding (`slot`) — directly below
+  // Two-row pill: the per-axis `xSlot`/`ySlot` overrides — directly below
   // the coordinate-readout pill.
   private _pointSlotPillBounds(): BBox {
     const cb = this.canvasBounds
-    return { x: cb.x, y: cb.y + cb.height + 8, width: cb.width, height: ROW_H }
+    const h = PILL_PAD * 2 + 2 * ROW_H + ROW_GAP
+    return { x: cb.x, y: cb.y + cb.height + 8, width: cb.width, height: h }
+  }
+
+  // Row `i` (0 = x, 1 = y) within the point pill.
+  private _pointRow(i: number): BBox {
+    const b = this._pointSlotPillBounds()
+    return { x: b.x, y: b.y + PILL_PAD + i * (ROW_H + ROW_GAP), width: b.width, height: ROW_H }
   }
 
   // Shape binding pill — directly below the Point-binding row.
