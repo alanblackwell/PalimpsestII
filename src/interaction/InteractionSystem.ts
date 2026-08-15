@@ -11,6 +11,7 @@ import {
   type PinchStart,
 } from './gestures.js'
 import { stackWidgetWidth, contentLeft } from './layout.js'
+import { findMissingVideoDependency, relinkBarBounds, hitTestRelinkBar } from './videoRelinkPrompt.js'
 
 // ------------------------------------------------------------
 // InteractionSystem — routes canvas pointer events to the stack
@@ -533,6 +534,26 @@ export class InteractionSystem {
         return
       }
 
+      // Relink prompt bar — shown above the selected layer's own panel when
+      // its content depends on a hidden (Background/archived) VideoLayer
+      // that needs relinking. Checked first, ahead of every other hit-test,
+      // since it isn't part of the selected layer's own hitTestSelf chain.
+      // Same coordinate system as the panel pills it sits above: viewport
+      // (fixed) on desktop, content-canvas (moves with pan/zoom) on mobile.
+      const selectedForRelink = this._widget?.selected ?? null
+      if (selectedForRelink !== null) {
+        const missing = findMissingVideoDependency(selectedForRelink)
+        if (missing !== null) {
+          const useVptForRelink = this._inPillZone(e.clientX)
+          const cwForRelink     = useVptForRelink ? Node.viewportWidth : Node.canvasWidth
+          const ptForRelink     = useVptForRelink ? this._viewportPoint(e) : point
+          if (hitTestRelinkBar(relinkBarBounds(cwForRelink), ptForRelink)) {
+            missing.relink()
+            return
+          }
+        }
+      }
+
       // Mouse/pen: immediate handling, unchanged.
       if (this._widget !== null && this._inWidgetStrip(e.clientX)) {
         // Before routing to the widget, check whether the selected layer's
@@ -923,6 +944,19 @@ export class InteractionSystem {
         if (this._getDisplayMode()) {
           this._fireEventAtOrBelow(this._widget?.selected ?? null)
           break
+        }
+        // Relink prompt bar — see the equivalent check in _handleDown.
+        // Touch is always mobile, so pills (and this bar) render in
+        // content-canvas coords, matching `point` here directly.
+        {
+          const selForRelink = this._widget?.selected ?? null
+          if (selForRelink !== null) {
+            const missing = findMissingVideoDependency(selForRelink)
+            if (missing !== null && hitTestRelinkBar(relinkBarBounds(Node.canvasWidth), point)) {
+              missing.relink()
+              break
+            }
+          }
         }
         // No swipe — a tap. If it landed on a draggable node (button,
         // toggle, slider track, etc.), simulate a click via down+up.

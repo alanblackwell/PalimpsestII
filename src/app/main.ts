@@ -383,8 +383,11 @@ function postInsertLayer(newLayer: Layer): void {
   if (newLayer instanceof VideoLayer) {
     wireVideoTrackButton(newLayer)
     wireVideoEventButton(newLayer)
-    newLayer.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    newLayer.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    newLayer.opacityWidget.onInspectorRequest = wi
+    newLayer.volumeWidget.onInspectorRequest  = wi
+    newLayer.startWidget.onInspectorRequest   = wi
+    newLayer.endWidget.onInspectorRequest     = wi
   }
   if (newLayer instanceof TrackRectLayer || newLayer instanceof TrackEllipseLayer ||
       newLayer instanceof TrackPathLayer  || newLayer instanceof TrackDrawingLayer) {
@@ -1066,8 +1069,11 @@ function wireLoadedLayer(l: Layer): void {
   if (l instanceof VideoLayer) {
     wireVideoTrackButton(l)
     wireVideoEventButton(l)
-    l.opacityWidget.onInspectorRequest = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
-    l.volumeWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)
+    const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
+    l.opacityWidget.onInspectorRequest = wi
+    l.volumeWidget.onInspectorRequest  = wi
+    l.startWidget.onInspectorRequest   = wi
+    l.endWidget.onInspectorRequest     = wi
   }
   if (l instanceof TileLayer) {
     l.marginWidget.onInspectorRequest  = (slot, cx, cy) => interaction.showInspectorForSlot(slot, cx, cy)

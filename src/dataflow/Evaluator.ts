@@ -7,6 +7,7 @@ import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
 import { drawHelpOverlay } from '../ui/helpText.js'
 import { drawOutlineGrid } from '../ui/grid.js'
+import { findMissingVideoDependency, relinkBarBounds, renderRelinkBar } from '../interaction/videoRelinkPrompt.js'
 
 // Duration of the swipe-gesture direction-arrow flash (see Node.gestureFlash).
 const GESTURE_FLASH_MS = 350
@@ -323,6 +324,11 @@ export class Evaluator {
       if (clipX > 0) wctx.restore()
       renderTop.renderSlots(wctx)
       renderTop.renderOverlay(wctx)
+      // Relink prompt bar — shown when renderTop's content depends on a
+      // hidden VideoLayer (Background/archived) that needs relinking.
+      // Node.canvasWidth is still vw here, matching where it was hit-tested.
+      const missingDesktop = findMissingVideoDependency(renderTop)
+      if (missingDesktop !== null) renderRelinkBar(wctx, relinkBarBounds(vw), missingDesktop)
       // Help overlay — drawn last so it sits above all other UI.
       // Node.canvasWidth is still vw here, giving correct contentLeft positioning.
       drawHelpOverlay(wctx, this._layerStackWidget?.selected ?? null)
@@ -352,6 +358,10 @@ export class Evaluator {
       }
       this._layerStackWidget?.render(wctx)
       renderTop.renderOverlay(this.ctx)
+      // Relink prompt bar — see the desktop-pills branch above; here it
+      // moves with pan/zoom like every other panel element on this path.
+      const missingMobile = findMissingVideoDependency(renderTop)
+      if (missingMobile !== null) renderRelinkBar(this.ctx, relinkBarBounds(Node.canvasWidth), missingMobile)
       // Help overlay — mobile path draws on the main canvas, moves with pan/zoom.
       drawHelpOverlay(this.ctx, this._layerStackWidget?.selected ?? null)
     }

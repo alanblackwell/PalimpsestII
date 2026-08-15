@@ -18,9 +18,15 @@ interface FileSystemFileHandle {
   requestPermission?(descriptor?: FileSystemHandlePermissionDescriptor): Promise<PermissionState>
 }
 
+type WellKnownDirectory = 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos'
+
 interface OpenFilePickerOptions {
   types?: { description?: string; accept: Record<string, string[]> }[]
   multiple?: boolean
+  // Hints where the picker dialog should open. A FileSystemHandle (even one
+  // whose permission has lapsed — this is a UI hint only, no read access
+  // required) opens the picker in that entry's containing folder.
+  startIn?: FileSystemHandle | WellKnownDirectory
 }
 
 interface Window {

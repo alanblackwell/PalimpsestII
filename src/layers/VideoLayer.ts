@@ -54,8 +54,12 @@ const MIR_W   = 32
 const MIR_GAP = 4
 
 // File playback control bar
-const BAR_MARGIN = 16
-const BAR_H      = 36
+// BAR_MARGIN/BAR_H/CBTN_H/CBTN_BAR_GAP are exported so videoRelinkPrompt.ts
+// can position its own bar at exactly the same spot (same size/location as
+// this layer's own "Missing: ..." bar, so a user recognises it as the same
+// thing regardless of which layer it's shown on).
+export const BAR_MARGIN = 16
+export const BAR_H      = 36
 const PLAY_SZ    = 32
 const SCRUB_R    = 8
 const TRACK_H    = 4
@@ -64,12 +68,21 @@ const THUMB_W    = 120
 const THUMB_H    = 68
 const THUMB_GAP  = 8
 
+// Loop toggle + start/end trim markers on the control bar (reuse AM_COL)
+const LOOP_SZ         = 22
+const LOOP_GAP        = 6
+const MARK_TRI_W      = 8
+const MARK_TRI_H      = 6
+const MIN_MARK_GAP_S  = 0.05   // seconds — minimum start/end separation
+const PLAYHEAD_HIT_R  = 12     // grab radius around the playback-position handle
+const MARK_EPS        = 1e-4   // caret hidden once within this of its min/max default
+
 // Convenience-button row (Track / Event), stacked below the control bar
 const CBTN_W        = 56
-const CBTN_H        = 30
+export const CBTN_H = 30
 const CBTN_GAP      = 10   // gap between buttons in the row
 const CBTN_ROW_MARGIN = 14 // gap from the bottom of the viewport
-const CBTN_BAR_GAP  = 10   // gap between the control bar and the button row
+export const CBTN_BAR_GAP = 10   // gap between the control bar and the button row
 
 // Transform handles
 const HANDLE_R   = 7
@@ -139,6 +152,9 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   private _playing     = false
   private _duration    = 0
   private _currentTime = 0
+  // Set by loadFile(), consumed once duration becomes known (onDuration) —
+  // seeks fresh/relinked playback to the saved start marker instead of 0:00.
+  private _pendingStartSeek = false
   private _scrubbing   = false
   private _wasPlayingBeforeScrub = false
   private _previewVideo:  HTMLVideoElement
@@ -161,6 +177,28 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   readonly opacitySlot: ParameterSlot
   readonly volumeSlot:  ParameterSlot
   private _lastEventTime: EventValue = null
+
+  // Trim markers (file playback only) — fraction [0,1] of _duration, same
+  // combined slider+slot pattern as opacity/volume. _startFrac/_endFrac are
+  // recomputed every frame from the slot (if bound) or the manual value; the
+  // on-track caret only renders once the value has actually moved off its
+  // min/max default, so an untrimmed video shows nothing extra. Untouched
+  // defaults (0 / 1) reproduce the previous unconditional whole-file loop
+  // exactly.
+  readonly startSlot: ParameterSlot
+  readonly endSlot:   ParameterSlot
+  private _manualStartFrac = 0
+  private _manualEndFrac   = 1
+  private _startFrac = 0
+  private _endFrac   = 1
+  // Previous frame's fracs, to detect "the marker just moved" in recompute()
+  // (as opposed to playback simply progressing) — see the clamp there.
+  private _prevStartFrac = 0
+  private _prevEndFrac   = 1
+  private readonly _startWidget: SliderSlot
+  private readonly _endWidget:   SliderSlot
+  private _loopMarks    = true
+  private _markDrag: 'start' | 'end' | null = null
 
   // Opacity — computed each recompute from slot; _manualOpacity when unbound
   private _opacity = 1.0
@@ -217,6 +255,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   private _playBtnB:          BBox | null = null
   private _scrubTrackB:       BBox | null = null
   private _missingBarB:       BBox | null = null
+  private _loopBtnB:          BBox | null = null
+  private _startMarkB:        BBox | null = null
+  private _endMarkB:          BBox | null = null
+  private _playheadPos:       Point | null = null
   private _stallRestartBounds: BBox | null = null
 
   // ── Track / Event convenience buttons ───────────────────────────
@@ -240,7 +282,9 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     this.enableSlot  = new ParameterSlot(ValueType.Event,  this, 'pause')
     this.opacitySlot = new ParameterSlot(ValueType.Amount, this, 'opacity')
     this.volumeSlot  = new ParameterSlot(ValueType.Amount, this, 'volume')
-    this.slots.push(this.enableSlot, this.opacitySlot, this.volumeSlot)
+    this.startSlot   = new ParameterSlot(ValueType.Amount, this, 'start')
+    this.endSlot     = new ParameterSlot(ValueType.Amount, this, 'end')
+    this.slots.push(this.enableSlot, this.opacitySlot, this.volumeSlot, this.startSlot, this.endSlot)
 
     this._opacityWidget = new SliderSlot(
       this.opacitySlot, 'opacity', AM_COL,
@@ -264,16 +308,49 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       () => this.markDirty(),
     )
 
+    this._startWidget = new SliderSlot(
+      this.startSlot, 'start', AM_COL,
+      () => this._manualStartFrac,
+      (v) => {
+        if (this.startSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.startSlot)?.toggle()
+        this._manualStartFrac = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+
+    this._endWidget = new SliderSlot(
+      this.endSlot, 'end', AM_COL,
+      () => this._manualEndFrac,
+      (v) => {
+        if (this.endSlot.state === SlotState.Bound) BindingLayer.findForSlot(this.endSlot)?.toggle()
+        this._manualEndFrac = v
+        this.markDirty()
+      },
+      () => this.markDirty(),
+    )
+
     this._video = document.createElement('video')
     this._video.playsInline = true
     this._video.muted       = true
-    this._video.loop        = true
+    // Looping is driven manually in recompute() so it can respect the
+    // start/end trim markers — see the loop/pause block below.
+    this._video.loop        = false
     this._video.style.cssText =
       'position:fixed;top:-9999px;left:-9999px;pointer-events:none;opacity:0'
     document.body.appendChild(this._video)
 
     const onDuration = () => {
       this._duration = this._video.duration || 0
+      // Seed playback at the saved start marker, once, the first time a
+      // freshly loaded/relinked file's duration becomes known — duration is
+      // still 0 when loadFile() itself runs, so this can't be done there.
+      if (this._pendingStartSeek && this._duration > 0) {
+        this._pendingStartSeek = false
+        const startTime = this._manualStartFrac * this._duration
+        this._video.currentTime = startTime
+        this._currentTime = startTime
+      }
       this.markDirty()
     }
     this._video.addEventListener('loadedmetadata', onDuration)
@@ -330,6 +407,8 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   get opacityWidget(): SliderSlot { return this._opacityWidget }
   get volumeWidget():  SliderSlot { return this._volumeWidget }
+  get startWidget():   SliderSlot { return this._startWidget }
+  get endWidget():     SliderSlot { return this._endWidget }
 
   override getSnapBounds() {
     if (this._displayW <= 0 || this._displayH <= 0) return null
@@ -343,15 +422,18 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | null {
     if (slot === this.opacitySlot) return this._manualOpacity
     if (slot === this.volumeSlot)  return this._manualVolume
+    if (slot === this.startSlot)   return this._manualStartFrac
+    if (slot === this.endSlot)     return this._manualEndFrac
     return null
   }
 
   // ── File loading (public — called from drag-and-drop in main.ts) ──
 
-  // `handle` is present only when the file came from the File System Access
-  // picker (see _openFilePicker below) — drag-and-drop and the plain
-  // <input type=file> fallback call this with no handle, same as before.
-  loadFile(file: File, handle?: FileSystemFileHandle): void {
+  // Shared body of loadFile()/relinkFile() — everything except the final
+  // playing/paused decision, which differs between a fresh pick (always
+  // autoplay) and a relink (respect whatever play state was restored from
+  // the save).
+  private _loadFileCommon(file: File, handle?: FileSystemFileHandle): void {
     this._stopCurrentSource()
     this._sourceType = 'file'
 
@@ -362,6 +444,11 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     this._status      = 'loading…'
     this._duration    = 0
     this._currentTime = 0
+    // Duration isn't known yet — the actual seek happens in onDuration once
+    // it is, whether this is a fresh pick (start marker still at its 0
+    // default, so this is a no-op) or a relink of a saved layer whose start
+    // marker was restored by deserializeState.
+    this._pendingStartSeek = true
     this._scrubbing   = false
     this._previewCanvas = null
     this._previewTime   = null
@@ -376,12 +463,41 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     this._video.load()
     this._previewVideo.src = this._objectUrl
 
+    this.markDirty()
+  }
+
+  // `handle` is present only when the file came from the File System Access
+  // picker (see _openFilePicker below) — drag-and-drop and the plain
+  // <input type=file> fallback call this with no handle, same as before.
+  // Always starts playback — the natural expectation when picking a file
+  // for the first time. See relinkFile() for reconnecting a previously
+  // saved layer, which shouldn't force this.
+  loadFile(file: File, handle?: FileSystemFileHandle): void {
+    this._loadFileCommon(file, handle)
     this._playing = true
     void this._video.play().catch(() => {
       this._status = 'play error'
       this.markDirty()
     })
-    this.markDirty()
+  }
+
+  // Relink variant — reconnecting a file whose handle/permission we already
+  // had (auto- or manual-relink after a session reload, including via the
+  // relink prompt bar on a dependent layer — see videoRelinkPrompt.ts).
+  // Unlike loadFile(), this doesn't force playback on: _playing already
+  // reflects whatever play/pause state deserializeState() restored before
+  // this runs, so relinking resumes the saved session state rather than
+  // always auto-playing.
+  relinkFile(file: File, handle?: FileSystemFileHandle): void {
+    this._loadFileCommon(file, handle)
+    if (this._playing) {
+      void this._video.play().catch(() => {
+        this._status = 'play error'
+        this.markDirty()
+      })
+    } else {
+      this._status = 'paused'
+    }
   }
 
   // ── Persistence ───────────────────────────────────────────────
@@ -392,6 +508,9 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       addEventDone:    this._addEventDone,
       manualOpacity:   this._manualOpacity,
       manualVolume:    this._manualVolume,
+      manualStartFrac: this._manualStartFrac,
+      manualEndFrac:   this._manualEndFrac,
+      loopMarks:       this._loopMarks,
       sourceType:      this._sourceType,
       deviceIdx:       this._deviceIdx,
       frozen:          this._frozen,
@@ -445,6 +564,9 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (typeof state.addEventDone === 'boolean')    this._addEventDone    = state.addEventDone
     if (typeof state.manualOpacity === 'number')    this._manualOpacity   = state.manualOpacity
     if (typeof state.manualVolume === 'number')     this._manualVolume    = state.manualVolume
+    if (typeof state.manualStartFrac === 'number')  this._manualStartFrac = state.manualStartFrac
+    if (typeof state.manualEndFrac === 'number')    this._manualEndFrac   = state.manualEndFrac
+    if (typeof state.loopMarks === 'boolean')       this._loopMarks       = state.loopMarks
 
     // Restart the camera stream after restoring deviceIdx so the correct
     // device is selected. Screen and file sources can't be auto-restarted.
@@ -493,6 +615,69 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
     if (this._sourceType === 'file' && !this._scrubbing)
       this._currentTime = this._video.currentTime
+
+    this._startFrac = this.startSlot.isActive
+      ? Math.max(0, Math.min(1, (this.startSlot.source as AmountSource).getAmount() as Amount))
+      : this._manualStartFrac
+    this._endFrac = this.endSlot.isActive
+      ? Math.max(0, Math.min(1, (this.endSlot.source as AmountSource).getAmount() as Amount))
+      : this._manualEndFrac
+    // While a marker is actively being dragged, freeze the "previous" fracs
+    // rather than comparing every frame — clamping playback continuously
+    // mid-drag reads as the position randomly jumping around. Once the
+    // drag ends, the comparison resumes against the pre-drag value, so the
+    // clamp still fires exactly once for the drag's net movement. The
+    // loop-back/pause check just below has the same problem in reverse (a
+    // live-shrinking endTime crossing currentTime mid-drag would fire it
+    // repeatedly), so it also reads the frozen effective fracs rather than
+    // the live ones while dragging.
+    const draggingMarker  = this._markDrag !== null || this._startWidget.isDragging || this._endWidget.isDragging
+    const startMarkerMoved = !draggingMarker && this._startFrac !== this._prevStartFrac
+    const endMarkerMoved   = !draggingMarker && this._endFrac   !== this._prevEndFrac
+    if (!draggingMarker) {
+      this._prevStartFrac = this._startFrac
+      this._prevEndFrac   = this._endFrac
+    }
+    const effStartFrac = draggingMarker ? this._prevStartFrac : this._startFrac
+    const effEndFrac   = draggingMarker ? this._prevEndFrac   : this._endFrac
+
+    // Loop back to the start mark (or pause) once the end mark is reached.
+    // Untouched defaults (0 / 1) reproduce the previous unconditional
+    // whole-file loop exactly, so nothing changes until a marker is moved.
+    if (this._sourceType === 'file' && this._objectUrl !== null &&
+        !this._scrubbing && this._duration > 0) {
+      const startTime = effStartFrac * this._duration
+      const endTime   = Math.max(startTime + MIN_MARK_GAP_S, effEndFrac * this._duration)
+
+      // A marker just moved past the current playback position — snap to
+      // it immediately rather than waiting for it to arrive naturally.
+      // (Mutually exclusive: start < end always, so currentTime can never
+      // be both before startTime and after endTime at once.)
+      if (startMarkerMoved && this._currentTime < startTime) {
+        this._video.currentTime = startTime
+        this._currentTime = startTime
+      }
+      if (endMarkerMoved && this._currentTime > endTime) {
+        this._video.currentTime = endTime
+        this._currentTime = endTime
+      }
+
+      // Reaching (or having just been snapped to) the end mark: loop back
+      // if looping, otherwise pause — this is what turns the snap above
+      // into "return to start" (looping) or "pause at the end mark" (not
+      // looping, or already paused) once it lands exactly on endTime.
+      if (this._currentTime >= endTime - 0.03) {
+        if (this._loopMarks) {
+          this._video.currentTime = startTime
+          this._currentTime = startTime
+          if (this._playing) void this._video.play().catch(() => {})
+        } else if (this._playing) {
+          this._playing = false
+          this._status  = 'paused'
+          this._video.pause()
+        }
+      }
+    }
 
     if (!this._manualTransform && this._sourceType !== 'none') {
       if (this._fillMode) this._computeFill()
@@ -546,14 +731,24 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
     this._cameraStalled = isStream && this._streamHadFrames && this._frozenFrameCount > 30
 
-    // Self-perpetuating frame loop.
+    // Self-perpetuating frame loop. Normally gated on !outsideStack ||
+    // inBackground (archived-but-not-backgrounded layers are meant to sit
+    // dormant) — but also stays live whenever something still depends on
+    // this layer's output (dependents.size > 0), the same signal
+    // DeletionLayer's own purge logic already uses to detect live
+    // consumers of an archived layer. Without this, a VideoLayer relinked
+    // via the relink-prompt-bar (see videoRelinkPrompt.ts) while still
+    // sitting in the archive would decode exactly one frame and then
+    // freeze forever, since nothing else would ever re-mark it dirty.
+    const staysLiveOffStack = !this.outsideStack || this.inBackground || this.dependents.size > 0
     const liveStream = isStream
     const liveFile   = this._playing && this._objectUrl !== null
-    if ((liveStream || liveFile) && (!this.outsideStack || this.inBackground)) {
+    if ((liveStream || liveFile) && staysLiveOffStack) {
       queueMicrotask(() => {
         const still = (this._stream !== null && !this._frozen) ||
                       (this._playing && this._objectUrl !== null)
-        if (still && (!this.outsideStack || this.inBackground)) this.forceDirty()
+        const stillLiveOffStack = !this.outsideStack || this.inBackground || this.dependents.size > 0
+        if (still && stillLiveOffStack) this.forceDirty()
       })
     }
   }
@@ -914,24 +1109,62 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   // see handlePointerDown below) — capturing a fresh handle here means even
   // a manual relink restores auto-relink for the *next* reload.
   private _openFilePicker(): void {
-    if (VideoFileHandleStore.fileSystemAccessSupported) {
-      void (async () => {
-        let handles: FileSystemFileHandle[]
-        try {
-          handles = await window.showOpenFilePicker!({
-            types: [{ description: 'Video', accept: { 'video/*': [] } }],
-          })
-        } catch {
-          return // user cancelled the picker
-        }
-        const handle = handles[0]
-        if (!handle) return
-        const file = await handle.getFile()
-        this.loadFile(file, handle)
-      })()
+    if (!VideoFileHandleStore.fileSystemAccessSupported) {
+      this._openLegacyFilePicker()
       return
     }
+    void this._openFilePickerFSA()
+  }
 
+  private async _openFilePickerFSA(): Promise<void> {
+    // Relinking a missing file (no live video currently loaded) — try the
+    // stale handle directly first. This click is a real user gesture, so
+    // requestPermission shows a lightweight one-line browser prompt rather
+    // than a full file dialog, and skips picking entirely once granted.
+    // Skipped when a file is already loaded and the user is deliberately
+    // swapping to a *different* file — silently reusing the old handle
+    // there would just reload the same file instead of opening a picker.
+    const isRelinking = this._objectUrl === null
+    let staleHandle: FileSystemFileHandle | null = null
+    if (this._fileHandleId !== null) {
+      staleHandle = await VideoFileHandleStore.getHandle(this._fileHandleId)
+      if (isRelinking && staleHandle !== null) {
+        try {
+          const perm = await staleHandle.requestPermission?.({ mode: 'read' })
+          if (perm === 'granted') {
+            const file = await staleHandle.getFile()
+            this.relinkFile(file, staleHandle)
+            return
+          }
+        } catch {
+          // Handle may no longer resolve to a real file (moved/deleted) —
+          // fall through to the picker.
+        }
+      }
+    }
+
+    // Full picker — startIn opens it in the stale handle's folder (if any),
+    // so relinking after a reload doesn't dump the user at the browser's
+    // default location. Works even when the permission attempt above was
+    // denied or skipped, since startIn is a UI hint, not a read grant.
+    let handles: FileSystemFileHandle[]
+    try {
+      handles = await window.showOpenFilePicker!({
+        types: [{ description: 'Video', accept: { 'video/*': [] } }],
+        ...(staleHandle !== null ? { startIn: staleHandle } : {}),
+      })
+    } catch {
+      return // user cancelled the picker
+    }
+    const handle = handles[0]
+    if (!handle) return
+    const file = await handle.getFile()
+    if (isRelinking) this.relinkFile(file, handle)
+    else this.loadFile(file, handle)
+  }
+
+  private _openLegacyFilePicker(): void {
+    const isRelinking = this._objectUrl === null
     const input = document.createElement('input')
     input.type   = 'file'
     input.accept = 'video/*'
@@ -940,7 +1173,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     input.onchange = () => {
       document.body.removeChild(input)
       const file = input.files?.[0]
-      if (file) this.loadFile(file)
+      if (file) {
+        if (isRelinking) this.relinkFile(file)
+        else this.loadFile(file)
+      }
     }
     input.click()
   }
@@ -972,11 +1208,28 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
 
     const file = await handle.getFile()
-    this.loadFile(file, handle)
+    this.relinkFile(file, handle)
   }
 
   get fileHandleId(): string | null {
     return this._fileHandleId
+  }
+
+  get needsRelink(): boolean {
+    return this._needsRelink
+  }
+
+  get filename(): string {
+    return this._filename
+  }
+
+  // Public entry point for triggering this layer's own relink flow from
+  // outside — e.g. the relink prompt bar shown on a dependent layer when
+  // this VideoLayer is hidden (Background/archived), see
+  // src/interaction/videoRelinkPrompt.ts. Identical to clicking the File
+  // button directly on this layer while it needs relinking.
+  relink(): void {
+    this._openFilePicker()
   }
 
   // ── Shared helpers ─────────────────────────────────────────────
@@ -1249,16 +1502,37 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const standard = this.slots.filter(s => s !== this.opacitySlot && s !== this.volumeSlot)
-    this.renderSlotGroup(ctx, standard, this.panelBottom)
 
-    // Toggle button drawn over the enableSlot row (index 0 in standard group)
+    // Combined pill: pause/event toggle row + start + end trim rows share
+    // one backdrop (drawn once here, up front) rather than three touching
+    // pills — renderSlotGroup only draws enableSlot's row (drawBackdrop
+    // false), then the two SliderSlot rows render directly into the same
+    // backdrop below it.
+    const tp = this._topPillBounds()
+    ctx.save()
+    ctx.fillStyle = 'rgba(0,0,0,0.28)'
+    ctx.beginPath()
+    ctx.roundRect(tp.x, tp.y, tp.width, tp.height, 6)
+    ctx.fill()
+    ctx.restore()
+
+    this.renderSlotGroup(ctx, [this.enableSlot], this.panelBottom, false)
+
+    const sb = this._startRowBounds()
+    this._slotBounds.set(this.startSlot, sb)
+    this._startWidget.render(ctx, sb)
+
+    const eb = this._endRowBounds()
+    this._slotBounds.set(this.endSlot, eb)
+    this._endWidget.render(ctx, eb)
+
+    // Toggle button drawn over the enableSlot row (row 1 of the combined pill)
     const SLOT_H   = 30
     const SLOT_GAP = 4
     const BTN_SZ   = SLOT_H - 6
 
     const { x: PANEL_X, width: PANEL_W } = this.canvasBounds
-    const y    = this.panelBottom   // enableSlot is at index 0
+    const y    = this.panelBottom   // enableSlot is row 1
     const midY = y + SLOT_H / 2
     const btnX = PANEL_X + PANEL_W - BTN_SZ - 3
     const btnY = y + 3
@@ -1291,7 +1565,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     drawIcon(ctx, paused ? 'play' : 'pause', btnX + BTN_SZ / 2, midY, BTN_SZ - 8)
     ctx.restore()
 
-    // Opacity SliderSlot pill — below the standard slot group
+    // Opacity SliderSlot pill — below the combined pause/start/end pill
     const ob = this._opacityPillBounds()
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.28)'
@@ -1314,11 +1588,29 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     this._volumeWidget.render(ctx, vb)
   }
 
+  // Combined pill covering the enableSlot (pause) row plus the start/end
+  // trim rows — three rows, one shared backdrop.
+  private _topPillBounds() {
+    const cb = this.canvasBounds
+    const rows = 3
+    const h = rows * (30 + 4) - 4
+    return { x: cb.x, y: this.panelBottom, width: cb.width, height: h }
+  }
+
+  private _startRowBounds() {
+    const tp = this._topPillBounds()
+    return { x: tp.x, y: tp.y + 34, width: tp.width, height: 30 }
+  }
+
+  private _endRowBounds() {
+    const tp = this._topPillBounds()
+    return { x: tp.x, y: tp.y + 68, width: tp.width, height: 30 }
+  }
+
   private _opacityPillBounds() {
     const cb = this.canvasBounds
-    const standard = this.slots.filter(s => s !== this.opacitySlot && s !== this.volumeSlot)
-    const standardH = standard.length * (30 + 4) - 4
-    return { x: cb.x, y: this.panelBottom + standardH + 8, width: cb.width, height: 30 }
+    const tp = this._topPillBounds()
+    return { x: cb.x, y: tp.y + tp.height + 8, width: cb.width, height: 30 }
   }
 
   private _volumePillBounds() {
@@ -1403,6 +1695,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
 
   protected override hitTestSelf(point: Point): this | null {
     if (this._drag !== null) return this
+    if (this._markDrag !== null) return this
     if (this._stallRestartBounds !== null && boundingBoxContains(this._stallRestartBounds, point)) return this
     if (this._camBtnB     !== null && boundingBoxContains(this._camBtnB,     point)) return this
     for (const bb of this._camDeviceBtnB) if (boundingBoxContains(bb, point)) return this
@@ -1416,6 +1709,11 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._missingBarB !== null && boundingBoxContains(this._missingBarB, point)) return this
     if (this._trackBtnB   !== null && boundingBoxContains(this._trackBtnB,   point)) return this
     if (this._eventBtnB   !== null && boundingBoxContains(this._eventBtnB,   point)) return this
+    if (this._loopBtnB    !== null && boundingBoxContains(this._loopBtnB,    point)) return this
+    // Playback position handle takes priority over nearby trim markers.
+    if (this._playheadHit(point)) return this
+    if (this._startMarkB  !== null && boundingBoxContains(this._startMarkB,  point)) return this
+    if (this._endMarkB    !== null && boundingBoxContains(this._endMarkB,    point)) return this
     if (this._scrubHit(point)) return this
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
     if (this._displayW > 0) {
@@ -1426,6 +1724,8 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
     if (this._opacityWidget.hitZone(point, this._opacityPillBounds()) !== null) return this
     if (this._volumeWidget.hitZone(point, this._volumePillBounds()) !== null) return this
+    if (this._startWidget.hitZone(point, this._startRowBounds()) !== null) return this
+    if (this._endWidget.hitZone(point, this._endRowBounds()) !== null) return this
     return null
   }
 
@@ -1507,6 +1807,24 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       this._openFilePicker()
       return true
     }
+    // Loop toggle
+    if (this._loopBtnB !== null && boundingBoxContains(this._loopBtnB, point)) {
+      this._loopMarks = !this._loopMarks
+      this.markDirty()
+      return true
+    }
+    // Playback position handle takes priority over nearby trim markers, so
+    // scrubbing near a marker never gets hijacked into a marker drag.
+    if (this._playheadHit(point)) { this._beginScrub(point); return true }
+    // Trim-marker carets — checked before the general scrub hit so grabbing
+    // a marker (even at its default min/max position) always wins over a
+    // plain seek at the same spot.
+    if (this._startMarkB !== null && boundingBoxContains(this._startMarkB, point)) {
+      this._beginMarkDrag('start'); return true
+    }
+    if (this._endMarkB !== null && boundingBoxContains(this._endMarkB, point)) {
+      this._beginMarkDrag('end'); return true
+    }
     if (this._scrubHit(point)) { this._beginScrub(point); return true }
     // Toggle slot button
     if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
@@ -1550,6 +1868,12 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (this._volumeWidget.hitZone(point, this._volumePillBounds()) !== null) {
       return this._volumeWidget.handlePointerDown(point, this._volumePillBounds())
     }
+    if (this._startWidget.hitZone(point, this._startRowBounds()) !== null) {
+      return this._startWidget.handlePointerDown(point, this._startRowBounds())
+    }
+    if (this._endWidget.hitZone(point, this._endRowBounds()) !== null) {
+      return this._endWidget.handlePointerDown(point, this._endRowBounds())
+    }
     return false
   }
 
@@ -1560,6 +1884,18 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
     if (this._volumeWidget.isDragging) {
       this._volumeWidget.handlePointerMove(point, this._volumePillBounds())
+      return
+    }
+    if (this._startWidget.isDragging) {
+      this._startWidget.handlePointerMove(point, this._startRowBounds())
+      return
+    }
+    if (this._endWidget.isDragging) {
+      this._endWidget.handlePointerMove(point, this._endRowBounds())
+      return
+    }
+    if (this._markDrag !== null) {
+      this._seekMarkFromPointer(point)
       return
     }
     if (this._drag !== null) {
@@ -1597,6 +1933,12 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   handlePointerUp(): void {
     this._opacityWidget.handlePointerUp()
     this._volumeWidget.handlePointerUp()
+    this._startWidget.handlePointerUp()
+    this._endWidget.handlePointerUp()
+    if (this._markDrag !== null) {
+      this._markDrag = null
+      return
+    }
     if (this._drag !== null) {
       this._drag = null
       this._edgeSnapX = null
@@ -1611,6 +1953,10 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   }
 
   // ── Scrub ─────────────────────────────────────────────────────
+
+  private _playheadHit(point: Point): boolean {
+    return this._playheadPos !== null && ptDist(point, this._playheadPos) <= PLAYHEAD_HIT_R
+  }
 
   private _scrubHit(point: Point): boolean {
     if (this._scrubTrackB === null || this._duration <= 0) return false
@@ -1635,6 +1981,31 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     this._video.currentTime = time
     this._previewVideo.currentTime = time
     this._previewTime = time
+    this.forceDirty()
+  }
+
+  // ── Trim markers ──────────────────────────────────────────────
+
+  // Suspend-on-touch: grabbing a bound marker directly hands control back
+  // to the manual value, same convention as opacity/volume's SliderSlot.
+  private _beginMarkDrag(kind: 'start' | 'end'): void {
+    this._markDrag = kind
+    const slot = kind === 'start' ? this.startSlot : this.endSlot
+    if (slot.state === SlotState.Bound) BindingLayer.findForSlot(slot)?.toggle()
+  }
+
+  private _seekMarkFromPointer(point: Point): void {
+    const t = this._scrubTrackB
+    if (t === null || this._duration <= 0 || this._markDrag === null) return
+    const frac    = t.width > 0 ? Math.max(0, Math.min(1, (point.x - t.x) / t.width)) : 0
+    const minGapF = MIN_MARK_GAP_S / this._duration
+    if (this._markDrag === 'start') {
+      this._manualStartFrac = Math.max(0, Math.min(frac, this._manualEndFrac - minGapF))
+      this._startFrac       = this._manualStartFrac
+    } else {
+      this._manualEndFrac = Math.min(1, Math.max(frac, this._manualStartFrac + minGapF))
+      this._endFrac       = this._manualEndFrac
+    }
     this.forceDirty()
   }
 
@@ -1915,6 +2286,7 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
   }
 
   private _renderControlBar(ctx: Ctx2D): void {
+    this._loopBtnB = this._startMarkB = this._endMarkB = this._playheadPos = null
     if (this._objectUrl === null) {
       this._playBtnB = this._scrubTrackB = this._missingBarB = null
       // Same bar position/style as the normal scrub bar below, but with a
@@ -1958,15 +2330,19 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     if (bar.width <= 0) return
 
     const playB: BBox = { x: bar.x + 4, y: bar.y + (BAR_H - PLAY_SZ) / 2, width: PLAY_SZ, height: PLAY_SZ }
+    const loopB: BBox = { x: bar.x + bar.width - 12 - TIME_W - LOOP_GAP - LOOP_SZ,
+                           y: bar.y + (BAR_H - LOOP_SZ) / 2, width: LOOP_SZ, height: LOOP_SZ }
     const trackL = playB.x + PLAY_SZ + 12
-    const trackR = bar.x + bar.width - 12 - TIME_W
+    const trackR = loopB.x - LOOP_GAP
     const track: BBox = { x: trackL, y: bar.y, width: Math.max(0, trackR - trackL), height: BAR_H }
     this._playBtnB    = playB
     this._scrubTrackB = track
+    this._loopBtnB    = loopB
 
     const trackY  = bar.y + BAR_H / 2
     const frac    = this._duration > 0 ? this._currentTime / this._duration : 0
     const handleX = track.x + Math.max(0, Math.min(1, frac)) * track.width
+    this._playheadPos = track.width > 0 ? { x: handleX, y: trackY } : null
 
     ctx.save()
 
@@ -1981,6 +2357,20 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     ctx.fill()
     ctx.fillStyle    = ACCENT
     drawIcon(ctx, this._playing ? 'pause' : 'play', playB.x + PLAY_SZ / 2, playB.y + PLAY_SZ / 2, 20)
+
+    // Loop toggle — on (default) reproduces the old unconditional whole-file
+    // loop; off pauses at the end mark instead of repeating.
+    ctx.beginPath()
+    ctx.roundRect(loopB.x, loopB.y, LOOP_SZ, LOOP_SZ, 4)
+    ctx.fillStyle = this._loopMarks ? ACCENT + '33' : 'rgba(255,255,255,0.08)'
+    ctx.fill()
+    ctx.strokeStyle = this._loopMarks ? ACCENT + '99' : 'rgba(255,255,255,0.30)'
+    ctx.lineWidth   = 1
+    ctx.beginPath()
+    ctx.roundRect(loopB.x + 0.5, loopB.y + 0.5, LOOP_SZ - 1, LOOP_SZ - 1, 4)
+    ctx.stroke()
+    ctx.fillStyle = this._loopMarks ? ACCENT : 'rgba(255,255,255,0.45)'
+    drawIcon(ctx, 'arrows-counter-clockwise', loopB.x + LOOP_SZ / 2, loopB.y + LOOP_SZ / 2, LOOP_SZ - 8)
 
     if (track.width > 0) {
       ctx.lineCap     = 'round'
@@ -1997,6 +2387,27 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       ctx.arc(handleX, trackY, SCRUB_R, 0, Math.PI * 2)
       ctx.fillStyle = '#ffffff'; ctx.fill()
       ctx.lineWidth = 1.5; ctx.strokeStyle = ACCENT; ctx.stroke()
+
+      const startActive = this._startFrac > MARK_EPS
+      const endActive   = this._endFrac   < 1 - MARK_EPS
+      // If both labels would overlap when centred on their carets, flank
+      // them outward instead: start right-aligned ending at its caret, end
+      // left-aligned starting at its caret.
+      let startAlign: CanvasTextAlign = 'center'
+      let endAlign:   CanvasTextAlign = 'center'
+      if (startActive && endActive) {
+        ctx.font = '8px monospace'
+        const startX = track.x + this._startFrac * track.width
+        const endX   = track.x + this._endFrac   * track.width
+        const startW = ctx.measureText(fmtTime(this._startFrac * this._duration)).width
+        const endW   = ctx.measureText(fmtTime(this._endFrac   * this._duration)).width
+        if (endX - startX < startW / 2 + endW / 2 + 4) {
+          startAlign = 'right'
+          endAlign   = 'left'
+        }
+      }
+      this._drawMark(ctx, track, trackY, this._startFrac, startActive, 'start', startAlign)
+      this._drawMark(ctx, track, trackY, this._endFrac,   endActive,   'end',   endAlign)
     }
 
     ctx.font         = '10px monospace'
@@ -2021,6 +2432,39 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
       ctx.strokeRect(px, py, THUMB_W, THUMB_H)
       ctx.restore()
     }
+  }
+
+  // Draws one trim-marker caret below the scrub track, at `frac` along it.
+  // Always hit-testable (even at its default min/max position) so the very
+  // first drag can move the marker; `active` (off its min/max default)
+  // controls whether it's rendered at full strength with a timecode label,
+  // or as a faint undiscovered affordance with no label. `align` lets the
+  // caller flank the two labels outward (start right-aligned, end
+  // left-aligned) when centred labels would otherwise overlap.
+  private _drawMark(
+    ctx: Ctx2D, track: BBox, trackY: number, frac: number, active: boolean, kind: 'start' | 'end',
+    align: CanvasTextAlign = 'center',
+  ): void {
+    const mx = track.x + Math.max(0, Math.min(1, frac)) * track.width
+    ctx.save()
+    ctx.globalAlpha = active ? 1 : 0.28
+    ctx.fillStyle   = AM_COL
+    ctx.beginPath()
+    ctx.moveTo(mx, trackY + TRACK_H / 2 + 1)
+    ctx.lineTo(mx - MARK_TRI_W / 2, trackY + TRACK_H / 2 + 1 + MARK_TRI_H)
+    ctx.lineTo(mx + MARK_TRI_W / 2, trackY + TRACK_H / 2 + 1 + MARK_TRI_H)
+    ctx.closePath()
+    ctx.fill()
+    if (active) {
+      ctx.font         = '8px monospace'
+      ctx.textAlign    = align
+      ctx.textBaseline = 'bottom'
+      ctx.fillText(fmtTime(frac * this._duration), mx, trackY - TRACK_H / 2 - 2)
+    }
+    ctx.restore()
+    const b: BBox = { x: mx - 8, y: track.y, width: 16, height: track.height }
+    if (kind === 'start') this._startMarkB = b
+    else this._endMarkB = b
   }
 
   private _drawBtn(ctx: Ctx2D, b: BBox, label: string, colour: string): void {
