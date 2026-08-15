@@ -45,7 +45,7 @@ import { drawIcon } from '../ui/icons.js'
 const ACCENT       = '#c8c8e8'
 const DIR_ACCENT   = '#7ecfcf'
 const AM_COL       = '#4a8fe8'   // Amount type accent
-const MIN_SIZE     = 12
+const MIN_SIZE     = 6
 const DEFAULT_SIZE = 48
 
 // Upper bound on font size scales with the canvas so a single word (or a
