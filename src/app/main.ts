@@ -1561,12 +1561,30 @@ interaction.setSlotClickCallback((consumer, slot) => {
     }
 
     // Other empty Mask-typed slots (e.g. ClipLayer.maskSlot, TextLayer.maskSlot):
-    // wrap a shape's silhouette in a MaskLayer, sent to Background. Reuses a
-    // suitable existing shape from the stack below the consumer if one
-    // exists; otherwise creates a fresh random outline shape (as above),
-    // which stays in the stack and becomes the current layer.
+    // wrap a shape's silhouette in a MaskLayer, sent to Background. If this is
+    // a TextLayer whose implicit local mask rectangle has been manually
+    // dragged (TextLayer.getDraggedMaskRect), builds a RectLayer matching
+    // that exact boundary instead — turning the ad-hoc drag into a real,
+    // editable shape. Otherwise reuses a suitable existing shape from the
+    // stack below the consumer if one exists; failing that, creates a fresh
+    // random outline shape (as above), which stays in the stack and becomes
+    // the current layer.
     if (slot.type === ValueType.Mask) {
-      let shapeLayer = findSuitableMaskShape(consumer)
+      let shapeLayer: Layer | null = null
+      const draggedRect = consumer instanceof TextLayer ? consumer.getDraggedMaskRect() : null
+      if (draggedRect !== null) {
+        const c = Node.greyDefault ? OUTLINE_COLOUR : rndColour()
+        const rect = new RectLayer(
+          draggedRect.x + draggedRect.w / 2, draggedRect.y + draggedRect.h / 2,
+          draggedRect.w, draggedRect.h, c,
+        )
+        rect.setFilled(false)
+        Layer.assignDebugName(rect)
+        rect.bounds = { x: X, y: 24, width: W, height: 36 }
+        rect.insertAbove(consumer)
+        shapeLayer = rect
+      }
+      if (shapeLayer === null) shapeLayer = findSuitableMaskShape(consumer)
       if (shapeLayer === null) {
         shapeLayer = randomClosedShapeLayer(Node.viewportWidth, Node.viewportHeight)
         Layer.assignDebugName(shapeLayer)

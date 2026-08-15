@@ -175,12 +175,30 @@ function randomDefaultText(): string {
 }
 
 type DragState =
-  | { type: 'move';   startMouse: Point; startPos: Point }
-  | { type: 'scale';  startDist: number; startSize: number; center: Point }
-  | { type: 'rotate'; startAngle: number; startRot: number; center: Point }
+  | { type: 'move';     startMouse: Point; startPos: Point }
+  | { type: 'moveMask'; startMouse: Point; startRect: { x: number; y: number; w: number; h: number } }
+  | { type: 'scale';    startDist: number; startSize: number; center: Point }
+  | { type: 'rotate';   startAngle: number; startRot: number; center: Point }
 
 function ptDist(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+// Minimum on-screen overlap the implicit mask rectangle must keep with the
+// viewport on each axis while being dragged — enough that it can never fully
+// disappear (which would empty every mask row and detach the handle from the
+// rect, see _localMaskActive's drag clamp in handlePointerMove).
+const MASK_DRAG_MIN_OVERLAP = 40
+
+// Clamps `pos` so that a `size`-long span starting at `pos` keeps at least
+// `overlap` px inside [0, viewportSize] — allows dragging mostly off either
+// edge without ever losing all overlap. `overlap` is capped to what's
+// actually achievable (can't exceed the span's own size or the viewport's).
+function clampDragOverlap(pos: number, size: number, viewportSize: number, overlap: number): number {
+  const ov = Math.min(overlap, size, viewportSize)
+  const lo = Math.min(ov - size, viewportSize - ov)
+  const hi = Math.max(ov - size, viewportSize - ov)
+  return Math.max(lo, Math.min(hi, pos))
 }
 
 export class TextLayer extends Layer implements MaskSource, ImageSource {
@@ -207,6 +225,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private _maskBorderPad:    number                   = 15
   // Local rectangle mask — set on first paste into a fresh layer, bypasses the mask slot.
   private _localMaskRect: { x: number; y: number; w: number; h: number } | null = null
+  // True once the user has dragged the local mask rectangle by its move handle
+  // (as opposed to it merely sitting at its paste-time auto-centred position).
+  // Read by main.ts's slot-click handler: clicking the still-empty maskSlot
+  // after a manual drag creates a RectLayer matching this rectangle instead of
+  // the usual random shape — see getDraggedMaskRect().
+  private _localMaskDragged: boolean = false
   // Auto-fit size computed at paste time; separate from _manualSize so MenuLayer doesn't
   // inherit the reduced value as the default for subsequent layers.
   private _localMaskFittedSize: number | null = null
@@ -332,6 +356,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get vJustify(): 'top'  | 'center' | 'bottom' | 'justify' { return this._vJustify }
   get manualLineSpacing(): number                       { return this._manualLineSpacing }
   get lineSpacingSlot():   ParameterSlot                { return this._lineSpacingSlot   }
+
+  // The implicit local mask rectangle, but only once the user has manually
+  // dragged it (see _localMaskDragged) — null otherwise, including when it's
+  // still sitting at its paste-time auto-centred position. Used by
+  // main.ts's empty-maskSlot click handler to build a RectLayer matching
+  // this boundary instead of the usual random shape.
+  getDraggedMaskRect(): { x: number; y: number; w: number; h: number } | null {
+    return this._localMaskDragged ? this._localMaskRect : null
+  }
 
   setJustify(newJustify: 'left' | 'center' | 'right' | 'justify'): void {
     const old = this._justify
@@ -874,6 +907,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       manualLineSpacing: this._manualLineSpacing,
       maskBorderPad:     this._maskBorderPad,
       localMaskRect:        this._localMaskRect,
+      localMaskDragged:     this._localMaskDragged,
       localMaskFittedSize:  this._localMaskFittedSize,
       manualOpacity:        this._manualOpacity,
     }
@@ -915,6 +949,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         this._localMaskRect = { x: r.x, y: r.y, w: r.w, h: r.h }
       }
     }
+    if (typeof state.localMaskDragged === 'boolean') this._localMaskDragged = state.localMaskDragged
     if (typeof state.localMaskFittedSize === 'number') this._localMaskFittedSize = state.localMaskFittedSize
     if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
   }
@@ -1166,6 +1201,18 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private get _spacingY():      number  { return this._alignY + CTRL_H + CTRL_GAP }
   private get _hasMaskLayout(): boolean { return this._maskRows !== null || this._cachedMaskRows !== null }
 
+  // True when the current mask layout comes from the implicit, paste-created
+  // local rectangle (_localMaskRect) rather than an externally bound Mask
+  // source — mirrors the branch precedence in recompute(). Only this case has
+  // a rectangle we can actually translate; an externally-sourced mask has no
+  // position of its own to grab.
+  private get _localMaskActive(): boolean {
+    return this._maskRows !== null
+      && this._localMaskRect !== null
+      && !this._maskSlot.isActive
+      && !(this._maskSlot.state === SlotState.SuspendedBound && this._cachedMaskRows !== null)
+  }
+
   override get panelBottom(): number { return this._spacingY + CTRL_H + CTRL_GAP }
 
   // ----------------------------------------------------------
@@ -1229,14 +1276,24 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       return true
     }
 
-    // Move handle — only when positionSlot is unbound and no mask layout is active
-    // (_maskRows set means text is flowing within the shape; move has no effect).
-    if (!this._positionSlot.isActive && this._maskRows === null
-        && ptDist(point, hp.move) <= HANDLE_HIT) {
+    // Move handle — free 2D positioning when unmasked (positionSlot must be
+    // unbound); when masked by the implicit paste-created rectangle, drags
+    // translate that rectangle instead (see _localMaskActive). A mask from an
+    // externally bound source has no position of its own to grab.
+    if (this._maskRows === null) {
+      if (!this._positionSlot.isActive && ptDist(point, hp.move) <= HANDLE_HIT) {
+        this._drag = {
+          type:       'move',
+          startMouse: { ...point },
+          startPos:   { ...this._position },
+        }
+        return true
+      }
+    } else if (this._localMaskActive && ptDist(point, hp.move) <= HANDLE_HIT) {
       this._drag = {
-        type:       'move',
+        type:       'moveMask',
         startMouse: { ...point },
-        startPos:   { ...this._position },
+        startRect:  { ...this._localMaskRect! },
       }
       return true
     }
@@ -1332,6 +1389,16 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
   startCenterDrag(point: Point): boolean {
     if (this._maskSlot.isActive) return false
+    if (this._localMaskActive) {
+      this._drag = {
+        type:       'moveMask',
+        startMouse: { ...point },
+        startRect:  { ...this._localMaskRect! },
+      }
+      this.markDirty()
+      return true
+    }
+    if (this._maskRows !== null) return false
     if (this._positionSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._positionSlot)?.toggle()
     }
@@ -1376,6 +1443,26 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
         this._manualPosition = rawPos
         this._edgeSnapX = null; this._edgeSnapY = null
       }
+    } else if (this._drag.type === 'moveMask') {
+      const dx = point.x - this._drag.startMouse.x
+      const dy = point.y - this._drag.startMouse.y
+      const { w, h } = this._drag.startRect
+      // Allow dragging mostly off-screen on any side, but keep a minimum
+      // overlap with the viewport so the rect can never fully disappear —
+      // _applyLocalMask's row array is bounded to [0, canvasHeight) and
+      // silently drops any part of the rect above/below that range, and a
+      // zero-overlap rect would empty every mask row (text vanishes) and
+      // detach the handle from it (_handlePos falls back to _position when
+      // _textContentBBox goes null). This clamp is symmetric on both axes,
+      // unlike the raw row array which only truncates vertically.
+      this._localMaskRect = {
+        x: clampDragOverlap(this._drag.startRect.x + dx, w, Node.viewportWidth,  MASK_DRAG_MIN_OVERLAP),
+        y: clampDragOverlap(this._drag.startRect.y + dy, h, Node.viewportHeight, MASK_DRAG_MIN_OVERLAP),
+        w,
+        h,
+      }
+      this._localMaskDragged = true
+      this._applyLocalMask()
     } else if (this._drag.type === 'scale') {
       const d = Math.max(1, ptDist(point, this._drag.center))
       const s = this._drag.startSize * (d / this._drag.startDist)
@@ -1439,8 +1526,11 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     const hp = this._handlePos()
     if (ptDist(point, hp.rotate) <= HANDLE_HIT) return this
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) return this
-    if (!this._positionSlot.isActive && this._maskRows === null
-        && ptDist(point, hp.move) <= HANDLE_HIT) return this
+    if (this._maskRows === null) {
+      if (!this._positionSlot.isActive && ptDist(point, hp.move) <= HANDLE_HIT) return this
+    } else if (this._localMaskActive && ptDist(point, hp.move) <= HANDLE_HIT) {
+      return this
+    }
     if (boundingBoxContains(this._kbRowBounds(), point)) return this
     if (boundingBoxContains(this._ctrlPanelBounds(), point)) return this
     if (boundingBoxContains(this._alignPillBounds(), point)) return this
@@ -2386,10 +2476,12 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.restore()
     }
 
-    if (!masked) {
-      // Draggable move handle — circle + crosshair
+    if (!masked || this._localMaskActive) {
+      // Draggable move handle — circle + crosshair. When masked, this
+      // translates the implicit paste-created mask rectangle rather than
+      // _position (see _localMaskActive / handlePointerDown's 'moveMask' drag).
       this._drawGlowCircle(ctx, hp.move, HANDLE_R,
-        this._positionSlot.isActive ? '#666688' : '#ffffff')
+        !masked && this._positionSlot.isActive ? '#666688' : '#ffffff')
       const cr = HANDLE_R - 2
       ctx.strokeStyle = 'rgba(0,0,0,0.80)'
       ctx.lineWidth   = 1.5
@@ -2400,7 +2492,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       ctx.lineTo(hp.move.x, hp.move.y + cr)
       ctx.stroke()
     } else if (this._textContentBBox !== null) {
-      // Alignment anchor indicator — crosshair only (not draggable)
+      // Alignment anchor indicator — crosshair only (not draggable); mask
+      // comes from an externally bound source with no position to grab.
       const cr = HANDLE_R + 2
       ctx.save()
       ctx.strokeStyle = ACCENT
