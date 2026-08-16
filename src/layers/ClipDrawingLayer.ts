@@ -189,7 +189,9 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
     if (this.imageSlot.isActive) {
       const src = (this.imageSlot.source as ImageSource).getImage()
       if (src !== null) {
-        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        // Native size — see ClipRectLayer.renderPanel for why this must not
+        // use Node.canvasWidth/Height as the destination size.
+        ctx.drawImage(src, 0, 0)
       }
     }
     super.renderPanel(ctx)

@@ -34,7 +34,9 @@ export class ClipEllipseLayer extends EllipseLayer implements ImageSource {
   private _onAddMove: (() => void) | null = null
 
   constructor() {
-    super(Node.canvasWidth / 2, Node.canvasHeight / 2, Node.canvasWidth * 0.35, Node.canvasHeight * 0.3)
+    // Centred on the *viewport*, not the grow-only canvas — see
+    // ClipRectLayer's constructor comment.
+    super(Node.viewportWidth / 2, Node.viewportHeight / 2, Node.viewportWidth * 0.35, Node.viewportHeight * 0.3)
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
@@ -143,7 +145,9 @@ export class ClipEllipseLayer extends EllipseLayer implements ImageSource {
       if (src !== null) {
         ctx.save()
         ctx.globalAlpha = 0.4
-        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        // Native size — see ClipRectLayer.renderPanel for why this must not
+        // use Node.canvasWidth/Height as the destination size.
+        ctx.drawImage(src, 0, 0)
         ctx.restore()
         ctx.save()
         ctx.shadowColor   = 'rgba(0,0,0,0.75)'

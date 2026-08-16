@@ -38,7 +38,9 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   private _onAddMove: (() => void) | null = null
 
   constructor(points?: Point[], colour?: Colour) {
-    super(points, Node.canvasWidth / 2, Node.canvasHeight / 2, colour)
+    // Centred on the *viewport*, not the grow-only canvas — see
+    // ClipRectLayer's constructor comment.
+    super(points, Node.viewportWidth / 2, Node.viewportHeight / 2, colour)
     if (points !== undefined && points.length >= 3) this._pathInitialized = true
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
@@ -158,7 +160,9 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
       if (src !== null) {
         ctx.save()
         ctx.globalAlpha = 0.4
-        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        // Native size — see ClipRectLayer.renderPanel for why this must not
+        // use Node.canvasWidth/Height as the destination size.
+        ctx.drawImage(src, 0, 0)
         ctx.restore()
         ctx.save()
         ctx.shadowColor   = 'rgba(0,0,0,0.75)'

@@ -68,7 +68,12 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
   private _onAddMove: (() => void) | null = null
 
   constructor() {
-    super(Node.canvasWidth / 2, Node.canvasHeight / 2, Node.canvasWidth * 0.35, Node.canvasHeight * 0.3)
+    // Centred on the *viewport*, not the grow-only canvas — matches
+    // ImageLayer's own default position and the plain RectLayer factory in
+    // MenuLayer, so a freshly created clip shape lines up with a freshly
+    // created image even when canvasWidth/Height has grown past the
+    // current window size (see spec notes on the grow-only canvas).
+    super(Node.viewportWidth / 2, Node.viewportHeight / 2, Node.viewportWidth * 0.35, Node.viewportHeight * 0.3)
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
@@ -178,7 +183,13 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
       if (src !== null) {
         ctx.save()
         ctx.globalAlpha = 0.4
-        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        // Native size, not Node.canvasWidth/Height as the destination — src
+        // is already canvas-sized, and on the desktop-pills render path
+        // (Evaluator.render()) Node.canvasWidth is temporarily overridden to
+        // the viewport width while renderPanel runs, which would otherwise
+        // stretch this guide image out of alignment with this._offscreen
+        // (drawn below at native size) and the actual clip output.
+        ctx.drawImage(src, 0, 0)
         ctx.restore()
         ctx.save()
         ctx.shadowColor = 'rgba(0,0,0,0.75)'; ctx.shadowBlur = 18

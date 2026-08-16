@@ -114,7 +114,9 @@ export class ClipTextLayer extends TextLayer implements ImageSource {
       if (src !== null) {
         ctx.save()
         ctx.globalAlpha = 0.4
-        ctx.drawImage(src, 0, 0, Node.canvasWidth, Node.canvasHeight)
+        // Native size — see ClipRectLayer.renderPanel for why this must not
+        // use Node.canvasWidth/Height as the destination size.
+        ctx.drawImage(src, 0, 0)
         ctx.restore()
         ctx.save()
         ctx.shadowColor   = 'rgba(0,0,0,0.75)'
