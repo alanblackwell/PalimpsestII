@@ -7,7 +7,7 @@ import {
   type Point, type Ctx2D,
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
-import type { MaskLayer } from './MaskLayer.js'
+import { MaskLayer } from './MaskLayer.js'
 import { contentLeft } from '../interaction/layout.js'
 
 // ------------------------------------------------------------
@@ -49,21 +49,25 @@ function renderClipBtn(ctx: Ctx2D, x: number, y: number, w: number, label: strin
 // ------------------------------------------------------------
 //
 // Identical geometry, handles and panel to RectLayer (all inherited
-// unchanged) — but renders imageSlot's image clipped to its own
-// rectangle shape (this.getMask(), from ShapeLayer) instead of a
-// filled rectangle.
+// unchanged) — but renders imageSlot's image clipped to a mask: the
+// mask-tracker helper's fuller composited mask (own shape ∪ any extra
+// paint/shapes) when maskSlot is bound to one, else this.getMask() (from
+// ShapeLayer, just the bare rectangle outline) — instead of a filled
+// rectangle. See recompute() for the read (via maskSlot.source directly,
+// not hiddenHelper, which is cleared once the helper is exposed — and
+// deliberately passive, no forced evaluate()).
 //
-// maskSlot is not read by recompute(): it exists only so the slot row
-// can be bound to a hidden mask-tracker helper (see setMaskTracker),
-// making that helper exposable via the standard "click a bound slot
-// whose source is a hidden helper" gesture.
+// maskSlot also exists so the slot row can be bound to a hidden
+// mask-tracker helper in the first place — main.ts's postInsertLayer binds
+// this shape into the helper's own clipRegionSlot, a feedback slot, see
+// MaskLayer.ts — making that helper exposable via the standard "click a
+// bound slot whose source is a hidden helper" gesture.
 
 export class ClipRectLayer extends RectLayer implements ImageSource {
   readonly imageSlot: ParameterSlot
   readonly maskSlot:  ParameterSlot
 
   private _offscreen: OffscreenCanvas
-  private _maskTracker: MaskLayer | null = null
   private _addMoveDone = false
   private _onAddMove: (() => void) | null = null
 
@@ -77,7 +81,12 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
-    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask')
+    // feedback: never read by recompute() (see class comment) — marking it
+    // feedback stops Node.evaluate()'s eager pull from evaluating maskHelper
+    // every time this layer evaluates, which would otherwise re-enter
+    // maskHelper's own recompute() (it pulls this layer back via
+    // clipRegionSlot) while that recompute() is still running.
+    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask', true)
     this.slots.push(this.imageSlot, this.maskSlot)
 
     this.debugName = 'ClipRect'
@@ -86,17 +95,7 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
     this._showPointButton   = false
   }
 
-  setMaskTracker(helper: MaskLayer): void {
-    this._maskTracker = helper
-    helper.trackedShape = this
-  }
-
   setOnAddMove(fn: () => void): void { this._onAddMove = fn }
-
-  override markDirty(): void {
-    super.markDirty()
-    this._maskTracker?.markDirty()
-  }
 
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)
@@ -159,7 +158,25 @@ export class ClipRectLayer extends RectLayer implements ImageSource {
       const image = (this.imageSlot.source as ImageSource).getImage()
       if (image !== null) {
         ctx.drawImage(image, 0, 0, w, h)
-        const mask = this.getMask()
+        // Prefer the mask-tracker helper's full composited mask (own shape
+        // ∪ any extra paint/shapes the user added) over the bare shape
+        // outline, so painting on the helper actually affects the clip.
+        // Read via maskSlot.source, not hiddenHelper — hiddenHelper/
+        // helperHost are cleared the moment the helper is exposed (the
+        // whole point of exposing it is to paint on it), but maskSlot's
+        // binding persists for the helper's whole lifetime regardless.
+        // Deliberately a passive read (no forced evaluate()) — the helper's
+        // own recompute() also reads this layer's mask passively (see
+        // MaskLayer.recompute()'s clipRegionSlot handling), so forcing
+        // either side would race the other's still-in-progress recompute()
+        // within the same frame. Passive on both sides settles to correct
+        // output within about one frame via ordinary dirty propagation,
+        // imperceptible during a live drag; the one gap this leaves — a
+        // brand-new pair where neither side has ever evaluated — is handled
+        // once, at creation/load time, by settleMaskTrackerPair
+        // (MaskLayer.ts).
+        const helper = this.maskSlot.isActive && this.maskSlot.source instanceof MaskLayer ? this.maskSlot.source : null
+        const mask = helper?.getMask() ?? this.getMask()
         if (mask !== null) {
           ctx.globalCompositeOperation = 'destination-in'
           ctx.drawImage(mask, 0, 0, w, h)

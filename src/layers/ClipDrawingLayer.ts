@@ -21,12 +21,13 @@ const PILL_GAP = 8  // matches MaskLayer's internal gap between slot pills
 // (this.getMask(), from MaskLayer) instead of just showing the mask.
 //
 // maskSlot is not read by recompute(): it exists only so the slot row can
-// be bound to a hidden mask-tracker helper (see setMaskTracker), making
-// that helper exposable via the standard "click a bound slot whose source
-// is a hidden helper" gesture — same as ClipRectLayer etc. Here the helper
-// is somewhat redundant (this layer already has its own paint tools), but
-// it keeps the pattern consistent and gives an exposable copy of the
-// composited mask.
+// be bound to a hidden mask-tracker helper (main.ts's postInsertLayer binds
+// this layer into the helper's own clipRegionSlot, a feedback slot — see
+// MaskLayer.ts), making that helper exposable via the standard "click a
+// bound slot whose source is a hidden helper" gesture — same as
+// ClipRectLayer etc. Here the helper is somewhat redundant (this layer
+// already has its own paint tools), but it keeps the pattern consistent and
+// gives an exposable copy of the composited mask.
 
 export class ClipDrawingLayer extends MaskLayer implements ImageSource {
   override readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask, ValueType.Image])
@@ -35,7 +36,6 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
   readonly maskSlot:  ParameterSlot
 
   private _clippedImage: OffscreenCanvas
-  private _maskTracker: MaskLayer | null = null
   private _snapBounds: { minX: number; maxX: number; minY: number; maxY: number } | null = null
   private _addMoveDone = false
   private _onAddMove: (() => void) | null = null
@@ -45,26 +45,14 @@ export class ClipDrawingLayer extends MaskLayer implements ImageSource {
     this._clippedImage = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
-    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask')
+    // feedback — see ClipRectLayer's constructor comment.
+    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask', true)
     this.slots.push(this.imageSlot, this.maskSlot)
 
     this.debugName = 'ClipDrawing'
   }
 
-  // Link a hidden Mask helper whose content should track this layer's own
-  // composited mask. The link persists for the helper's whole lifetime,
-  // even after it is exposed (exposure only clears isHiddenHelper/helperHost).
-  setMaskTracker(helper: MaskLayer): void {
-    this._maskTracker = helper
-    helper.trackedShape = this
-  }
-
   setOnAddMove(fn: () => void): void { this._onAddMove = fn }
-
-  override markDirty(): void {
-    super.markDirty()
-    this._maskTracker?.markDirty()
-  }
 
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)

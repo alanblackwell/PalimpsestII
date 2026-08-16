@@ -25,7 +25,7 @@ import { MathLayer }         from '../layers/MathLayer.js'
 import { TextLayer }         from '../layers/TextLayer.js'
 import { ImageLayer }        from '../layers/ImageLayer.js'
 import { TraceLayer }        from '../layers/TraceLayer.js'
-import { MaskLayer }         from '../layers/MaskLayer.js'
+import { MaskLayer, settleMaskTrackerPair } from '../layers/MaskLayer.js'
 import { CompositeLayer }    from '../layers/CompositeLayer.js'
 import { FilterLayer }       from '../layers/FilterLayer.js'
 import { CollectionLayer }   from '../layers/CollectionLayer.js'
@@ -322,9 +322,13 @@ export async function serialize(ctx: PersistenceContext): Promise<SaveFile> {
     // re-established unconditionally by main.ts's bootstrap — never
     // serialize it as a normal bindable slot.
     const clockSlot = (layer === ctx.root) ? ctx.root.clockSlot : null
+    // Likewise, a MaskLayer's clipRegionSlot (Clip<Shape> mask-tracker link)
+    // is a raw bind, re-derived on load from hiddenHelperId (see phase 6
+    // below) rather than replayed generically in phase 7.
+    const clipRegionSlot = (layer instanceof MaskLayer) ? layer.clipRegionSlot : null
 
     const slots: SlotRecord[] = layer.slotList.map(slot => {
-      if (slot === clockSlot) return { state: SlotState.Unbound, sourceId: null }
+      if (slot === clockSlot || slot === clipRegionSlot) return { state: SlotState.Unbound, sourceId: null }
       return { state: slot.state, sourceId: refId(slot.source) }
     })
 
@@ -416,14 +420,6 @@ export function teardownSession(ctx: PersistenceContext): void {
 // ------------------------------------------------------------
 // Load
 // ------------------------------------------------------------
-
-export interface MaskTrackerHost {
-  setMaskTracker(helper: MaskLayer): void
-}
-
-export function hasMaskTracker(layer: Layer): layer is Layer & MaskTrackerHost {
-  return typeof (layer as unknown as { setMaskTracker?: unknown }).setMaskTracker === 'function'
-}
 
 export function resolveSource(id: number, idToLayer: Map<number, Layer>, ctx: PersistenceContext): Node | null {
   switch (id) {
@@ -536,12 +532,18 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
     ctx.deletionLayer.insertAbove(ctx.root)
   }
 
-  // Phase 6 — Clip<Shape> mask-tracker links.
+  // Phase 6 — Clip<Shape> mask-tracker links: re-derive the raw
+  // clipRegionSlot bind (excluded from serialize()/phase 7 above) from
+  // hiddenHelperId. `helper instanceof MaskLayer` is a sufficient check —
+  // the only hidden helpers of that class are Clip<Shape> mask trackers.
   for (const record of json.layers) {
     const layer = idToLayer.get(record.id)
     if (!layer || record.hiddenHelperId === null) continue
     const helper = idToLayer.get(record.hiddenHelperId)
-    if (helper instanceof MaskLayer && hasMaskTracker(layer)) layer.setMaskTracker(helper)
+    if (helper instanceof MaskLayer) {
+      helper.clipRegionSlot.bind(layer)
+      settleMaskTrackerPair(layer, helper)
+    }
   }
 
   // Phase 7 — replay slot bindings. The saved graph is a DAG, so replaying

@@ -4,13 +4,13 @@ import { SlotState } from '../core/types.js'
 
 import { CollectionLayer } from '../layers/CollectionLayer.js'
 import { BindingLayer }    from '../layers/BindingLayer.js'
-import { MaskLayer }       from '../layers/MaskLayer.js'
+import { MaskLayer, settleMaskTrackerPair } from '../layers/MaskLayer.js'
 
 import {
   SAVE_FILE_VERSION,
   SENTINEL_MENU, SENTINEL_CLOCK, SENTINEL_DELETION, SENTINEL_BACKGROUND,
   LAYER_CLASSES,
-  encodeState, decodeState, resolveSource, hasMaskTracker,
+  encodeState, decodeState, resolveSource,
   type PersistenceContext, type LayerRecord, type SlotRecord,
 } from './Persistence.js'
 
@@ -81,9 +81,15 @@ export async function serializeCollection(
     const layer = order[i]!
     const state = await encodeState(layer.serializeState())
 
-    const slots: SlotRecord[] = layer.slotList.map(slot => ({
-      state: slot.state, sourceId: refId(slot.source),
-    }))
+    // A MaskLayer's clipRegionSlot (Clip<Shape> mask-tracker link) is a raw
+    // bind, re-derived on load from hiddenHelperId (see phase 6 below)
+    // rather than replayed generically in phase 7 — same exclusion as
+    // Persistence.serialize().
+    const clipRegionSlot = (layer instanceof MaskLayer) ? layer.clipRegionSlot : null
+    const slots: SlotRecord[] = layer.slotList.map(slot => {
+      if (slot === clipRegionSlot) return { state: SlotState.Unbound, sourceId: null }
+      return { state: slot.state, sourceId: refId(slot.source) }
+    })
 
     const itemIds: number[] = layer instanceof CollectionLayer
       ? layer.items.map(item => visit(item))
@@ -211,12 +217,16 @@ export async function deserializeCollection(
     }
   }
 
-  // Phase 6 — Clip<Shape> mask-tracker links.
+  // Phase 6 — Clip<Shape> mask-tracker links: re-derive the raw
+  // clipRegionSlot bind from hiddenHelperId — same as Persistence.deserialize().
   for (const record of json.layers) {
     const layer = idToLayer.get(record.id)
     if (!layer || record.hiddenHelperId === null) continue
     const helper = idToLayer.get(record.hiddenHelperId)
-    if (helper instanceof MaskLayer && hasMaskTracker(layer)) layer.setMaskTracker(helper)
+    if (helper instanceof MaskLayer) {
+      helper.clipRegionSlot.bind(layer)
+      settleMaskTrackerPair(layer, helper)
+    }
   }
 
   // Phase 7 — replay slot bindings. Sentinels resolve against the live ctx

@@ -7,7 +7,7 @@ import {
   type Point, type Colour, type Ctx2D,
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
-import type { MaskLayer } from './MaskLayer.js'
+import { MaskLayer } from './MaskLayer.js'
 import { moveButtonHitTest, renderMoveButton } from './ClipMoveButton.js'
 import { detectContour } from './contourTrace.js'
 
@@ -18,21 +18,24 @@ const INIT_PTS = 10
 // ------------------------------------------------------------
 //
 // Identical geometry, handles and panel to PathLayer (all inherited
-// unchanged) — but renders imageSlot's image clipped to its own
-// spline shape (this.getMask(), from ShapeLayer) instead of a
-// filled spline.
+// unchanged) — but renders imageSlot's image clipped to a mask: the
+// mask-tracker helper's fuller composited mask (own shape ∪ any extra
+// paint/shapes) when maskSlot is bound to one, else this.getMask() (from
+// ShapeLayer, just the bare spline outline) — instead of a filled spline.
+// See ClipRectLayer.ts for the read details (maskSlot.source, passive, not
+// hiddenHelper).
 //
-// maskSlot is not read by recompute(): it exists only so the slot row
-// can be bound to a hidden mask-tracker helper (see setMaskTracker),
-// making that helper exposable via the standard "click a bound slot
-// whose source is a hidden helper" gesture.
+// maskSlot also exists so the slot row can be bound to a hidden
+// mask-tracker helper in the first place — main.ts's postInsertLayer binds
+// this shape into the helper's own clipRegionSlot, a feedback slot, see
+// MaskLayer.ts — making that helper exposable via the standard "click a
+// bound slot whose source is a hidden helper" gesture.
 
 export class ClipPathLayer extends PathLayer implements ImageSource {
   readonly imageSlot: ParameterSlot
   readonly maskSlot:  ParameterSlot
 
   private _offscreen:       OffscreenCanvas
-  private _maskTracker:     MaskLayer | null = null
   private _pathInitialized: boolean = false
   private _addMoveDone = false
   private _onAddMove: (() => void) | null = null
@@ -45,7 +48,8 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot = new ParameterSlot(ValueType.Image, this, 'image')
-    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask')
+    // feedback — see ClipRectLayer's constructor comment.
+    this.maskSlot  = new ParameterSlot(ValueType.Mask,  this, 'mask', true)
     this.slots.push(this.imageSlot, this.maskSlot)
 
     this.debugName = 'ClipPath'
@@ -54,20 +58,7 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
     this._showPointButton   = false
   }
 
-  // Link a hidden Mask helper whose content should track this shape's
-  // mask. The link persists for the helper's whole lifetime, even after
-  // it is exposed (exposure only clears isHiddenHelper/helperHost).
-  setMaskTracker(helper: MaskLayer): void {
-    this._maskTracker = helper
-    helper.trackedShape = this
-  }
-
   setOnAddMove(fn: () => void): void { this._onAddMove = fn }
-
-  override markDirty(): void {
-    super.markDirty()
-    this._maskTracker?.markDirty()
-  }
 
   override renderOverlay(ctx: Ctx2D): void {
     super.renderOverlay(ctx)
@@ -134,7 +125,10 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
       if (image !== null) {
         ctx.drawImage(image, 0, 0, w, h)
 
-        const mask = this.getMask()
+        // Read via maskSlot.source (persists past exposure), passive (no
+        // forced evaluate()) — see ClipRectLayer.recompute() for why.
+        const helper = this.maskSlot.isActive && this.maskSlot.source instanceof MaskLayer ? this.maskSlot.source : null
+        const mask = helper?.getMask() ?? this.getMask()
         if (mask !== null) {
           ctx.globalCompositeOperation = 'destination-in'
           ctx.drawImage(mask, 0, 0, w, h)

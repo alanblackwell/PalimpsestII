@@ -112,6 +112,7 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private readonly _shapeSlots: ParameterSlot[]
   private readonly _invertSlot: ParameterSlot
+  private readonly _clipRegionSlot: ParameterSlot
 
   private _painted:   OffscreenCanvas
   private _erased:    OffscreenCanvas   // erasure mask — subtracted from composited result
@@ -146,11 +147,6 @@ export class MaskLayer extends Layer implements MaskSource {
   private _lastInvertToggleTime: number | null = null   // invertSlot rising-edge detection
   private _invertToggleBounds: { x: number; y: number; width: number; height: number } | null = null
 
-  // When set (e.g. a Clip<Shape>'s hidden mask helper), the tracked layer's
-  // mask is unioned in every recompute — independent of the shape/paint
-  // slots, and persists even after this layer is exposed in the stack.
-  trackedShape: (Layer & MaskSource) | null = null
-
   constructor() {
     super()
     const w = Node.canvasWidth
@@ -164,7 +160,16 @@ export class MaskLayer extends Layer implements MaskSource {
       new ParameterSlot(ValueType.Mask, this, `shape ${i + 1}`),
     )
     this._invertSlot = new ParameterSlot(ValueType.Event, this, 'invert')
-    this.slots.push(...this._shapeSlots, this._invertSlot)
+    // Feedback slot: a Clip<Shape> host is bound here (a raw, cardless
+    // ParameterSlot.bind() — see main.ts's postInsertLayer) as its hidden
+    // mask-tracker helper's own tracked-region input. The host's own
+    // maskSlot is separately bound *to* this helper (for the "click a
+    // bound slot whose source is a hidden helper" exposure gesture), which
+    // would otherwise make this a two-node graph cycle — feedback exempts
+    // it from the cycle check. Appended last (not grouped with the shape
+    // slots) so existing save files' shape/invert slot indices are unaffected.
+    this._clipRegionSlot = new ParameterSlot(ValueType.Mask, this, 'clip region', true)
+    this.slots.push(...this._shapeSlots, this._invertSlot, this._clipRegionSlot)
     this.debugName = 'MaskLayer'
     graph.register(this)
   }
@@ -179,6 +184,11 @@ export class MaskLayer extends Layer implements MaskSource {
   // bind a dropped shape directly (e.g. the mask-drop-on-image shortcut's
   // shape branch, which wraps a Rect/Ellipse/Path/Text in a new MaskLayer).
   get firstShapeSlot(): ParameterSlot { return this._shapeSlots[0]! }
+
+  // The mask-tracker feedback slot — see the constructor comment. Public so
+  // main.ts's postInsertLayer and Persistence (save/load) can bind it
+  // directly to a Clip<Shape> host.
+  get clipRegionSlot(): ParameterSlot { return this._clipRegionSlot }
 
   // The shape slots are conventionally filled with a fresh closed shape
   // (Rect/Ellipse/Path) in outline mode, not another MaskLayer.
@@ -207,8 +217,23 @@ export class MaskLayer extends Layer implements MaskSource {
       }
     }
 
-    if (this.trackedShape !== null) {
-      const mask = this.trackedShape.getMask()
+    if (this._clipRegionSlot.isActive) {
+      // Deliberately passive — no forced evaluate() here. The host's own
+      // recompute() (ClipRectLayer etc.) also reads *this* helper's mask
+      // passively, for its actual clip compositing — a genuine two-way data
+      // dependency, not just the structural graph cycle clipRegionSlot's
+      // `feedback` flag exists to get past. Forcing freshness on either
+      // side races the other's still-in-progress recompute() (whichever
+      // evaluates first this frame would reenter the other mid-construction
+      // and read incomplete data — this previously caused both a stack
+      // overflow and a broken live-drag preview). Passive on both sides
+      // settles to correct output within about one frame via the ordinary
+      // dirty-propagation each side already registers on the other
+      // (clipRegionSlot / maskSlot), which is imperceptible during a live
+      // drag. The one gap this leaves — a brand-new pair where neither side
+      // has evaluated even once — is handled by an explicit bootstrap
+      // sequence at creation time (see main.ts's postInsertLayer).
+      const mask = (this._clipRegionSlot.source as MaskSource).getMask()
       if (mask !== null) ctx.drawImage(mask, 0, 0)
     }
 
@@ -349,8 +374,14 @@ export class MaskLayer extends Layer implements MaskSource {
   // pill directly below for the invert slot + its manual toggle button.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    const shapesBottom = this.renderSlotGroup(ctx, this._shapeSlots, this.panelBottom)
-    const invertY = shapesBottom + PILL_GAP
+    let y = this.renderSlotGroup(ctx, this._shapeSlots, this.panelBottom)
+    // Only shown once bound — a plain user-created MaskLayer never has
+    // anything bound here, so this stays invisible for the common case and
+    // only appears on an exposed Clip<Shape> mask-tracker helper.
+    if (this._clipRegionSlot.isActive) {
+      y = this.renderSlotGroup(ctx, [this._clipRegionSlot], y + PILL_GAP)
+    }
+    const invertY = y + PILL_GAP
     this.renderSlotGroup(ctx, [this._invertSlot], invertY)
     this._renderInvertToggleButton(ctx, this._slotBounds.get(this._invertSlot)!)
   }
@@ -1018,4 +1049,28 @@ export class MaskLayer extends Layer implements MaskSource {
     ctx.fillStyle = active ? ACCENT : colour
     drawIcon(ctx, icon, b.x + b.width / 2, b.y + b.height / 2, Math.min(b.width, b.height) - 8)
   }
+}
+
+// Bootstrap a freshly-wired Clip<Shape> host + mask-tracker helper pair —
+// called right after `helper.clipRegionSlot.bind(host)`, both at creation
+// (main.ts's postInsertLayer) and on load (Persistence.ts/CollectionExport.ts's
+// phase 6), the two places such a pair comes into existence.
+//
+// Both sides' recompute() read the other passively (see clipRegionSlot's
+// handling above, and the host's own recompute()) — forcing either side
+// would race the other's still-in-progress recompute() within the same
+// frame (this previously caused both a stack-overflow and a broken
+// live-drag preview). Passive reads settle to correct output within about
+// a frame via the ordinary dirty propagation each side already registers
+// on the other, which is fine once the pair is live — but a *brand-new*
+// pair, where neither side has ever evaluated, would otherwise settle on a
+// permanently blank clip with nothing left to mark either dirty again.
+// Drive one full settling pass here instead, in dependency order: host's
+// own geometry (always self-contained) -> helper's composite (now sees a
+// real shape) -> host's own clip (now sees a real composite).
+export function settleMaskTrackerPair(host: Layer, helper: MaskLayer): void {
+  host.evaluate()
+  helper.evaluate()
+  host.forceDirty()
+  host.evaluate()
 }

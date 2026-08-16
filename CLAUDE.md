@@ -376,6 +376,51 @@ graph. Two effects, both in `Node.ts`/`Graph.ts`:
   `markDirty()` (`if (this._dirty) return`), not another `forceDirty()` — so
   a cyclic dependent graph can't recurse forever there either.
 
+**Gotcha — don't "fix" a passive read by forcing it, when *both* sides of
+the edge read each other.** `MaskLayer.clipRegionSlot` and the host's
+`maskSlot`/`clipMaskSlot` (see `Clip<Shape>` layer family below) are
+*mutually* feedback — both sides read the other's value passively
+(`slot.source.getMask()`, never `slot.source!.evaluate()`) for real,
+value-affecting output, not just to dodge a structural bind-time cycle. Two
+tempting "fixes" both break this, for related but distinct reasons:
+
+- **Forcing one side's read** (`slot.source!.evaluate()` before reading)
+  reintroduces exactly the infinite recursion `feedback` exists to prevent,
+  *if* the slot on the other end of the same two-node pair is an ordinary
+  (non-feedback) slot — `Node.evaluate()`'s eager pull runs over every
+  active non-feedback slot unconditionally, regardless of whether
+  `recompute()` reads it, so a forced pull on one side can re-enter the
+  other's `evaluate()` while it's still mid-`recompute()` (`_dirty` not
+  yet cleared) → recomputes again → forces again → stack overflow. (This
+  really happened here — worth internalizing why: whenever a manual
+  `source!.evaluate()` pull is added for one feedback edge, every *other*
+  binding between the same two nodes must also be feedback, or the eager
+  pull reopens the recursion regardless of which edge you reasoned was
+  safe.)
+- Even granting both slots are feedback so the forced pull *terminates*
+  safely, it's still wrong for a **true mutual dependency**: the forced side
+  ends up recomputing *while the node it just forced is still mid-`recompute()`*,
+  reading that node's output *before* it's finished being written this
+  frame (e.g. `MaskLayer.recompute()` clears its canvas, draws paint/shape
+  slots, *then* would force-pull the host — if the host's own `recompute()`
+  reads the helper's mask back at that exact moment, it gets a
+  half-composited canvas, missing content the helper hasn't drawn yet).
+  This corrupted live-drag preview accuracy specifically (moving the shape
+  didn't track correctly) even though it didn't crash.
+
+The correct fix for a true mutual/one-directional-per-frame dependency,
+matching the framework's own feedback-slot philosophy: leave **both** reads
+fully passive (each just reads `slot.source.getMask()`, no forced
+`evaluate()` anywhere), and accept up to ~1 frame of lag on each side — self-
+correcting continuously via the ordinary dirty propagation each side already
+registers on the other (both slots being feedback), imperceptible during a
+live interaction. The one gap this leaves is a **brand-new pair where
+neither side has ever evaluated** — passive reads alone would settle
+permanently on a blank/wrong result with nothing left to mark either side
+dirty again. Solve *that* narrow case once, explicitly, at the moment the
+pair is created — see `settleMaskTrackerPair` (`MaskLayer.ts`) below — not
+by forcing evaluation from inside `recompute()` at all.
+
 Canonical use: `FlashLayer.triggerSlot` (Event, feedback) lets a flash's own
 implied repetition tempo (see next section) drive a repeating `EventLayer`
 that retriggers the same flash — `Flash → TempoLayer.rateSlot → TempoLayer
@@ -421,8 +466,23 @@ redirect into.
 (Image) plus a mask-tracker slot (`maskSlot`, or `clipMaskSlot` on
 `ClipTextLayer` since `TextLayer` already has its own `maskSlot`).
 `recompute()` calls `super.recompute()`, then composites `imageSlot`'s image
-through `this.getMask()` via `source-over` + `destination-in` into an
-offscreen canvas that `renderSelf`/`getImage()` use.
+through a mask via `source-over` + `destination-in` into an offscreen canvas
+that `renderSelf`/`getImage()` use. The mask is `maskSlot.source.getMask()`
+(the mask-tracker helper's fuller composited mask — own shape ∪ any extra
+paint/shapes the user added while it was exposed) when that slot is bound to
+a `MaskLayer`, falling back to `this.getMask()` (the bare shape outline) —
+read via the slot's `.source`, not `hiddenHelper`/`helperHost`, since those
+are cleared the moment the helper is exposed (see "Exposure" under "Hidden
+helper layers" above) while the `maskSlot` binding itself persists for the
+helper's whole lifetime. Deliberately a **passive** read — no forced
+`evaluate()` on the helper — since the helper's own `clipRegionSlot` read of
+*this* layer's mask (below) is equally passive; forcing either side would
+race the other's still-in-progress `recompute()` within the same frame (see
+"Feedback slots"'s "don't force a mutual read" gotcha above). A passive read
+is at most about one frame stale and self-corrects via the normal per-frame
+stack evaluation and dirty propagation. `ClipDrawingLayer` needs none of
+this — its own `getMask()` (inherited from `MaskLayer`) already *is* the
+composited mask, so it's used unconditionally, same as before.
 
 `ClipDrawingLayer` extends `MaskLayer`, whose `renderSlots` only renders its
 own private shape slots and invert slot (not the full `this.slots[]` array).
@@ -433,12 +493,47 @@ calls `renderSlotGroup` once more to append a third pill for `imageSlot` and
 must do the same — the base `renderSlots` will not pick them up automatically.
 
 `postInsertLayer` (`main.ts`) inserts a plain hidden `MaskLayer` directly
-**below** the new layer (`helperBelow = true`), links it via
-`setMaskTracker`/`trackedShape` (unioned into the host's mask every
-`recompute`, kept in sync via a `markDirty` override that also calls
-`_maskTracker?.markDirty()`), and binds it to the mask-tracker slot — later
-exposable via the hidden-helper click gesture above. `autoBindRules()` binds
-`imageSlot` to the nearest `Image` below (excluding hidden helpers).
+**below** the new layer (`helperBelow = true`) and links it two ways: the
+host's own `maskSlot`/`clipMaskSlot` is bound *to* the helper (a normal
+`BindingLayer.create` — this is what makes the row clickable via the
+hidden-helper exposure gesture above, and per the compositing paragraph
+above, `recompute()` also reads its `.source` directly, passively, to fetch
+the helper's mask), and the helper's `clipRegionSlot` — a dedicated
+`Mask`-typed feedback slot on `MaskLayer` (`this._clipRegionSlot`) — is
+bound to the host (`maskHelper.clipRegionSlot.bind(newLayer)`, a raw
+`ParameterSlot.bind()`, no `BindingLayer` card, same nominal-binding
+convention as `RootLayer.clockSlot`). `MaskLayer.recompute()` unions
+`clipRegionSlot`'s source mask in exactly like one more shape slot — a
+passive read, same as the host's own read of the helper (see "Feedback
+slots — permitting a well-defined cycle" above, including its "don't force a
+mutual read" gotcha — this pairing is the concrete example it walks
+through).
+
+Both `clipRegionSlot` *and* `maskSlot`/`clipMaskSlot` are `feedback: true` —
+not just `clipRegionSlot`. The two bindings run in opposite directions
+between the same two nodes, which would be a two-node cycle for an ordinary
+slot; `clipRegionSlot` being feedback is what gets the bind itself past
+`Graph.bind()`'s cycle check, and `maskSlot`/`clipMaskSlot` being feedback
+too is what keeps `Node.evaluate()`'s eager pull from creating an incidental
+extra edge between the same two nodes (its value is never read either way,
+so nothing about its own semantics changes). Dirty propagation is
+unaffected by either slot's feedback flag — `markDirty()`/`forceDirty()`
+walk `_feedbackDependents` exactly like `_dependents`, so each side still
+redraws whenever the other changes (host moves → helper redraws; helper is
+painted on → host re-clips), settling within about a frame since neither
+read is forced. `settleMaskTrackerPair(host, helper)` (`MaskLayer.ts`) is
+called once, right after the `clipRegionSlot.bind()` — both at creation
+(`postInsertLayer`) and on load (`Persistence.ts`/`CollectionExport.ts`'s
+phase 6) — to bootstrap a brand-new pair past the one case passive reads
+alone can't recover from: neither side has ever evaluated, so both would
+otherwise settle permanently on a blank/wrong read. Because `clipRegionSlot`
+is a real, visible slot, exposing the helper (clicking the host's bound
+`maskSlot` row) shows the tracked host as an ordinary `Bound → <HostName>`
+row in the shape-slot pill — labelled "clip region" — rather than an
+invisible side-channel; the row only renders while bound
+(`MaskLayer.renderSlots`), so a plain
+user-created `MaskLayer` never shows it. `autoBindRules()` binds `imageSlot`
+to the nearest `Image` below (excluding hidden helpers).
 
 ### renderOverlay — canvas-space handles
 
@@ -687,9 +782,13 @@ manually-set field that isn't fully derived from slot inputs in
   manual/fallback state needs persisting; fields fully recomputed from slot
   sources every frame don't.
 - New cross-references that aren't plain `ParameterSlot` bindings (like
-  `CollectionLayer._layers` or mask-tracker links) need their own id-resolution
-  step in `serialize()`/`deserialize()` — see the `itemIds` /
-  `setMaskTracker` handling for the existing patterns.
+  `CollectionLayer._layers`) need their own id-resolution step in
+  `serialize()`/`deserialize()` — see the `itemIds` handling for the
+  existing pattern. A *raw-bound* feedback slot like `MaskLayer.clipRegionSlot`
+  (see `Clip<Shape>` above) is a middle case: it's excluded from the generic
+  per-slot serialize/replay (mirroring `root.clockSlot`'s exclusion — see
+  `serialize()`'s `clipRegionSlot`/`clockSlot` checks) and instead re-derived
+  from `hiddenHelperId` in its own phase (`deserialize()`'s phase 6).
 - After any such change, run `npm run typecheck` (baseline is the
   pre-existing ~451-line warning count — new errors should be 0) and do a
   manual save → reload → load round-trip of a stack using the new/changed
@@ -704,9 +803,12 @@ menu. `CollectionSaveFile` is a much smaller sibling of `SaveFile` — reuses
 `LayerRecord`/`SlotRecord` unchanged (`{version, kind:
 'palimpsest-collection', rootId, layers}`, no stack/background/archive/
 clock/audioRhythm) — built by `serializeCollection()`/`deserializeCollection()`,
-which share `encodeState`/`decodeState`/`resolveSource`/`hasMaskTracker`
+which share `encodeState`/`decodeState`/`resolveSource`
 with `Persistence.ts` (exported from there for this reuse) rather than
-duplicating them.
+duplicating them. Its own phase 6 (`clipRegionSlot` re-derivation) and the
+`clipRegionSlot` serialize-exclusion duplicate `Persistence.ts`'s logic
+line-for-line rather than sharing it — any future fix to the mask-tracker
+restore logic must be mirrored in both files.
 
 **What gets exported**: the collection itself, its ingested `items`, and —
 via the same `visit()`/`refId()` lazy-closure-growth pattern
@@ -767,8 +869,8 @@ directly and never follow `hiddenHelper` — unlike
 `LayerStackWidget._reorderLiveStack()`, which explicitly re-homes a helper
 alongside its host on every main-stack reorder. Ingesting a `Clip<Shape>`
 layer into a collection today leaves its mask-tracker helper behind in the
-main stack (it keeps working — pull-evaluation only cares about
-reachability via `_maskTracker`, not stack membership — but is a
+main stack (it keeps working — pull-evaluation only cares about reachability
+via the `clipRegionSlot` binding, not stack membership — but is a
 bookkeeping/visual orphan). `serializeCollection()`'s closure walk still
 finds such helpers correctly via `hiddenHelper` regardless of where they
 live.

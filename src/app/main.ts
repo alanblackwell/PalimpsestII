@@ -26,7 +26,7 @@ import { PointLayer }        from '../layers/PointLayer.js'
 import { DirectionLayer }    from '../layers/DirectionLayer.js'
 import { CountLayer }        from '../layers/CountLayer.js'
 import { EventLayer }        from '../layers/EventLayer.js'
-import { MaskLayer }         from '../layers/MaskLayer.js'
+import { MaskLayer, settleMaskTrackerPair } from '../layers/MaskLayer.js'
 import { CollectionLayer }   from '../layers/CollectionLayer.js'
 import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
@@ -398,9 +398,10 @@ function postInsertLayer(newLayer: Layer): void {
     wireClipShapeLayer(newLayer)
 
     // The hidden helper is a plain MaskLayer directly below the Clip layer,
-    // with no handles of its own — its content tracks the Clip layer's own
-    // shape mask (setMaskTracker) and is bound to maskSlot so it can be
-    // exposed by clicking that (bound) slot.
+    // with no handles of its own — its own clipRegionSlot (a feedback slot,
+    // raw ParameterSlot.bind() like root.clockSlot — no BindingLayer card)
+    // tracks the Clip layer's own shape mask, and it's bound to maskSlot so
+    // it can be exposed by clicking that (bound) slot.
     const maskHelper = new MaskLayer()
     Layer.assignDebugName(maskHelper)
     maskHelper.bounds = { ...newLayer.bounds }
@@ -409,9 +410,10 @@ function postInsertLayer(newLayer: Layer): void {
     maskHelper.helperHost = newLayer
     newLayer.hiddenHelper = maskHelper
     newLayer.helperBelow = true
-    newLayer.setMaskTracker(maskHelper)
+    maskHelper.clipRegionSlot.bind(newLayer)
 
     BindingLayer.create(maskHelper, newLayer.maskSlot)
+    settleMaskTrackerPair(newLayer, maskHelper)
   }
 
   if (newLayer instanceof ClipTextLayer) {
@@ -426,9 +428,10 @@ function postInsertLayer(newLayer: Layer): void {
     maskHelper.helperHost = newLayer
     newLayer.hiddenHelper = maskHelper
     newLayer.helperBelow = true
-    newLayer.setMaskTracker(maskHelper)
+    maskHelper.clipRegionSlot.bind(newLayer)
 
     BindingLayer.create(maskHelper, newLayer.clipMaskSlot)
+    settleMaskTrackerPair(newLayer, maskHelper)
   }
 }
 

@@ -7,16 +7,19 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import type { Layer } from '../core/Layer.js'
-import type { MaskLayer } from './MaskLayer.js'
+import { MaskLayer } from './MaskLayer.js'
 
 // ------------------------------------------------------------
 // ClipTextLayer — a TextLayer that renders a clipped image
 // ------------------------------------------------------------
 //
 // Identical text content, typography controls and handles to TextLayer
-// (all inherited unchanged) — but renders imageSlot's image clipped to
-// the text's own glyph silhouette (this.getMask(), from TextLayer)
-// instead of filled, coloured text.
+// (all inherited unchanged) — but renders imageSlot's image clipped to a
+// mask: the mask-tracker helper's fuller composited mask (own glyph
+// silhouette ∪ any extra paint/shapes) when clipMaskSlot is bound to one,
+// else this.getMask() (from TextLayer, just the bare glyph silhouette) —
+// instead of filled, coloured text. See ClipRectLayer.ts for the read
+// details (maskSlot.source, passive, not hiddenHelper — clipMaskSlot here).
 //
 // TextLayer already has a `maskSlot` (Mask) — its *input*, used to flow
 // text inside a bound mask shape. That is a different, pre-existing
@@ -24,41 +27,28 @@ import type { MaskLayer } from './MaskLayer.js'
 // therefore the clip silhouette too). The mask-tracker-exposure slot
 // added here is named `clipMaskSlot` to avoid colliding with it.
 //
-// clipMaskSlot is not read by recompute(): it exists only so the slot row
-// can be bound to a hidden mask-tracker helper (see setMaskTracker),
-// making that helper exposable via the standard "click a bound slot
-// whose source is a hidden helper" gesture.
+// clipMaskSlot also exists so the slot row can be bound to a hidden
+// mask-tracker helper in the first place — main.ts's postInsertLayer binds
+// this layer into the helper's own clipRegionSlot, a feedback slot, see
+// MaskLayer.ts — making that helper exposable via the standard "click a
+// bound slot whose source is a hidden helper" gesture.
 
 export class ClipTextLayer extends TextLayer implements ImageSource {
   readonly imageSlot:    ParameterSlot
   readonly clipMaskSlot: ParameterSlot
 
   private _offscreen: OffscreenCanvas
-  private _maskTracker: MaskLayer | null = null
 
   constructor() {
     super('Text')
     this._offscreen = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
 
     this.imageSlot    = new ParameterSlot(ValueType.Image, this, 'image')
-    this.clipMaskSlot = new ParameterSlot(ValueType.Mask,  this, 'clip mask')
+    // feedback — see ClipRectLayer's constructor comment.
+    this.clipMaskSlot = new ParameterSlot(ValueType.Mask,  this, 'clip mask', true)
     this.slots.push(this.imageSlot, this.clipMaskSlot)
 
     this.debugName = 'ClipText'
-  }
-
-  // Link a hidden Mask helper whose content should track this layer's
-  // glyph-silhouette mask. The link persists for the helper's whole
-  // lifetime, even after it is exposed (exposure only clears
-  // isHiddenHelper/helperHost).
-  setMaskTracker(helper: MaskLayer): void {
-    this._maskTracker = helper
-    helper.trackedShape = this
-  }
-
-  override markDirty(): void {
-    super.markDirty()
-    this._maskTracker?.markDirty()
   }
 
   // ----------------------------------------------------------
@@ -88,7 +78,10 @@ export class ClipTextLayer extends TextLayer implements ImageSource {
       if (image !== null) {
         ctx.drawImage(image, 0, 0, w, h)
 
-        const mask = this.getMask()
+        // Read via clipMaskSlot.source (persists past exposure), passive (no
+        // forced evaluate()) — see ClipRectLayer.recompute() for why.
+        const helper = this.clipMaskSlot.isActive && this.clipMaskSlot.source instanceof MaskLayer ? this.clipMaskSlot.source : null
+        const mask = helper?.getMask() ?? this.getMask()
         if (mask !== null) {
           ctx.globalCompositeOperation = 'destination-in'
           ctx.drawImage(mask, 0, 0, w, h)
