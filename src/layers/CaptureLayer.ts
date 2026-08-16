@@ -14,6 +14,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
 import { downscaleForStorage } from '../persistence/downscaleForStorage.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -90,8 +91,11 @@ export class CaptureLayer extends Layer implements ImageSource {
   // _movieMode is true (so a recording in progress has frames to draw).
   private _result: OffscreenCanvas | null = null
 
-  // Photo-mode snapshot.
-  private _capturedImage: OffscreenCanvas | null = null
+  // Photo-mode snapshot, and the canvas-space bounds it was cropped to at
+  // capture time (see _capturePhoto / getImage — needed to position it
+  // correctly, and to rescale it, on reload at a different window size).
+  private _capturedImage:  OffscreenCanvas | null = null
+  private _capturedBounds: BBox | null = null
 
   // Movie-mode recording state.
   private _recording      = false
@@ -156,7 +160,32 @@ export class CaptureLayer extends Layer implements ImageSource {
       if (this._previewPlaying && this._previewFrame !== null) return this._previewFrame
       return this._result
     }
-    return this._capturedImage
+    return this._fitCapturedImage()
+  }
+
+  // Consumers like CompositeLayer (Blend) assume every ImageSource already
+  // produces a canvasWidth×canvasHeight image with its content correctly
+  // positioned inside, and blit it unscaled at (0,0) — see the comment atop
+  // CompositeLayer.recompute(). _capturedImage on its own doesn't meet that
+  // contract: it's cropped to whatever _effectiveBounds() was at capture
+  // time (the viewport size then, by default), which can be smaller than,
+  // or simply stale relative to, the current canvas — and may itself be a
+  // downscaled-for-storage copy (see downscaleForStorage) after a reload.
+  // Draw it into a fresh canvas-sized surface at _capturedBounds — which
+  // deserializeState has already remapped by the same letterbox rescale as
+  // everything else — so the result lines up with whatever else in the
+  // scene was captured together with it, before and after a reload.
+  private _fitCapturedImage(): OffscreenCanvas | null {
+    if (this._capturedImage === null) return null
+    const b = this._capturedBounds ?? {
+      x: 0, y: 0, width: this._capturedImage.width, height: this._capturedImage.height,
+    }
+    const canvas = new OffscreenCanvas(Node.canvasWidth, Node.canvasHeight)
+    canvas.getContext('2d')!.drawImage(
+      this._capturedImage, 0, 0, this._capturedImage.width, this._capturedImage.height,
+      b.x, b.y, b.width, b.height,
+    )
+    return canvas
   }
 
   // ── Persistence ───────────────────────────────────────────────
@@ -167,11 +196,12 @@ export class CaptureLayer extends Layer implements ImageSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      movieMode:     this._movieMode,
-      editCapture:   this._editCapture,
-      stackCapture:  this._stackCapture,
-      lastEventTime: this._lastEventTime,
-      capturedImage: downscaleForStorage(this._capturedImage),
+      movieMode:      this._movieMode,
+      editCapture:    this._editCapture,
+      stackCapture:   this._stackCapture,
+      lastEventTime:  this._lastEventTime,
+      capturedImage:  downscaleForStorage(this._capturedImage),
+      capturedBounds: this._capturedBounds,
     }
   }
 
@@ -191,6 +221,25 @@ export class CaptureLayer extends Layer implements ImageSource {
       const canvas = new OffscreenCanvas(bmp.width, bmp.height)
       canvas.getContext('2d')!.drawImage(bmp, 0, 0)
       this._capturedImage = canvas
+    }
+    if (state.capturedBounds && typeof state.capturedBounds === 'object') {
+      this._capturedBounds = state.capturedBounds as BBox
+    }
+    // Reload-time letterbox rescale (persistence/letterboxRescale.ts) —
+    // remaps the captured crop's position/size the same way as any other
+    // layer's manual position/scale, so _fitCapturedImage draws it back at
+    // the same proportional spot relative to the new canvas.
+    if (this._capturedBounds !== null) {
+      const r = computeLetterboxRescale()
+      if (r !== null) {
+        const topLeft = rescalePoint(r, { x: this._capturedBounds.x, y: this._capturedBounds.y })
+        this._capturedBounds = {
+          x: topLeft.x,
+          y: topLeft.y,
+          width:  this._capturedBounds.width  * r.scale,
+          height: this._capturedBounds.height * r.scale,
+        }
+      }
     }
     this._status = this._movieMode
       ? 'movie mode'
@@ -215,7 +264,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     // the normal dataflow evaluate() loop only visits layers between the
     // root and the selected layer, which may exclude this one.
     if (this._movieMode && !this._recording) {
-      this._result = this._cropToBounds(this._captureComposite(), this._effectiveBounds())
+      this._result = this._cropToBounds(this._captureComposite(Node.currentLayer), this._effectiveBounds())
 
       // Keep recomputing every frame while in movie mode (and not yet
       // recording), so the live preview composite stays current.
@@ -257,15 +306,22 @@ export class CaptureLayer extends Layer implements ImageSource {
   }
 
   // Render everything below this layer onto a fresh canvas, masked if
-  // maskSlot is bound.
-  private _captureComposite(): OffscreenCanvas {
+  // maskSlot is bound. `current` is what _renderEditComposite treats as the
+  // selected layer (its panel/slots/overlay get drawn) — passed explicitly
+  // rather than read from Node.currentLayer at call time, since that's only
+  // ever updated by an actual Evaluator.render() pass: in a non-continuous
+  // (no bound Clock) session, changing Node.selectLayer's target doesn't by
+  // itself guarantee a frame has rendered yet by the time this runs — see
+  // _capturePhotoWithEditPrompt, which passes the layer it just selected
+  // directly rather than relying on that having happened already.
+  private _captureComposite(current: Node | null): OffscreenCanvas {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
     const canvas = new OffscreenCanvas(w, h)
     const ctx = canvas.getContext('2d')!
 
     if (this._editCapture) {
-      this._renderEditComposite(ctx)
+      this._renderEditComposite(ctx, current)
     } else {
       this.layerBelow?.renderStack(ctx)
       this._applyMask(ctx, w, h)
@@ -345,14 +401,13 @@ export class CaptureLayer extends Layer implements ImageSource {
   // Evaluator's edit-mode loop, plus the selected layer's panel/slot rows
   // and the mouse cursor — so interaction with controls is visible in the
   // capture.
-  private _renderEditComposite(ctx: Ctx2D): void {
+  private _renderEditComposite(ctx: Ctx2D, current: Node | null): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
 
     const layers: Layer[] = []
     for (let l: Layer | null = this.layerBelow; l !== null; l = l.layerBelow) layers.unshift(l)
 
-    const current = Node.currentLayer
     const currentIdx = layers.findIndex(l => l === current)
 
     for (let i = 0; i < layers.length; i++) {
@@ -385,10 +440,15 @@ export class CaptureLayer extends Layer implements ImageSource {
     // Render the selected layer's panel/slot controls, whatever layer that
     // is — e.g. this CaptureLayer itself (its record/save panel is only
     // reachable while selected) or any other layer the user selects
-    // mid-recording to demonstrate its controls.
+    // mid-recording to demonstrate its controls. renderOverlay too — that's
+    // where every layer's canvas-space drag handles live (WarpLayer's warp
+    // handles, ImageLayer/ClipLayer/TextLayer/ShapeLayer's move/scale/
+    // rotate handles, etc. — see Layer.renderOverlay's doc comment), same
+    // order Evaluator.render() uses (panel, slots, overlay).
     if (current instanceof Layer) {
       current.renderPanel(ctx)
       current.renderSlots(ctx)
+      current.renderOverlay(ctx)
     }
 
     // Include the help overlay if it was visible when the capture was triggered.
@@ -443,7 +503,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     } else if (this._editCapture) {
       this._capturePhotoWithEditPrompt()
     } else {
-      this._capturePhoto()
+      this._capturePhoto(Node.currentLayer)
     }
   }
 
@@ -452,11 +512,21 @@ export class CaptureLayer extends Layer implements ImageSource {
   // while THAT layer is selected. Pulse the shutter to prompt the user,
   // then briefly select the layer below (revealing its controls in both the
   // live view and the capture), take the photo, and restore the selection.
+  //
+  // scheduleFrame is called explicitly after each Node.selectLayer — in a
+  // non-continuous (no bound Clock) session, nothing else guarantees a
+  // frame actually renders in response to the selection change, and
+  // Node.currentLayer is only ever updated inside Evaluator.render() —
+  // without it, both the live on-screen view and (worse) the capture
+  // itself could still be showing/using the *previous* selection's panel/
+  // overlay after the settle delay. _capturePhoto is also handed `target`
+  // directly rather than reading Node.currentLayer at capture time, so the
+  // capture is correct regardless of whether that frame already landed.
   private _capturePhotoWithEditPrompt(): void {
     if (this._pendingCapture) return
     const target = this.layerBelow
     if (target === null) {
-      this._capturePhoto()
+      this._capturePhoto(Node.currentLayer)
       return
     }
 
@@ -467,10 +537,12 @@ export class CaptureLayer extends Layer implements ImageSource {
 
     setTimeout(() => {
       Node.selectLayer?.(target)
+      Node.scheduleFrame?.()
       setTimeout(() => {
-        this._capturePhoto()
+        this._capturePhoto(target)
         this._pendingCapture = false
         Node.selectLayer?.(this)
+        Node.scheduleFrame?.()
       }, SETTLE_MS)
     }, PULSE_MS)
   }
@@ -482,8 +554,10 @@ export class CaptureLayer extends Layer implements ImageSource {
     this._fireShutter()
   }
 
-  private _capturePhoto(): void {
-    this._capturedImage = this._cropToBounds(this._captureComposite(), this._effectiveBounds())
+  private _capturePhoto(current: Node | null): void {
+    const bounds = this._effectiveBounds()
+    this._capturedImage  = this._cropToBounds(this._captureComposite(current), bounds)
+    this._capturedBounds = bounds
     this._status = 'captured'
     this.markDirty()
   }
@@ -545,7 +619,7 @@ export class CaptureLayer extends Layer implements ImageSource {
     // same size.
     this._captureBounds = this._effectiveBounds()
 
-    this._result = this._cropToBounds(this._captureComposite(), this._captureBounds)
+    this._result = this._cropToBounds(this._captureComposite(Node.currentLayer), this._captureBounds)
     this._drawToLiveCanvas(this._result)
 
     this._recordedMime   = mimeType
@@ -591,7 +665,7 @@ export class CaptureLayer extends Layer implements ImageSource {
   // is selected and where the pointer is.
   private _recordingFrame(): void {
     if (!this._recording) return
-    this._result = this._cropToBounds(this._captureComposite(), this._captureBounds)
+    this._result = this._cropToBounds(this._captureComposite(Node.currentLayer), this._captureBounds)
     this._drawToLiveCanvas(this._result)
     this.markDirty()
     this._recordingFrameId = requestAnimationFrame(() => this._recordingFrame())
