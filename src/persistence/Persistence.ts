@@ -283,14 +283,15 @@ export async function serialize(ctx: PersistenceContext): Promise<SaveFile> {
   visit(ctx.root)
 
   // Main stack, root-to-top. Skip infrastructure (BindingLayers — recreated
-  // in phase 7), StartupLayer (transient, never persisted) and the menu
-  // (sentinel — it's a singleton, not a LayerRecord).
+  // in phase 7), StartupLayer (transient, never persisted) and the menu /
+  // deletion layer (sentinels — singletons, not LayerRecords).
   const stackIds: number[] = []
   for (let l: Layer | null = ctx.root; l !== null; l = l.layerAbove) {
     if (l === ctx.root)     { stackIds.push(0); continue }
     if (l.isInfrastructure) continue
     if (l instanceof StartupLayer) continue
     if (l === ctx.menuLayer) { stackIds.push(SENTINEL_MENU); continue }
+    if (l === ctx.deletionLayer) { stackIds.push(SENTINEL_DELETION); continue }
     stackIds.push(visit(l))
   }
 
@@ -504,6 +505,15 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
     top = layer
   }
 
+  // DeletionLayer is unconditionally part of the live stack, directly
+  // above root (see main.ts's startup wiring) — LayerStackWidget's
+  // moveUp/moveDown hard-code that invariant. A save file that predates
+  // the SENTINEL_DELETION stack encoding (or one written by a build with
+  // that bug) won't have restored it above, leaving it outsideStack;
+  // repair that here rather than leaving reordering silently broken for
+  // the rest of the session.
+  if (ctx.deletionLayer.outsideStack) ctx.deletionLayer.insertAbove(ctx.root)
+
   // Phase 4 — restore hidden-helper links (positions are already correct
   // from phase 3; this just restores the helperHost/hiddenHelper pointers).
   for (const record of json.layers) {
@@ -527,9 +537,6 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
   for (const id of json.archive) {
     const layer = idToLayer.get(id)
     if (layer) ctx.deletionLayer.archive(layer)
-  }
-  if (json.archive.length > 0 && ctx.deletionLayer.outsideStack) {
-    ctx.deletionLayer.insertAbove(ctx.root)
   }
 
   // Phase 6 — Clip<Shape> mask-tracker links: re-derive the raw
