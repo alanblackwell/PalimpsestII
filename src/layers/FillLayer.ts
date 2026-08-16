@@ -248,8 +248,17 @@ export class FillLayer extends Layer implements ImageSource {
   }
 
   protected recompute(): void {
-    const w = this._offscreen.width
-    const h = this._offscreen.height
+    // Self-correct against the grow-only canvas (Node.canvasWidth/Height only
+    // ever grows — see Evaluator.setViewport). _offscreen is otherwise stuck
+    // at whatever size it was constructed with (e.g. the 1920×1080 default
+    // used by wireColourFillButton's `new FillLayer()`), which — since a
+    // bound maskSlot's source (MaskLayer) always tracks the live canvas size
+    // — would stretch/misalign the mask relative to the fill/gradient content.
+    const w = Node.canvasWidth
+    const h = Node.canvasHeight
+    if (this._offscreen.width !== w || this._offscreen.height !== h) {
+      this._offscreen = new OffscreenCanvas(w, h)
+    }
 
     const aActive = this._colourASlot.isActive
     const bActive = this._colourBSlot.isActive
