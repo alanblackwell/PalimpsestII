@@ -13,6 +13,7 @@ import {
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
 import { drawIcon, type IconName } from '../ui/icons.js'
+import { downscaleForStorage } from '../persistence/downscaleForStorage.js'
 
 // ── Constants ─────────────────────────────────────────────────
 
@@ -159,7 +160,10 @@ export class CaptureLayer extends Layer implements ImageSource {
   }
 
   // ── Persistence ───────────────────────────────────────────────
-  // Config only — never the captured image/movie data.
+  // Movie recordings are never persisted (no equivalent of an embedded PNG
+  // data-URL for video) — but a captured still photo is, downscaled the
+  // same way ImageLayer downscales its bitmap, so e.g. comparing a stack's
+  // appearance before/after a letterbox reload doesn't bloat the save file.
 
   override serializeState(): Record<string, unknown> {
     return {
@@ -167,6 +171,7 @@ export class CaptureLayer extends Layer implements ImageSource {
       editCapture:   this._editCapture,
       stackCapture:  this._stackCapture,
       lastEventTime: this._lastEventTime,
+      capturedImage: downscaleForStorage(this._capturedImage),
     }
   }
 
@@ -177,7 +182,19 @@ export class CaptureLayer extends Layer implements ImageSource {
     if (typeof state.lastEventTime === 'number' || state.lastEventTime === null) {
       this._lastEventTime = state.lastEventTime as EventValue
     }
-    this._status = this._movieMode ? 'movie mode' : 'ready'
+    if (state.capturedImage instanceof ImageBitmap) {
+      // decodeState always hands back an ImageBitmap (see Persistence.ts's
+      // dataURLToBitmap) — but _capturedImage is specifically an
+      // OffscreenCanvas elsewhere (convertToBlob for save/share, which
+      // ImageBitmap doesn't have), so redraw it into one.
+      const bmp = state.capturedImage
+      const canvas = new OffscreenCanvas(bmp.width, bmp.height)
+      canvas.getContext('2d')!.drawImage(bmp, 0, 0)
+      this._capturedImage = canvas
+    }
+    this._status = this._movieMode
+      ? 'movie mode'
+      : (this._capturedImage !== null ? 'captured' : 'ready')
   }
 
   // ── Node — recompute ───────────────────────────────────────────

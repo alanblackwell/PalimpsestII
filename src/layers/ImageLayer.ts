@@ -19,6 +19,7 @@ import { drawIcon, type IconName } from '../ui/icons.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
 import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
+import { downscaleForStorage } from '../persistence/downscaleForStorage.js'
 
 // ------------------------------------------------------------
 // ImageLayer — loads and renders a bitmap image on the canvas
@@ -486,22 +487,11 @@ export class ImageLayer extends Layer implements ImageSource {
   // benefit once saved, since `_natW`/`_natH` (the layer's logical size,
   // persisted separately below) are what actually determine its on-canvas
   // footprint after reload, not the stored bitmap's own pixel dimensions.
-  // Cap what's embedded to the current canvas size — same "never upscale,
-  // only fit down" rule `_adoptBitmap` applies on the way in.
-  private _bitmapForStorage(): OffscreenCanvas | ImageBitmap | null {
-    if (this._bitmap === null) return null
-    const scale = Math.min(1, Node.canvasWidth / this._bitmap.width, Node.canvasHeight / this._bitmap.height)
-    if (scale >= 1) return this._bitmap
-    const w = Math.max(1, Math.round(this._bitmap.width * scale))
-    const h = Math.max(1, Math.round(this._bitmap.height * scale))
-    const canvas = new OffscreenCanvas(w, h)
-    canvas.getContext('2d')!.drawImage(this._bitmap, 0, 0, w, h)
-    return canvas
-  }
+  // downscaleForStorage caps what's embedded to the current canvas size.
 
   override serializeState(): Record<string, unknown> {
     return {
-      bitmap:         this._bitmapForStorage(),
+      bitmap:         downscaleForStorage(this._bitmap),
       filename:       this._filename,
       natW:           this._natW,
       natH:           this._natH,
