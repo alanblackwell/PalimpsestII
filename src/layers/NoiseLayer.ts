@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { SliderSlot }   from '../ui/SliderSlot.js'
+import { letterboxFillRect } from '../persistence/letterboxRescale.js'
 import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 
 // ------------------------------------------------------------
@@ -956,6 +957,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   // Stretches _noiseCanvas (native compute resolution — varies by type/path)
   // up to the actual canvas size, so getImage()/renderSelf always expose a
   // full-canvas image regardless of which noise type generated it.
+  // Node.letterboxMode === 'replay' confines the stretched result to the
+  // letterbox rect instead of the full canvas — see
+  // persistence/letterboxRescale.ts's letterboxFillRect(); a no-op in
+  // every other mode, where the rect is the full canvas.
   private _updateOutputCanvas(): void {
     const w = Node.canvasWidth
     const h = Node.canvasHeight
@@ -965,7 +970,8 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     }
     const ctx = this._outputCanvas.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
-    ctx.drawImage(this._noiseCanvas as CanvasImageSource, 0, 0, w, h)
+    const rect = letterboxFillRect()
+    ctx.drawImage(this._noiseCanvas as CanvasImageSource, rect.x, rect.y, rect.width, rect.height)
   }
 
   // 'static'/'colour' — re-roll a random subset of grid cells. Grid size

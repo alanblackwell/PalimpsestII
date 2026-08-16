@@ -50,3 +50,32 @@ export function rescalePoint(r: LetterboxRescale, p: Point): Point {
     y: r.newCentre.y + (p.y - r.savedCentre.y) * r.scale,
   }
 }
+
+// The rectangle (in the same coordinate space as Node.canvasWidth/
+// canvasHeight) that a "fills the whole canvas" layer — TileLayer,
+// FillLayer, NoiseLayer — should paint into. Outside Node.letterboxMode ===
+// 'replay' (or when there's nothing to rescale against — see
+// computeLetterboxRescale), this is just the full canvas, i.e. today's
+// unconstrained behaviour ('debug' and 'reuse' both want this). In
+// 'replay' it's the letterbox sub-rect instead, so a saved stack's
+// generated backgrounds replay confined to the same proportion of the
+// screen they occupied when saved — matching what Evaluator paints solid
+// black around (see ui/letterboxDebug.ts's drawLetterboxReplayBars) — since
+// consumers of these layers' getImage()/getMask() output (e.g. a
+// CompositeLayer blending one in) never see that black overlay themselves.
+export interface LetterboxFillRect {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+export function letterboxFillRect(): LetterboxFillRect {
+  const full = { x: 0, y: 0, width: Node.canvasWidth, height: Node.canvasHeight }
+  if (Node.letterboxMode !== 'replay') return full
+  const r = computeLetterboxRescale()
+  if (r === null) return full
+  const width  = r.savedCentre.x * 2 * r.scale
+  const height = r.savedCentre.y * 2 * r.scale
+  return { x: r.newCentre.x - width / 2, y: r.newCentre.y - height / 2, width, height }
+}

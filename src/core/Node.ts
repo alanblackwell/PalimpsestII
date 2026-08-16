@@ -2,6 +2,19 @@ import { ValueType, BoundingBox, emptyBoundingBox } from './types.js'
 import type { ParameterSlot } from './ParameterSlot.js'
 import type { Point, Ctx2D } from './types.js'
 
+// Reload-time letterbox behaviour, cycled by the 'l' hotkey
+// (InteractionSystem._handleKey) — see persistence/letterboxRescale.ts for
+// the shared math and ui/letterboxDebug.ts for the visual overlays.
+//   'debug'  — draws the green box/cross overlay; fill-to-canvas layers
+//              (TileLayer/FillLayer/NoiseLayer) behave as in 'reuse'.
+//   'reuse'  — no overlay; every layer fills/positions relative to the
+//              current canvas as usual (today's default behaviour).
+//   'replay' — no overlay; fill-to-canvas layers constrain their painted
+//              content to the letterbox rect, and Evaluator paints the
+//              bands outside it solid black, for viewing a saved stack
+//              exactly as composed rather than adapted to the new window.
+export type LetterboxMode = 'debug' | 'reuse' | 'replay'
+
 // ------------------------------------------------------------
 // Node — base class for all entities in the dataflow graph
 // ------------------------------------------------------------
@@ -194,11 +207,20 @@ export abstract class Node {
   // viewportWidth/viewportHeight to draw the letterbox fit.
   static lastLoadedViewport: { width: number; height: number } | null = null
 
-  // Defaults on while the reload-time rescale policy is under active
-  // development — flip back to false once it's settled.
-  private static _showLetterboxDebug = true
-  static get showLetterboxDebug(): boolean  { return Node._showLetterboxDebug }
-  static set showLetterboxDebug(v: boolean) { if (Node._showLetterboxDebug !== v) { Node._showLetterboxDebug = v; Node.scheduleFrame?.() } }
+  // Defaults to 'debug' while the reload-time rescale policy is under
+  // active development — reconsider the default once it's settled.
+  private static _letterboxMode: LetterboxMode = 'debug'
+  static get letterboxMode(): LetterboxMode  { return Node._letterboxMode }
+  static set letterboxMode(v: LetterboxMode) {
+    if (Node._letterboxMode === v) return
+    Node._letterboxMode = v
+    // Switching to/from 'replay' changes what TileLayer/FillLayer/NoiseLayer
+    // actually paint (see persistence/letterboxRescale.ts's
+    // letterboxFillRect()), not just how the overlay looks — those layers
+    // need to recompute, same as showGrid/artisticMode's dirty cascade.
+    Node.markAllDirty?.()
+    Node.scheduleFrame?.()
+  }
 
   static outlineDefault    = false
   static greyDefault       = false

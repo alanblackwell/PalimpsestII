@@ -7,7 +7,7 @@ import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
 import { drawHelpOverlay } from '../ui/helpText.js'
 import { drawOutlineGrid } from '../ui/grid.js'
-import { drawLetterboxDebug } from '../ui/letterboxDebug.js'
+import { drawLetterboxDebug, drawLetterboxReplayBars } from '../ui/letterboxDebug.js'
 import { findMissingVideoDependency, relinkBarBounds, renderRelinkBar } from '../interaction/videoRelinkPrompt.js'
 
 // Duration of the swipe-gesture direction-arrow flash (see Node.gestureFlash).
@@ -247,6 +247,7 @@ export class Evaluator {
         this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
       }
       drawLetterboxDebug(this.ctx)
+      drawLetterboxReplayBars(this.ctx)
       return
     }
 
@@ -295,6 +296,15 @@ export class Evaluator {
         this.ctx.restore()
       }
     }
+
+    // Letterbox replay bars — painted immediately once layer content is
+    // done, so every control drawn below (panel/slots/overlay, the stack
+    // widget, relink bar, help overlay, and the interaction-feedback
+    // overlays further down) sits on top of the black bands rather than
+    // being covered by them. drawLetterboxDebug, by contrast, stays at the
+    // very end (below) — it's a developer diagnostic meant to always be
+    // visible over everything, including UI, not real content masking.
+    drawLetterboxReplayBars(this.ctx)
 
     const desktopPills = !Node.isMobileDevice && this._widgetCtx !== null
 
@@ -389,9 +399,11 @@ export class Evaluator {
       this._drawPinchFeedback(this.ctx)
     }
 
-    // Letterbox debug overlay — see ui/letterboxDebug.ts. Drawn last so it
-    // sits above every layer regardless of selection, matching the 'l'
-    // hotkey's "always on top while toggled on" behaviour.
+    // Letterbox debug overlay — see ui/letterboxDebug.ts. Drawn last, above
+    // every control, matching the 'l' hotkey's "always on top while active"
+    // behaviour for this developer diagnostic. drawLetterboxReplayBars is
+    // drawn much earlier in this method (right after layer content, before
+    // any panel/pills/handles) so it never covers a control.
     drawLetterboxDebug(this.ctx)
   }
 

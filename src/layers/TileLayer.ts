@@ -13,6 +13,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { SliderSlot }   from '../ui/SliderSlot.js'
+import { letterboxFillRect } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // TileLayer — repeat or stretch an image's content to fill the canvas
@@ -202,7 +203,20 @@ export class TileLayer extends Layer implements ImageSource {
 
     if (src !== null && bbox !== null) {
       ctx.globalAlpha = Math.max(0, Math.min(1, this._opacity))
-      this._compositeMode(ctx, w, h, this._mode, src as CanvasImageSource, bbox, this._margin)
+      // Node.letterboxMode === 'replay' confines the composited tile/fit
+      // pattern to the letterbox rect instead of the full canvas — see
+      // persistence/letterboxRescale.ts's letterboxFillRect(). A plain
+      // translate+clip so _compositeMode's own (0,0)-(w,h) coordinate
+      // logic is unchanged; a no-op in every other mode, where the rect
+      // is the full canvas.
+      const rect = letterboxFillRect()
+      ctx.save()
+      ctx.translate(rect.x, rect.y)
+      ctx.beginPath()
+      ctx.rect(0, 0, rect.width, rect.height)
+      ctx.clip()
+      this._compositeMode(ctx, rect.width, rect.height, this._mode, src as CanvasImageSource, bbox, this._margin)
+      ctx.restore()
     }
 
     this._updatePreviews(src as CanvasImageSource | null, bbox)

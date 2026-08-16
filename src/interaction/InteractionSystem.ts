@@ -1,5 +1,5 @@
 import type { Layer }           from '../core/Layer.js'
-import { Node }                 from '../core/Node.js'
+import { Node, type LetterboxMode } from '../core/Node.js'
 import { ParameterSlot }        from '../core/ParameterSlot.js'
 import { SlotState, ValueType, type Point } from '../core/types.js'
 import { BindingLayer }         from '../layers/BindingLayer.js'
@@ -1147,10 +1147,14 @@ export class InteractionSystem {
       e.preventDefault()
       return
     }
-    // Letterbox debug overlay (temporary, for developing the reload-time
-    // image-repositioning/scaling policy) — see ui/letterboxDebug.ts.
+    // Letterbox mode — cycles Debug (green box/cross overlay) -> Reuse (no
+    // overlay, fill-to-canvas layers ignore the letterbox) -> Replay (no
+    // overlay, fill-to-canvas layers constrain to the letterbox rect, black
+    // bars outside it) -> Debug. See core/Node.ts's LetterboxMode doc.
     if (e.key === 'l' && !e.ctrlKey && !e.metaKey) {
-      Node.showLetterboxDebug = !Node.showLetterboxDebug
+      const order: LetterboxMode[] = ['debug', 'reuse', 'replay']
+      const next = order[(order.indexOf(Node.letterboxMode) + 1) % order.length]!
+      Node.letterboxMode = next
       e.preventDefault()
       return
     }

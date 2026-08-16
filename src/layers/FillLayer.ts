@@ -14,6 +14,7 @@ import {
 import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
+import { letterboxFillRect } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // FillLayer — procedural fill / gradient image generator
@@ -251,9 +252,6 @@ export class FillLayer extends Layer implements ImageSource {
     const colB = bActive
       ? (this._colourBSlot.source   as ColourSource).getColour()
       : DEFAULT_COL_B
-    const pos  = this._positionSlot.isActive
-      ? (this._positionSlot.source  as PointSource).getPoint()
-      : { x: w / 2, y: h / 2 }
     const dir  = this._directionSlot.isActive
       ? (this._directionSlot.source as DirectionSource).getDirection()
       : DEFAULT_DIR
@@ -261,7 +259,32 @@ export class FillLayer extends Layer implements ImageSource {
       ? (this._opacitySlot.source   as AmountSource).getAmount() as Amount
       : this._opacity
 
-    this._draw(colA, colB, aActive, bActive, pos, dir, opacity, w, h)
+    // Node.letterboxMode === 'replay' confines the fill/gradient to the
+    // letterbox rect instead of the full canvas — see
+    // persistence/letterboxRescale.ts's letterboxFillRect(). pos is
+    // resolved in rect-local coordinates (an explicit positionSlot point,
+    // itself an absolute canvas-space point, is translated into that space;
+    // the unbound default re-centres on the rect rather than the full
+    // canvas) so _draw's own (0,0)-(w,h) gradient/fillRect math, run inside
+    // a translate+clip to the rect below, lines up correctly. A no-op in
+    // every other mode, where the rect is the full canvas.
+    const rect = letterboxFillRect()
+    const pos = this._positionSlot.isActive
+      ? (() => {
+          const p = (this._positionSlot.source as PointSource).getPoint()
+          return { x: p.x - rect.x, y: p.y - rect.y }
+        })()
+      : { x: rect.width / 2, y: rect.height / 2 }
+
+    const ctx = this._offscreen.getContext('2d')!
+    ctx.clearRect(0, 0, w, h)
+    ctx.save()
+    ctx.translate(rect.x, rect.y)
+    ctx.beginPath()
+    ctx.rect(0, 0, rect.width, rect.height)
+    ctx.clip()
+    this._draw(colA, colB, aActive, bActive, pos, dir, opacity, rect.width, rect.height)
+    ctx.restore()
   }
 
   // ----------------------------------------------------------
