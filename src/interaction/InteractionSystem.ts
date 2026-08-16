@@ -422,6 +422,32 @@ export class InteractionSystem {
     return this._inPillZone(e.clientX) ? this._viewportPoint(e) : this._point(e)
   }
 
+  // Runs fn with Node.canvasWidth temporarily forced to the viewport width,
+  // mirroring the identical swap Evaluator.render() applies around desktop
+  // pill-zone rendering (see its comment above the `desktopPills` branch).
+  // Needed because many layers recompute their own canvas-space pill/button
+  // bounds live, on every call, by reading contentLeft(Node.canvasWidth) /
+  // panelWidth(Node.canvasWidth) directly (e.g. CollectionLayer's Save/Load
+  // buttons via canvasBounds) rather than reusing bounds cached from the
+  // last render. Node.canvasWidth is the content-canvas backing store —
+  // floored at 800x600 and never shrinks — so without this swap, hit-testing
+  // a pill-zone click computes those bounds against a wider, stale width
+  // than what was actually rendered whenever the browser window is
+  // narrower than that, and clicks silently miss even though the button is
+  // visibly right there. Always restored before returning (try/finally) —
+  // Node.canvasWidth also drives OffscreenCanvas sizing throughout the
+  // codebase, so leaving it swapped would corrupt far more than hit-testing.
+  private _withPillZoneCanvasWidth<T>(useVpt: boolean, fn: () => T): T {
+    if (!useVpt) return fn()
+    const saved = Node.canvasWidth
+    Node.canvasWidth = Node.viewportWidth
+    try {
+      return fn()
+    } finally {
+      Node.canvasWidth = saved
+    }
+  }
+
   private _pickLayerAtPixel(point: Point): Layer | null {
     if (this._stackTop === null) return null
     const w = this._canvas.width, h = this._canvas.height
@@ -582,53 +608,59 @@ export class InteractionSystem {
 
       // On desktop, clicks in the pill zone use viewport coords (pills are fixed
       // in the viewport overlay); elsewhere use content-canvas coords as usual.
+      // Node.canvasWidth is forced to match for the duration of this hit-test
+      // dispatch — see _withPillZoneCanvasWidth — so any layer that recomputes
+      // its own pill/button bounds live (contentLeft(Node.canvasWidth) etc.)
+      // agrees with what was actually rendered.
       const useVpt  = this._inPillZone(e.clientX)
-      const testPt  = useVpt ? this._viewportPoint(e) : point
-      const node    = this._hitTest(testPt)
+      this._withPillZoneCanvasWidth(useVpt, () => {
+        const testPt  = useVpt ? this._viewportPoint(e) : point
+        const node    = this._hitTest(testPt)
 
-      if (node === null || !isDraggable(node)) {
-        const picked = this._handleEmptyAreaClick(point, useVpt ? this._viewportPoint(e) : undefined)
-        if (picked !== null && hasPositionDrag(picked)) {
-          this._pendingPickDrag = { layer: picked, point, pointerId: e.pointerId }
-          this._canvas.setPointerCapture(e.pointerId)
-        } else if (picked === null) {
-          // True empty-area miss (not a slot tap) — if a StrokeLayer is below
-          // the current layer, switch to it and begin a new stroke at this point.
-          const sel = this._widget?.selected ?? null
-          if (sel !== null && !(sel instanceof StrokeLayer) && sel.hitTestSlot(testPt) === null) {
-            for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
-              if (!l.isHiddenHelper && l instanceof StrokeLayer && l.isEmpty) {
-                this._widget!.selected = l
-                l.beginStrokeAt(point)
-                this._active = { node: l, pointerId: e.pointerId, useVpt: false }
-                this._canvas.setPointerCapture(e.pointerId)
-                this._setCursor('grabbing')
-                Node.scheduleFrame?.()
-                break
+        if (node === null || !isDraggable(node)) {
+          const picked = this._handleEmptyAreaClick(point, useVpt ? this._viewportPoint(e) : undefined)
+          if (picked !== null && hasPositionDrag(picked)) {
+            this._pendingPickDrag = { layer: picked, point, pointerId: e.pointerId }
+            this._canvas.setPointerCapture(e.pointerId)
+          } else if (picked === null) {
+            // True empty-area miss (not a slot tap) — if a StrokeLayer is below
+            // the current layer, switch to it and begin a new stroke at this point.
+            const sel = this._widget?.selected ?? null
+            if (sel !== null && !(sel instanceof StrokeLayer) && sel.hitTestSlot(testPt) === null) {
+              for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
+                if (!l.isHiddenHelper && l instanceof StrokeLayer && l.isEmpty) {
+                  this._widget!.selected = l
+                  l.beginStrokeAt(point)
+                  this._active = { node: l, pointerId: e.pointerId, useVpt: false }
+                  this._canvas.setPointerCapture(e.pointerId)
+                  this._setCursor('grabbing')
+                  Node.scheduleFrame?.()
+                  break
+                }
               }
             }
           }
+          return
         }
-        return
-      }
 
-      // Only accept interaction on nodes belonging to the current layer.
-      if (!this._isOnCurrentLayer(node)) return
+        // Only accept interaction on nodes belonging to the current layer.
+        if (!this._isOnCurrentLayer(node)) return
 
-      // Let the node decide whether to accept the event.
-      if (!node.handlePointerDown(testPt)) {
-        // Node declined — still check whether the click landed on a slot dot.
-        const sel = this._widget?.selected ?? null
-        if (sel !== null) {
-          const slot = sel.hitTestSlot(testPt)
-          if (slot !== null) this._handleSlotTap(sel, slot, testPt)
+        // Let the node decide whether to accept the event.
+        if (!node.handlePointerDown(testPt)) {
+          // Node declined — still check whether the click landed on a slot dot.
+          const sel = this._widget?.selected ?? null
+          if (sel !== null) {
+            const slot = sel.hitTestSlot(testPt)
+            if (slot !== null) this._handleSlotTap(sel, slot, testPt)
+          }
+          return
         }
-        return
-      }
 
-      this._active = { node, pointerId: e.pointerId, useVpt }
-      this._canvas.setPointerCapture(e.pointerId)
-      this._setCursor('grabbing')
+        this._active = { node, pointerId: e.pointerId, useVpt }
+        this._canvas.setPointerCapture(e.pointerId)
+        this._setCursor('grabbing')
+      })
       return
     }
 
@@ -1378,8 +1410,9 @@ export class InteractionSystem {
       this._setCursor('default')
       return
     }
+    const useVpt = this._inPillZone(e.clientX)
     const testPt = this._uiPoint(e)
-    const node   = this._hitTest(testPt)
+    const node   = this._withPillZoneCanvasWidth(useVpt, () => this._hitTest(testPt))
     if (node !== null && isDraggable(node) && isInteractive(node) && this._isOnCurrentLayer(node)) {
       this._setCursor('pointer')
     } else {
