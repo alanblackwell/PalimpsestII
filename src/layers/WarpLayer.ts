@@ -158,6 +158,17 @@ export class WarpLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   protected override recompute(): void {
+    // Self-correct against the grow-only content canvas, same as
+    // CompositeLayer's _result — nothing else calls resize() on this layer
+    // (unlike root, WarpLayer isn't wired into the window-resize cascade),
+    // so without this check _offscreen stays stuck at its construction-time
+    // size forever, silently breaking the canvasWidth×canvasHeight
+    // full-canvas contract CompositeLayer (Blend) and CaptureLayer assume
+    // of every ImageSource.
+    if (this._offscreen.width !== Node.canvasWidth || this._offscreen.height !== Node.canvasHeight) {
+      this.resize(Node.canvasWidth, Node.canvasHeight)
+    }
+
     const ctx = this._offscreen.getContext('2d')!
     ctx.clearRect(0, 0, this._offscreen.width, this._offscreen.height)
 
