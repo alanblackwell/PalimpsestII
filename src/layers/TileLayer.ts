@@ -231,9 +231,11 @@ export class TileLayer extends Layer implements ImageSource {
     src: CanvasImageSource, bbox: ContentBBox, margin: number, tileScale = 1,
   ): void {
     if (mode === 'fit') {
-      // Scale so the smaller dimension of the bbox exactly fills the
-      // corresponding target dimension — guarantees full coverage.
-      const scale = Math.max(w / bbox.w, h / bbox.h)
+      // Scale so the larger dimension of the bbox exactly fills the
+      // corresponding target dimension — the whole bbox stays visible
+      // (contain), leaving empty margin on the other axis rather than
+      // cropping content that doesn't fit the target's aspect ratio.
+      const scale = Math.min(w / bbox.w, h / bbox.h)
       const dw = bbox.w * scale
       const dh = bbox.h * scale
       ctx.drawImage(

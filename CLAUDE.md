@@ -656,7 +656,7 @@ and the mask source to `BackgroundLayer`).
 | `src/layers/MaskLayer.ts` | Composite mask: shape slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
-| `src/layers/TileLayer.ts` | Tile or fit an image's content bbox to cover the canvas |
+| `src/layers/TileLayer.ts` | Tile an image's content bbox across the canvas, or fit (contain) it within the canvas |
 | `src/layers/BackgroundLayer.ts` | Off-stack collection for layers that must keep recomputing |
 | `src/layers/ClockLayer.ts` | Singleton time source, `outsideStack` but ticked every frame |
 | `src/layers/FilterGL.ts` | Shared WebGL pipeline singleton for `FilterLayer` |
