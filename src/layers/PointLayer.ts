@@ -789,21 +789,26 @@ export class PointLayer extends Layer implements PointSource {
   // Interaction
   // ----------------------------------------------------------
 
-  // Wander-pill controls, shape spinner, and the toggle button (in its slot row)
-  // take priority; otherwise delegate to the handle's hit-test zone.
+  // The point handle itself — the main handle drag zone, and (when a shape
+  // slot is bound) its numbered ref-point markers and shape-snap intercept —
+  // takes priority over every control pill below, so a handle sitting near
+  // or over the panel area stays grabbable instead of being swallowed by a
+  // pill's hit-zone. Ref-point markers take priority over the plain
+  // main-handle drag zone so clicking a numbered circle always selects that
+  // index rather than starting a free drag.
   protected override hitTestSelf(point: Point) {
-    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
-    if (this._hitWanderControls(point)) return this
-    if (this._hitShapeSpinner(point)) return this
-    // Ref-point markers take priority over the main-handle drag zone so clicking
-    // a numbered circle always selects that index rather than starting a free drag.
     if (this._shapeSlot.isActive && this._hitTestRefPoint(point) !== null) return this
-    // Intercept main handle drag when shape slot is active to provide snap-to-ref.
     if (this._shapeSlot.isActive && !this._wanderEnabled && !this._xSlot.isActive && !this._ySlot.isActive) {
       const dx = point.x - this._point.x, dy = point.y - this._point.y
       if (dx * dx + dy * dy <= SHAPE_HANDLE_HIT * SHAPE_HANDLE_HIT) return this
     }
-    return this._region.hitTest(point)
+    const handleHit = this._region.hitTest(point)
+    if (handleHit !== null) return handleHit
+
+    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) return this
+    if (this._hitWanderControls(point)) return this
+    if (this._hitShapeSpinner(point)) return this
+    return null
   }
 
   private _hitTestRefPoint(point: Point): number | null {
@@ -833,24 +838,6 @@ export class PointLayer extends Layer implements PointSource {
   }
 
   handlePointerDown(point: Point): boolean {
-    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
-      this._handleWanderToggle()
-      return true
-    }
-
-    const { prev, label, next } = this._modeButtons(this._wanderRow(1))
-    if (boundingBoxContains(prev,  point)) { this.cyclePrev(); return true }
-    if (boundingBoxContains(label, point)) { this.cycleNext(); return true }
-    if (boundingBoxContains(next,  point)) { this.cycleNext(); return true }
-
-    // Shape spinner [◀] / [▶]
-    if (this._shapeSpinnerPrev !== null && boundingBoxContains(this._shapeSpinnerPrev, point)) {
-      this._cycleShapeRef(-1); return true
-    }
-    if (this._shapeSpinnerNext !== null && boundingBoxContains(this._shapeSpinnerNext, point)) {
-      this._cycleShapeRef(+1); return true
-    }
-
     // Clicking a numbered ref-point marker selects that index and enables binding.
     if (this._shapeSlot.isActive) {
       const ri = this._hitTestRefPoint(point)
@@ -883,6 +870,24 @@ export class PointLayer extends Layer implements PointSource {
         this.setPoint(point)
         return true
       }
+    }
+
+    if (this._toggleBounds !== null && boundingBoxContains(this._toggleBounds, point)) {
+      this._handleWanderToggle()
+      return true
+    }
+
+    const { prev, label, next } = this._modeButtons(this._wanderRow(1))
+    if (boundingBoxContains(prev,  point)) { this.cyclePrev(); return true }
+    if (boundingBoxContains(label, point)) { this.cycleNext(); return true }
+    if (boundingBoxContains(next,  point)) { this.cycleNext(); return true }
+
+    // Shape spinner [◀] / [▶]
+    if (this._shapeSpinnerPrev !== null && boundingBoxContains(this._shapeSpinnerPrev, point)) {
+      this._cycleShapeRef(-1); return true
+    }
+    if (this._shapeSpinnerNext !== null && boundingBoxContains(this._shapeSpinnerNext, point)) {
+      this._cycleShapeRef(+1); return true
     }
 
     if (this._amountWidget.handlePointerDown(point, this._wanderRow(2))) return true
