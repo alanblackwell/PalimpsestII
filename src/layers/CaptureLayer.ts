@@ -524,7 +524,24 @@ export class CaptureLayer extends Layer implements ImageSource {
   // capture is correct regardless of whether that frame already landed.
   private _capturePhotoWithEditPrompt(): void {
     if (this._pendingCapture) return
-    const target = this.layerBelow
+    // Skip hidden helpers and infrastructure layers to find the actual
+    // layer the user sees as "below" this one on the stack widget — same
+    // filter LayerStackWidget.setStack() applies when building the array
+    // navigateDown()/ArrowDown walks (!isInfrastructure && !isHiddenHelper),
+    // so this always agrees with what pressing the down arrow would select.
+    // Both matter here: a WarpLayer handle's auto-created PointLayer
+    // (isHiddenHelper — WarpLayer._ensureHiddenPL inserts it directly
+    // *above* the WarpLayer it belongs to) AND the BindingLayer created for
+    // that PointLayer's own binding (isInfrastructure — BindingLayer.create
+    // inserts it directly above its consumer too) can each end up sitting
+    // between this CaptureLayer and the layer whose controls actually need
+    // capturing. Selecting/capturing either instead would show nothing
+    // useful rather than the host layer's real controls (WarpLayer's warp
+    // handles, etc.).
+    let target = this.layerBelow
+    while (target !== null && (target.isHiddenHelper || target.isInfrastructure)) {
+      target = target.layerBelow
+    }
     if (target === null) {
       this._capturePhoto(Node.currentLayer)
       return
