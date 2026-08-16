@@ -56,6 +56,7 @@ import { NoiseLayer }        from '../layers/NoiseLayer.js'
 import { TileLayer }         from '../layers/TileLayer.js'
 import { FillLayer }         from '../layers/FillLayer.js'
 import { MotionBlurLayer }   from '../layers/MotionBlurLayer.js'
+import { WarpLayer }         from '../layers/WarpLayer.js'
 import { CompositeLayer }   from '../layers/CompositeLayer.js'
 import { LineLayer }         from '../layers/LineLayer.js'
 import { BindingMapLayer }   from '../layers/BindingMapLayer.js'
@@ -1131,6 +1132,13 @@ function wireLoadedLayer(l: Layer): void {
     l.driftWidget.onInspectorRequest   = wi
     l.opacityWidget.onInspectorRequest = wi
   }
+  // Reconnects _hiddenPL/_prevSrc (live object references, not persisted)
+  // to whatever hidden PointLayer each bound handle's slot binding was
+  // just replayed to — see WarpLayer.reconnectHiddenHandles for why this
+  // is needed (without it, a reloaded bound handle renders/hit-tests at
+  // its stale bind-time anchor, and its next recompute() silently resets
+  // the restored warp displacement to zero).
+  if (l instanceof WarpLayer) l.reconnectHiddenHandles()
 }
 
 // ── Shared: apply a loaded SaveFile to the running session ──────

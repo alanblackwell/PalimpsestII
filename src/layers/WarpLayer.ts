@@ -572,6 +572,32 @@ export class WarpLayer extends Layer implements ImageSource {
     }
   }
 
+  // Reconnects live-object-reference bookkeeping (_hiddenPL, _prevSrc)
+  // after a save/load round trip — called from main.ts's wireLoadedLayer,
+  // same as any other post-restore wiring. Each pointSlot's binding is
+  // replayed by Persistence, and a bound hidden PointLayer is reconstructed
+  // with its own position correctly restored — but _hiddenPL/_prevSrc are
+  // live object references, not serialized, so a freshly-constructed
+  // WarpLayer starts both null/empty regardless of what was bound before
+  // saving. Left unfixed this breaks two things: _handleCurrentPos (the
+  // handle's drawn position and hit-test target) falls back to the stale,
+  // bind-time _handlePos anchor instead of the live source position; and
+  // the very next recompute() treats every already-bound handle as newly
+  // connected (slot.source !== _prevSrc[i]), resetting _initPt[i] to the
+  // current position and silently discarding the restored (and
+  // letterbox-rescaled) displacement baseline.
+  reconnectHiddenHandles(): void {
+    for (let i = 0; i < N_HANDLES; i++) {
+      const slot = this.pointSlots[i]!
+      if (!slot.isActive) continue
+      this._prevSrc[i] = slot.source
+      if (slot.source instanceof PointLayer &&
+          slot.source.isHiddenHelper && slot.source.helperHost === this) {
+        this._hiddenPL[i] = slot.source
+      }
+    }
+  }
+
   // ----------------------------------------------------------
   // Slot default for slot-click-to-create (Point slots → PointLayer at handle pos)
   // ----------------------------------------------------------
