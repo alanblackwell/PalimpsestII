@@ -18,6 +18,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { DraggablePointRegion, registerPromotionFactory } from '../regions/DraggablePointRegion.js'
 import { drawIcon } from '../ui/icons.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 registerPromotionFactory((initial: Point) => new PointLayer(initial))
 
@@ -477,6 +478,15 @@ export class PointLayer extends Layer implements PointSource {
   override deserializeState(state: Record<string, unknown>): void {
     if (state.point && typeof state.point === 'object') {
       this._point = state.point as Point
+      // Reload-time letterbox rescale (persistence/letterboxRescale.ts) —
+      // same policy as every other layer's manual position. This matters
+      // beyond PointLayer's own on-canvas handle: any other layer's
+      // position/point slot actively bound to a PointLayer reads this
+      // value live every frame, overriding that layer's own (already
+      // rescaled) manual fallback — so leaving this unrescaled would
+      // silently undo the rescale for every layer driven by one.
+      const r = computeLetterboxRescale()
+      if (r !== null) this._point = rescalePoint(r, this._point)
       this._region.setPoint(this._point)
     }
     if (typeof state.shapeRefIndex === 'number') this._shapeRefIndex = state.shapeRefIndex

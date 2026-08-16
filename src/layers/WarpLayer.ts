@@ -13,6 +13,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { PointLayer }   from './PointLayer.js'
 import { contentLeft }  from '../interaction/layout.js'
 import { warpGL }       from './WarpGL.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // WarpLayer — non-linear image warp driven by control points or shape
@@ -552,6 +553,22 @@ export class WarpLayer extends Layer implements ImageSource {
     }
     if (Array.isArray(state['initPt'])) {
       this._initPt = (state['initPt'] as (Point | null)[]).map(p => p ? { ...p } : null)
+    }
+    // Reload-time letterbox rescale (persistence/letterboxRescale.ts).
+    // _handlePos is the unbound-handle manual position (same treatment as
+    // any other layer's manual position field). _initPt is the frozen
+    // bind-time baseline the warp displacement (curr - init) is measured
+    // against — it must be rescaled by the same factor as the *live*
+    // current position, or the displacement math mixes old- and
+    // new-canvas coordinates. The live current position for a bound
+    // handle comes from whatever PointSource feeds that slot — typically
+    // the auto-created hidden PointLayer, which rescales its own _point in
+    // PointLayer.deserializeState — so this only produces a consistent
+    // result once that's also in place.
+    const r = computeLetterboxRescale()
+    if (r !== null) {
+      this._handlePos = this._handlePos.map(p => rescalePoint(r, p))
+      this._initPt    = this._initPt.map(p => p !== null ? rescalePoint(r, p) : null)
     }
   }
 
