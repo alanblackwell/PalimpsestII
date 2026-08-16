@@ -209,7 +209,19 @@ export class TileLayer extends Layer implements ImageSource {
       // translate+clip so _compositeMode's own (0,0)-(w,h) coordinate
       // logic is unchanged; a no-op in every other mode, where the rect
       // is the full canvas.
-      const rect = letterboxFillRect()
+      //
+      // 'fit' is the one exception outside replay mode: it centres a
+      // single, non-repeating image, and the canvas is always displayed
+      // anchored at its own top-left corner (see main.ts's canvas setup) —
+      // the grow-only backing store can be larger than the actually
+      // visible viewport (e.g. the 800×600 floor on a narrower window), so
+      // centring within Node.canvasWidth/Height reads as pushed toward the
+      // bottom-right relative to what's on screen (white band top/left,
+      // content clipped bottom/right). 'tile' repeats uniformly so the
+      // extra off-screen canvas doesn't matter to it.
+      const rect = this._mode === 'fit' && Node.letterboxMode !== 'replay'
+        ? { x: 0, y: 0, width: Node.viewportWidth, height: Node.viewportHeight }
+        : letterboxFillRect()
       ctx.save()
       ctx.translate(rect.x, rect.y)
       ctx.beginPath()
