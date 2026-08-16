@@ -9,6 +9,7 @@ import {
   type Point,         type PointSource,
   type Direction,     type DirectionSource,
   type Amount,        type AmountSource,
+  type MaskSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -45,6 +46,9 @@ import { letterboxFillRect } from '../persistence/letterboxRescale.js'
 //   opacitySlot   (Amount)    — overall opacity multiplier, applied to
 //                              the whole result. Manual slider, [0,1],
 //                              default 1 (fully opaque).
+//   maskSlot      (Mask)      — confines the fill to the masked region
+//                              (destination-in composite). Unbound: no
+//                              masking, fill covers the whole rect.
 //
 // linear/radial: if exactly one of colourA/colourB is bound, the
 // gradient uses just that colour, ranging from opaque (at that
@@ -88,6 +92,7 @@ const TYPE_COLOUR: Partial<Record<ValueType, string>> = {
   [ValueType.Colour]:    '#e8944a',
   [ValueType.Point]:     '#cf7ecf',
   [ValueType.Direction]: '#7ecfcf',
+  [ValueType.Mask]:      '#cfcf7e',
 }
 
 type GradType = 'fill' | 'linear' | 'radial'
@@ -121,6 +126,7 @@ export class FillLayer extends Layer implements ImageSource {
   private readonly _positionSlot:  ParameterSlot
   private readonly _directionSlot: ParameterSlot
   private readonly _opacitySlot:   ParameterSlot
+  private readonly _maskSlot:      ParameterSlot
 
   private _gradIndex: number = 0   // default: fill
   private _offscreen:  OffscreenCanvas
@@ -139,8 +145,9 @@ export class FillLayer extends Layer implements ImageSource {
     this._positionSlot  = new ParameterSlot(ValueType.Point,     this)
     this._directionSlot = new ParameterSlot(ValueType.Direction, this)
     this._opacitySlot   = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this._maskSlot      = new ParameterSlot(ValueType.Mask,      this, 'mask')
     this.slots.push(this._colourASlot, this._colourBSlot,
-                    this._positionSlot, this._directionSlot, this._opacitySlot)
+                    this._positionSlot, this._directionSlot, this._maskSlot, this._opacitySlot)
     this._opacityWidget = new SliderSlot(
       this._opacitySlot, 'opacity', AM_COL,
       () => this._opacitySlot.isActive
@@ -168,6 +175,7 @@ export class FillLayer extends Layer implements ImageSource {
   get positionSlot():  ParameterSlot { return this._positionSlot  }
   get directionSlot(): ParameterSlot { return this._directionSlot }
   get opacitySlot():   ParameterSlot { return this._opacitySlot   }
+  get maskSlot():      ParameterSlot { return this._maskSlot      }
   get opacityWidget(): SliderSlot    { return this._opacityWidget  }
 
   // Seed a newly-created layer (via slot-click-to-create) with the value
@@ -285,6 +293,16 @@ export class FillLayer extends Layer implements ImageSource {
     ctx.clip()
     this._draw(colA, colB, aActive, bActive, pos, dir, opacity, rect.width, rect.height)
     ctx.restore()
+
+    if (this._maskSlot.isActive) {
+      const mask = (this._maskSlot.source as MaskSource).getMask()
+      if (mask !== null) {
+        ctx.save()
+        ctx.globalCompositeOperation = 'destination-in'
+        ctx.drawImage(mask as CanvasImageSource, 0, 0, w, h)
+        ctx.restore()
+      }
+    }
   }
 
   // ----------------------------------------------------------
@@ -550,8 +568,8 @@ export class FillLayer extends Layer implements ImageSource {
     const px     = cb.x
     const pw     = cb.width
     const y0     = this.panelBottom
-    // rows: 1 SliderSlot + 4 standard slots (colourA/B, position, direction)
-    const n      = this.slots.length   // 5 total; opacity handled by widget
+    // rows: 1 SliderSlot + 5 standard slots (colourA/B, position, direction, mask)
+    const n      = this.slots.length   // 6 total; opacity handled by widget
     const totalH = n * (SLOT_H + SLOT_GAP) - SLOT_GAP
 
     ctx.save()

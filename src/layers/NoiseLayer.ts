@@ -8,6 +8,7 @@ import {
   type Amount,     type AmountSource,
   type Point,      type PointSource,
   type Direction,  type DirectionSource,
+  type MaskSource,
   type Ctx2D,
 } from '../core/types.js'
 import { graph } from '../dataflow/Graph.js'
@@ -88,6 +89,9 @@ import { noiseGL, type GLNoiseId } from './NoiseGL.js'
 //                               slider, 0–360°. Unused by static/colour.
 //   positionSlot (Point)     — "sample": canvas point at which the Amount
 //                               output is read from the noise texture.
+//   maskSlot     (Mask)      — confines the noise texture to the masked
+//                               region (destination-in composite). Unbound:
+//                               no masking, noise covers the whole rect.
 //
 // Manual controls:
 //   Style row — one big button per noise type, each showing a live
@@ -373,6 +377,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   private readonly _positionSlot: ParameterSlot
   private readonly _driftSlot:    ParameterSlot
   private readonly _opacitySlot:  ParameterSlot
+  private readonly _maskSlot:     ParameterSlot
 
   private _noiseIndex: number = 0       // default: static
   private _seed:       number = 0
@@ -452,9 +457,10 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._positionSlot = new ParameterSlot(ValueType.Point,     this, 'sample')
     this._driftSlot    = new ParameterSlot(ValueType.Direction, this, 'drift')
     this._opacitySlot  = new ParameterSlot(ValueType.Amount,    this, 'opacity')
+    this._maskSlot     = new ParameterSlot(ValueType.Mask,      this, 'mask')
     this.slots.push(
       this._timeSlot, this._speedSlot, this._scaleSlot,
-      this._detailSlot, this._positionSlot, this._driftSlot, this._opacitySlot,
+      this._detailSlot, this._positionSlot, this._driftSlot, this._opacitySlot, this._maskSlot,
     )
 
     for (let i = 0; i < MAX_DROPS; i++) this._drops.push(dropParams(i, this._seed))
@@ -543,6 +549,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
   get positionSlot(): ParameterSlot { return this._positionSlot }
   get driftSlot():    ParameterSlot { return this._driftSlot    }
   get opacitySlot():   ParameterSlot { return this._opacitySlot  }
+  get maskSlot():      ParameterSlot { return this._maskSlot     }
   get scaleWidget():   SliderSlot    { return this._scaleWidget  }
   get speedWidget():   SliderSlot    { return this._speedWidget  }
   get detailWidget():  SliderSlot    { return this._detailWidget }
@@ -823,8 +830,8 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     this._detailWidget.render(ctx, rows.detailRow)
     this._driftWidget.render(ctx, rows.driftRow)
 
-    // Standard rows for time and position
-    this.renderSlotGroup(ctx, [this._timeSlot, this._positionSlot], py + pillH + 8)
+    // Standard rows for time, position, and mask
+    this.renderSlotGroup(ctx, [this._timeSlot, this._positionSlot, this._maskSlot], py + pillH + 8)
 
     // Opacity SliderSlot pill — one row below the standard pair
     const ob = this._opacityPillBounds()
@@ -840,7 +847,7 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
 
   private _opacityPillBounds(): BBox {
     const pillH    = 4 * (SLOT_H + SLOT_GAP) - SLOT_GAP + 2 * SLOT_PAD
-    const standardH = 2 * (SLOT_H + SLOT_GAP) - SLOT_GAP   // time + position
+    const standardH = 3 * (SLOT_H + SLOT_GAP) - SLOT_GAP   // time + position + mask
     const cb = this.canvasBounds
     return { x: cb.x, y: this.panelBottom + pillH + 8 + standardH + 8 + SLOT_PAD, width: cb.width, height: SLOT_H }
   }
@@ -972,6 +979,16 @@ export class NoiseLayer extends Layer implements AmountSource, ImageSource {
     ctx.clearRect(0, 0, w, h)
     const rect = letterboxFillRect()
     ctx.drawImage(this._noiseCanvas as CanvasImageSource, rect.x, rect.y, rect.width, rect.height)
+
+    if (this._maskSlot.isActive) {
+      const mask = (this._maskSlot.source as MaskSource).getMask()
+      if (mask !== null) {
+        ctx.save()
+        ctx.globalCompositeOperation = 'destination-in'
+        ctx.drawImage(mask as CanvasImageSource, 0, 0, w, h)
+        ctx.restore()
+      }
+    }
   }
 
   // 'static'/'colour' — re-roll a random subset of grid cells. Grid size
