@@ -80,12 +80,17 @@ export class ClipPathLayer extends PathLayer implements ImageSource {
   }
 
   override serializeState(): Record<string, unknown> {
-    return { ...super.serializeState(), addMoveDone: this._addMoveDone }
+    return { ...super.serializeState(), addMoveDone: this._addMoveDone, pathInitialized: this._pathInitialized }
   }
 
   override deserializeState(state: Record<string, unknown>): void {
     super.deserializeState(state)
     if (typeof state.addMoveDone === 'boolean') this._addMoveDone = state.addMoveDone
+    // A loaded save already carries its (possibly hand-edited) points —
+    // without this, the one-shot contour trace in recompute() would fire
+    // again on the first frame after load and silently discard them.
+    if (typeof state.pathInitialized === 'boolean') this._pathInitialized = state.pathInitialized
+    else if (Array.isArray(state.points) && state.points.length >= 3) this._pathInitialized = true
   }
 
   // ----------------------------------------------------------

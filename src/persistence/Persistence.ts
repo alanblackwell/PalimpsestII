@@ -533,16 +533,25 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
   }
 
   // Phase 6 — Clip<Shape> mask-tracker links: re-derive the raw
-  // clipRegionSlot bind (excluded from serialize()/phase 7 above) from
+  // clipRegionSlot bind (excluded from serialize()/phase 7 below) from
   // hiddenHelperId. `helper instanceof MaskLayer` is a sufficient check —
   // the only hidden helpers of that class are Clip<Shape> mask trackers.
+  // The settleMaskTrackerPair() bootstrap is deferred to phase 7b — it
+  // needs the host's own maskSlot/clipMaskSlot bound to the helper first
+  // (done generically in phase 7 below, same as any other slot), matching
+  // creation-time ordering (main.ts's postInsertLayer binds both
+  // directions before calling settleMaskTrackerPair). Settling here, before
+  // that binding exists, would leave the host's offscreen composited with
+  // imageSlot/maskSlot both still inactive — blank until the host next
+  // happens to be re-evaluated (only guaranteed once it's selected).
+  const maskTrackerPairs: [Layer, MaskLayer][] = []
   for (const record of json.layers) {
     const layer = idToLayer.get(record.id)
     if (!layer || record.hiddenHelperId === null) continue
     const helper = idToLayer.get(record.hiddenHelperId)
     if (helper instanceof MaskLayer) {
       helper.clipRegionSlot.bind(layer)
-      settleMaskTrackerPair(layer, helper)
+      maskTrackerPairs.push([layer, helper])
     }
   }
 
@@ -561,6 +570,13 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
       const bl = BindingLayer.create(source, slot)
       if (bl && slotRecord.state === SlotState.SuspendedBound) bl.toggle()
     }
+  }
+
+  // Phase 7b — bootstrap each mask-tracker pair now that both directions
+  // (helper.clipRegionSlot -> host from phase 6, host.maskSlot/clipMaskSlot
+  // -> helper from phase 7) are bound.
+  for (const [layer, helper] of maskTrackerPairs) {
+    settleMaskTrackerPair(layer, helper)
   }
 
   // Phase 8 — restore the singleton ClockLayer and re-establish

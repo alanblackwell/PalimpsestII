@@ -219,13 +219,18 @@ export async function deserializeCollection(
 
   // Phase 6 — Clip<Shape> mask-tracker links: re-derive the raw
   // clipRegionSlot bind from hiddenHelperId — same as Persistence.deserialize().
+  // settleMaskTrackerPair() is deferred to phase 7b, after phase 7 below has
+  // bound the host's own maskSlot/clipMaskSlot to the helper — see
+  // Persistence.deserialize()'s matching comment for why settling before
+  // that binding exists leaves the host's offscreen blank.
+  const maskTrackerPairs: [Layer, MaskLayer][] = []
   for (const record of json.layers) {
     const layer = idToLayer.get(record.id)
     if (!layer || record.hiddenHelperId === null) continue
     const helper = idToLayer.get(record.hiddenHelperId)
     if (helper instanceof MaskLayer) {
       helper.clipRegionSlot.bind(layer)
-      settleMaskTrackerPair(layer, helper)
+      maskTrackerPairs.push([layer, helper])
     }
   }
 
@@ -245,6 +250,11 @@ export async function deserializeCollection(
       const bl = BindingLayer.create(source, slot)
       if (bl && slotRecord.state === SlotState.SuspendedBound) bl.toggle()
     }
+  }
+
+  // Phase 7b — bootstrap each mask-tracker pair now that both directions are bound.
+  for (const [layer, helper] of maskTrackerPairs) {
+    settleMaskTrackerPair(layer, helper)
   }
 
   // Ownership closure: root -> its own itemIds (recursively, through any
