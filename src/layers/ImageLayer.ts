@@ -526,6 +526,44 @@ export class ImageLayer extends Layer implements ImageSource {
     if (typeof state.addFilterDone === 'boolean') this._addFilterDone = state.addFilterDone
     if (typeof state.manualScale   === 'number')  this._manualScale   = state.manualScale
     if (typeof state.manualOpacity === 'number')  this._manualOpacity = state.manualOpacity
+    this._applyLetterboxRescale()
+  }
+
+  // Reload-time letterbox rescale. Node.lastLoadedViewport is the browser-
+  // window size recorded in the save file this layer was just restored
+  // from (set by Persistence.deserialize/CollectionExport.
+  // deserializeCollection before per-layer state restore runs) — the
+  // *viewport*, not canvasWidth/canvasHeight, since the canvas backing
+  // store is floored at 800x600 and only ever grows, so it doesn't
+  // reliably reflect "the window size the user actually resized to". If
+  // the current viewport differs from the saved one, a manually
+  // positioned/scaled image is remapped so it keeps the same proportion of
+  // the letterbox's short side, and the same proportional offset from
+  // centre, that it had relative to the viewport it was saved at.
+  // Derivation: letting scale = min(vw/savedW, vh/savedH) (the same
+  // short-side fit ui/letterboxDebug.ts draws), scaling both the
+  // centre-relative position offset and the display scale by that one
+  // factor preserves size-relative-to-short-side and
+  // offset-relative-to-viewport-size exactly, since both the letterbox box
+  // and its contents grow/shrink together. An image that was never
+  // manually moved (manualPosition still null) needs no adjustment —
+  // recompute()'s viewport-centre fallback already re-centres it on the
+  // new viewport on its own.
+  private _applyLetterboxRescale(): void {
+    const saved = Node.lastLoadedViewport
+    if (saved === null || saved.width <= 0 || saved.height <= 0) return
+    const vw = Node.viewportWidth, vh = Node.viewportHeight
+    if (vw === saved.width && vh === saved.height) return
+    const scale = Math.min(vw / saved.width, vh / saved.height)
+    if (this._manualPosition !== null) {
+      this._manualPosition = {
+        x: vw / 2 + (this._manualPosition.x - saved.width  / 2) * scale,
+        y: vh / 2 + (this._manualPosition.y - saved.height / 2) * scale,
+      }
+    }
+    if (this._manualScale !== null) {
+      this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this._manualScale * scale))
+    }
   }
 
   // ----------------------------------------------------------

@@ -113,6 +113,14 @@ export interface LayerRecord {
 export interface SaveFile {
   version: number
   canvas: { width: number; height: number }
+  // Actual browser-window size at save time — distinct from `canvas` above,
+  // which is the (floored-at-800x600, monotonically-growing) backing-store
+  // size and can be considerably larger than what was actually on screen.
+  // Used by ImageLayer's reload-time letterbox rescale (Node.
+  // lastLoadedViewport) and its debug overlay (ui/letterboxDebug.ts), both
+  // of which need "the window the user actually resized," not the padded
+  // canvas.
+  viewport: { width: number; height: number }
   clock: { elapsed: number; paused: boolean }
   // Shared audio-rhythm tuning (src/audio/AudioRhythm.ts) — a plain
   // importable singleton, not structural like clock/background/archive
@@ -346,6 +354,7 @@ export async function serialize(ctx: PersistenceContext): Promise<SaveFile> {
   return {
     version: SAVE_FILE_VERSION,
     canvas: { width: Node.canvasWidth, height: Node.canvasHeight },
+    viewport: { width: Node.viewportWidth, height: Node.viewportHeight },
     clock: { elapsed: ctx.clock.elapsed, paused: ctx.clock.paused },
     audioRhythm: {
       filterFreq:     audioRhythm.filterFreq,
@@ -434,6 +443,16 @@ export async function deserialize(json: SaveFile, ctx: PersistenceContext): Prom
   }
 
   teardownSession(ctx)
+
+  // Recorded before per-layer state restore (phase 2) so ImageLayer's
+  // reload-time letterbox rescale (see ImageLayer.deserializeState) can
+  // read it while restoring manualPosition/manualScale. Saves from before
+  // this field existed have no `viewport` — null skips the rescale/debug
+  // overlay entirely rather than computing off `undefined`.
+  if (json.viewport === undefined) {
+    console.warn('Persistence: save file predates the viewport field — letterbox rescale/debug overlay skipped for this load')
+  }
+  Node.lastLoadedViewport = json.viewport ?? null
 
   // Phase 1 — instantiate every layer (root is the existing singleton, id 0).
   const idToLayer = new Map<number, Layer>()

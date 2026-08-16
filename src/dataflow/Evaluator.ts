@@ -7,6 +7,7 @@ import type { LayerStackWidget } from '../interaction/LayerStackWidget.js'
 import { contentLeft } from '../interaction/layout.js'
 import { drawHelpOverlay } from '../ui/helpText.js'
 import { drawOutlineGrid } from '../ui/grid.js'
+import { drawLetterboxDebug } from '../ui/letterboxDebug.js'
 import { findMissingVideoDependency, relinkBarBounds, renderRelinkBar } from '../interaction/videoRelinkPrompt.js'
 
 // Duration of the swipe-gesture direction-arrow flash (see Node.gestureFlash).
@@ -245,6 +246,7 @@ export class Evaluator {
       if (this._widgetCtx !== null) {
         this._widgetCtx.clearRect(0, 0, this._widgetCanvas!.width, this._widgetCanvas!.height)
       }
+      drawLetterboxDebug(this.ctx)
       return
     }
 
@@ -386,6 +388,11 @@ export class Evaluator {
     if (Node.pinchFeedback !== null) {
       this._drawPinchFeedback(this.ctx)
     }
+
+    // Letterbox debug overlay — see ui/letterboxDebug.ts. Drawn last so it
+    // sits above every layer regardless of selection, matching the 'l'
+    // hotkey's "always on top while toggled on" behaviour.
+    drawLetterboxDebug(this.ctx)
   }
 
   // Crosshair centred on the current touch-drag point — a node handle/

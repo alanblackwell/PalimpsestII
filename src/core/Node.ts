@@ -178,6 +178,28 @@ export abstract class Node {
   static get artisticMode(): boolean  { return Node._artisticMode }
   static set artisticMode(v: boolean) { if (Node._artisticMode !== v) { Node._artisticMode = v; Node.markAllDirty?.(); Node.scheduleFrame?.() } }
 
+  // -- Reload-time letterbox rescale (image-repositioning/scaling policy,
+  // plus a debug overlay for developing it) --------------------------------
+  // Browser-window (viewport) size recorded in the most recently loaded
+  // save file (full session or standalone collection) — null until the
+  // first load this page-load, or if the file predates this field.
+  // Deliberately the *viewport* size, not canvasWidth/canvasHeight — the
+  // canvas backing store is floored at 800x600 and only ever grows, so on
+  // a small window it can be considerably larger than what was actually
+  // visible, which is what "reloaded in a different window size" means.
+  // Set by Persistence.deserialize / CollectionExport.deserializeCollection
+  // before per-layer state restore runs, so ImageLayer.deserializeState can
+  // read it while restoring manualPosition/manualScale; also read by
+  // ui/letterboxDebug.ts, which compares it against the *current*
+  // viewportWidth/viewportHeight to draw the letterbox fit.
+  static lastLoadedViewport: { width: number; height: number } | null = null
+
+  // Defaults on while the reload-time rescale policy is under active
+  // development — flip back to false once it's settled.
+  private static _showLetterboxDebug = true
+  static get showLetterboxDebug(): boolean  { return Node._showLetterboxDebug }
+  static set showLetterboxDebug(v: boolean) { if (Node._showLetterboxDebug !== v) { Node._showLetterboxDebug = v; Node.scheduleFrame?.() } }
+
   static outlineDefault    = false
   static greyDefault       = false
   static defaultStrokeWidth = 2

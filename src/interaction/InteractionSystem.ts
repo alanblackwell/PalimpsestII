@@ -1115,6 +1115,13 @@ export class InteractionSystem {
       e.preventDefault()
       return
     }
+    // Letterbox debug overlay (temporary, for developing the reload-time
+    // image-repositioning/scaling policy) — see ui/letterboxDebug.ts.
+    if (e.key === 'l' && !e.ctrlKey && !e.metaKey) {
+      Node.showLetterboxDebug = !Node.showLetterboxDebug
+      e.preventDefault()
+      return
+    }
     if (e.key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       const sel = this._widget?.selected ?? null
       if (sel !== null && typeof (sel as unknown as { undoLastStroke?: () => void }).undoLastStroke === 'function') {

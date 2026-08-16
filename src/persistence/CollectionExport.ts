@@ -28,6 +28,14 @@ import {
 export interface CollectionSaveFile {
   version: number
   kind: 'palimpsest-collection'
+  // Canvas size at export time — same field/purpose as SaveFile.canvas in
+  // Persistence.ts. Not consumed on import (kept for parity/future use).
+  canvas: { width: number; height: number }
+  // Actual browser-window size at export time — same field/purpose as
+  // SaveFile.viewport; this, not `canvas` above, is what ImageLayer's
+  // reload-time letterbox rescale and its debug overlay compare against
+  // the current window size.
+  viewport: { width: number; height: number }
   // id (within `layers`) of the exported CollectionLayer's own record.
   rootId: number
   layers: LayerRecord[]
@@ -96,7 +104,14 @@ export async function serializeCollection(
     })
   }
 
-  return { version: SAVE_FILE_VERSION, kind: 'palimpsest-collection', rootId, layers }
+  return {
+    version:  SAVE_FILE_VERSION,
+    kind:     'palimpsest-collection',
+    canvas:   { width: Node.canvasWidth,  height: Node.canvasHeight },
+    viewport: { width: Node.viewportWidth, height: Node.viewportHeight },
+    rootId,
+    layers,
+  }
 }
 
 // ------------------------------------------------------------
@@ -123,6 +138,16 @@ export interface CollectionImportResult {
 export async function deserializeCollection(
   json: CollectionSaveFile, ctx: PersistenceContext,
 ): Promise<CollectionImportResult> {
+  // Recorded before per-layer state restore (phase 2) so ImageLayer's
+  // reload-time letterbox rescale (see ImageLayer.deserializeState) can
+  // read it while restoring manualPosition/manualScale. Files from before
+  // this field existed have no `viewport` — null skips the rescale/debug
+  // overlay entirely rather than computing off `undefined`.
+  if (json.viewport === undefined) {
+    console.warn('CollectionExport: save file predates the viewport field — letterbox rescale/debug overlay skipped for this load')
+  }
+  Node.lastLoadedViewport = json.viewport ?? null
+
   // Phase 1 — instantiate every layer.
   const idToLayer = new Map<number, Layer>()
   for (const record of json.layers) {
