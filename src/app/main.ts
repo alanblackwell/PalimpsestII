@@ -1408,6 +1408,10 @@ interaction.setCollectionAction(() => {
       collection.bounds = { x: X, y: 24, width: W, height: 36 }
       collection.setEjectCallback(() => refreshStack())
       collection.setDeleteCallback((layer) => deletionLayer.archive(layer))
+      collection.setSaveLoadCallbacks(
+        () => handleSaveCollection(collection),
+        () => handleLoadCollection(collection),
+      )
       collection.insertAbove(selected)
       collection.ingest(selected)
       refreshStack(collection)
