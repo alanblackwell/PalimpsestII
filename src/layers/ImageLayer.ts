@@ -221,19 +221,30 @@ export class ImageLayer extends Layer implements ImageSource {
   // ----------------------------------------------------------
 
   // Common landing point for every acquisition path (file, paste, camera):
-  // swaps in the new bitmap and, on mobile, fits it to the viewport so it's
-  // fully visible in the current orientation. The default position
-  // (viewport centre) already centres it — only the scale needs setting.
+  // swaps in the new bitmap and sets its initial display scale. Only ever
+  // scales *down* — an image already smaller than the canvas (e.g. a
+  // low-resolution webcam capture) is left at native size rather than
+  // blown up to fill the screen, since upscaling only adds blur with no
+  // benefit once the picture is a manipulable canvas object rather than a
+  // viewfinder preview; an image bigger than the canvas (a typical
+  // phone/camera photo) is fitted down so the whole thing is visible
+  // immediately. The default position (viewport centre) already centres
+  // it — only the scale needs setting. `_natW`/`_natH` always keep the
+  // bitmap's true native resolution regardless of this display scale, so
+  // scaling back up later (e.g. to inspect detail) stays sharp for the
+  // rest of the session — see `serializeState` for the one point this
+  // full resolution is deliberately not preserved (storage).
   private _adoptBitmap(bitmap: ImageBitmap, filename: string): void {
     this._bitmap?.close()
     this._bitmap   = bitmap
     this._filename = filename
     this._natW     = bitmap.width
     this._natH     = bitmap.height
-    if (Node.isMobileDevice && bitmap.width > 0 && bitmap.height > 0) {
+    if (bitmap.width > 0 && bitmap.height > 0) {
       const fitScale = Math.min(
-        Node.viewportWidth  / bitmap.width,
-        Node.viewportHeight / bitmap.height,
+        1,
+        Node.canvasWidth  / bitmap.width,
+        Node.canvasHeight / bitmap.height,
       )
       this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, fitScale))
     }
@@ -467,9 +478,29 @@ export class ImageLayer extends Layer implements ImageSource {
   // Persistence
   // ----------------------------------------------------------
 
+  // The live session always keeps `_bitmap` at its full acquisition
+  // resolution (so scaling up past the canvas-fit size, e.g. to inspect
+  // detail, stays sharp) — but embedding that full resolution as a PNG
+  // data-URL in every save file would bloat the session JSON for no
+  // benefit once saved, since `_natW`/`_natH` (the layer's logical size,
+  // persisted separately below) are what actually determine its on-canvas
+  // footprint after reload, not the stored bitmap's own pixel dimensions.
+  // Cap what's embedded to the current canvas size — same "never upscale,
+  // only fit down" rule `_adoptBitmap` applies on the way in.
+  private _bitmapForStorage(): OffscreenCanvas | ImageBitmap | null {
+    if (this._bitmap === null) return null
+    const scale = Math.min(1, Node.canvasWidth / this._bitmap.width, Node.canvasHeight / this._bitmap.height)
+    if (scale >= 1) return this._bitmap
+    const w = Math.max(1, Math.round(this._bitmap.width * scale))
+    const h = Math.max(1, Math.round(this._bitmap.height * scale))
+    const canvas = new OffscreenCanvas(w, h)
+    canvas.getContext('2d')!.drawImage(this._bitmap, 0, 0, w, h)
+    return canvas
+  }
+
   override serializeState(): Record<string, unknown> {
     return {
-      bitmap:         this._bitmap,
+      bitmap:         this._bitmapForStorage(),
       filename:       this._filename,
       natW:           this._natW,
       natH:           this._natH,
@@ -1054,15 +1085,19 @@ export class ImageLayer extends Layer implements ImageSource {
     }
   }
 
-  // Live feed, letterboxed to fit the canvas — drawn straight from the
-  // <video> element every frame; no offscreen buffering is needed since
-  // this never feeds getImage() (the bitmap stays null until captured).
+  // Live feed, drawn straight from the <video> element every frame; no
+  // offscreen buffering is needed since this never feeds getImage() (the
+  // bitmap stays null until captured). Letterboxed to fill the canvas on
+  // mobile (the standard mobile camera-preview convention, matching the
+  // same-device fit applied to the captured still in _adoptBitmap); on
+  // desktop drawn at native resolution so the preview doesn't shrink the
+  // instant the shutter fires and the still is adopted at its native size.
   private _renderCameraPreview(ctx: Ctx2D): void {
     const video = this._cameraVideo
     if (video === null || video.videoWidth === 0) return
     const vw = video.videoWidth, vh = video.videoHeight
     const cw = Node.canvasWidth, ch = Node.canvasHeight
-    const scale = Math.min(cw / vw, ch / vh)
+    const scale = Node.isMobileDevice ? Math.min(cw / vw, ch / vh) : 1
     const dw = vw * scale, dh = vh * scale
     const dx = (cw - dw) / 2, dy = (ch - dh) / 2
     if (this._cameraMirrored) {
