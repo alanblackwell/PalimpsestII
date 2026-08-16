@@ -20,6 +20,7 @@ import { AngleSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // TextLayer — renders a string onto the canvas
@@ -952,6 +953,23 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (typeof state.localMaskDragged === 'boolean') this._localMaskDragged = state.localMaskDragged
     if (typeof state.localMaskFittedSize === 'number') this._localMaskFittedSize = state.localMaskFittedSize
     if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
+    this._applyLetterboxRescale()
+  }
+
+  // Reload-time letterbox rescale — see persistence/letterboxRescale.ts and
+  // ImageLayer._applyLetterboxRescale (same policy). _manualSize (font size,
+  // in px) is TextLayer's equivalent of a display-scale multiplier — there's
+  // no separate scale field, dragging the scale handle changes this directly
+  // — so it's rescaled the same way _manualScale is elsewhere, clamped to
+  // the layer's own valid range. localMaskRect/localMaskFittedSize (the
+  // paste-fit rectangle) are left untouched for now, same as MaskLayer.
+  private _applyLetterboxRescale(): void {
+    const r = computeLetterboxRescale()
+    if (r === null) return
+    if (this._manualPosition !== null) {
+      this._manualPosition = rescalePoint(r, this._manualPosition)
+    }
+    this._manualSize = Math.max(MIN_SIZE, Math.min(maxTextSize(), this._manualSize * r.scale))
   }
 
   protected recompute(): void {
