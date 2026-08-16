@@ -16,6 +16,7 @@ import { graph } from '../dataflow/Graph.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { BindingLayer } from './BindingLayer.js'
 import { contentLeft } from '../interaction/layout.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 import { ClipRectLayer }    from './ClipRectLayer.js'
 import { ClipEllipseLayer } from './ClipEllipseLayer.js'
 import { ClipPathLayer }    from './ClipPathLayer.js'
@@ -213,6 +214,20 @@ export class ClipLayer extends Layer implements ImageSource {
     }
     if (typeof state.manualScale === 'number' || state.manualScale === null) {
       this._manualScale = state.manualScale as number | null
+    }
+    this._applyLetterboxRescale()
+  }
+
+  // Reload-time letterbox rescale — see persistence/letterboxRescale.ts and
+  // ImageLayer._applyLetterboxRescale (identical pattern).
+  private _applyLetterboxRescale(): void {
+    const r = computeLetterboxRescale()
+    if (r === null) return
+    if (this._manualPosition !== null) {
+      this._manualPosition = rescalePoint(r, this._manualPosition)
+    }
+    if (this._manualScale !== null) {
+      this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this._manualScale * r.scale))
     }
   }
 

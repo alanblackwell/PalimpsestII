@@ -15,6 +15,7 @@ import { BindingLayer } from './BindingLayer.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
 import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 import {
   hashString,
   fillTornPaper,
@@ -327,6 +328,14 @@ export class PathLayer extends ShapeLayer {
     super.deserializeState(state)
     if (Array.isArray(state.points))        this._points = state.points as Point[]
     if (typeof state.radius === 'number')   this._radius = state.radius
+    // Reload-time letterbox rescale (persistence/letterboxRescale.ts) — the
+    // path's actual rendered geometry is this point array, not the inherited
+    // _cx/_cy/_width/_height ShapeLayer.deserializeState already rescaled
+    // above (via super), so it needs its own pass. _radius is a normalised
+    // [0, MAX_RADIUS] curve-tension factor, not an absolute pixel distance,
+    // so it's deliberately left untouched.
+    const r = computeLetterboxRescale()
+    if (r !== null) this._points = this._points.map(p => rescalePoint(r, p))
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {

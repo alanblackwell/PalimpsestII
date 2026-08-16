@@ -1,4 +1,5 @@
 import { Node } from '../core/Node.js'
+import { computeLetterboxRescale } from '../persistence/letterboxRescale.js'
 
 type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 
@@ -22,27 +23,24 @@ type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 // layer (Evaluator.render, both the display-mode and edit-mode paths) so
 // it stays visible regardless of selection. Purely a debug aid — this
 // module doesn't itself touch any layer's position/scale; see
-// ImageLayer._applyLetterboxRescale for the actual policy, which uses the
-// identical scale formula.
+// persistence/letterboxRescale.ts (shared by every layer that implements
+// the actual policy) for the identical scale/centre formula this draws.
 
 const COLOUR   = '#00ff00'
 const DASH     = [8, 6]
 const CROSS_R  = 16
 
 export function drawLetterboxDebug(ctx: AnyCtx2D): void {
-  if (!Node.showLetterboxDebug || Node.lastLoadedViewport === null) return
-  const { width: savedW, height: savedH } = Node.lastLoadedViewport
-  if (savedW <= 0 || savedH <= 0) return
+  if (!Node.showLetterboxDebug) return
+  const r = computeLetterboxRescale()
+  if (r === null) return
 
-  const vw = Node.viewportWidth
-  const vh = Node.viewportHeight
-  const scale = Math.min(vw / savedW, vh / savedH)
-  const boxW  = savedW * scale
-  const boxH  = savedH * scale
-  const x = (vw - boxW) / 2
-  const y = (vh - boxH) / 2
-  const cx = vw / 2
-  const cy = vh / 2
+  const boxW = r.savedCentre.x * 2 * r.scale
+  const boxH = r.savedCentre.y * 2 * r.scale
+  const cx = r.newCentre.x
+  const cy = r.newCentre.y
+  const x = cx - boxW / 2
+  const y = cy - boxH / 2
 
   ctx.save()
   ctx.strokeStyle = COLOUR

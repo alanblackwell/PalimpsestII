@@ -17,6 +17,7 @@ import { collectSnapEdges, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // TransformLayer — 2-D affine transform applied to an image
@@ -267,6 +268,23 @@ export class TransformLayer extends Layer implements ImageSource {
     if (typeof state.rotation       === 'number')  this._rotation       = state.rotation
     if (typeof state.opacity        === 'number')  this._opacity        = state.opacity
     if (typeof state.reflectEnabled === 'boolean') this._reflectEnabled = state.reflectEnabled
+    this._applyLetterboxRescale()
+  }
+
+  // Reload-time letterbox rescale — see persistence/letterboxRescale.ts and
+  // ImageLayer._applyLetterboxRescale (identical pattern). _manualPosition
+  // is the content centre (a canvas-space point), _manualScale the display
+  // multiplier; an untouched layer (both still null) needs no adjustment —
+  // recompute()'s own centre fallback already re-centres it.
+  private _applyLetterboxRescale(): void {
+    const r = computeLetterboxRescale()
+    if (r === null) return
+    if (this._manualPosition !== null) {
+      this._manualPosition = rescalePoint(r, this._manualPosition)
+    }
+    if (this._manualScale !== null) {
+      this._manualScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, this._manualScale * r.scale))
+    }
   }
 
   // ----------------------------------------------------------

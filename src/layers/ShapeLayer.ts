@@ -18,6 +18,7 @@ import { AngleSnapper, ValueSnapper } from '../interaction/AngleSnapper.js'
 import { collectSnapEdges, snapCoord, snapPointToEdges, drawSnapGuides, EDGE_SNAP_THRESHOLD } from '../interaction/EdgeSnapper.js'
 import { contentLeft } from '../interaction/layout.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 
 // ------------------------------------------------------------
 // ShapeLayer — abstract base for rectangle and ellipse layers
@@ -370,6 +371,28 @@ export abstract class ShapeLayer extends Layer implements PointSource, MaskSourc
     if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
     if (typeof state.addMaskDone    === 'boolean') this._addMaskDone    = state.addMaskDone
     if (typeof state.addPointDone   === 'boolean') this._addPointDone   = state.addPointDone
+    this._applyLetterboxRescale()
+  }
+
+  // Reload-time letterbox rescale — see persistence/letterboxRescale.ts for
+  // the shared math and full rationale (same policy as ImageLayer). Centre
+  // (_cx/_cy) is remapped to the same proportional offset from the new
+  // viewport's centre; _width/_height (the shape's own size, independent of
+  // the scaleSlot-driven _scale multiplier) are scaled directly rather than
+  // _scale, since _scale is tightly bounded to what the Amount-mapped
+  // scaleSlot/slider can represent ([0, MAX_SCALE] — see the scale-slot
+  // mapping above) and would clip on a large letterbox factor, where
+  // _width/_height have no such ceiling. PathLayer additionally rescales
+  // its own _points array (see PathLayer.deserializeState) — _width/_height
+  // aren't what actually drives a path's rendered geometry.
+  private _applyLetterboxRescale(): void {
+    const r = computeLetterboxRescale()
+    if (r === null) return
+    const p = rescalePoint(r, { x: this._cx, y: this._cy })
+    this._cx = p.x
+    this._cy = p.y
+    this._width  *= r.scale
+    this._height *= r.scale
   }
 
   // Subclasses that render as a stroke (not a fill) override this to return
