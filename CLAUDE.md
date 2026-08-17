@@ -948,6 +948,98 @@ Key differences from `PathLayer`:
 - `protected _onHandleDragStart(): void {}` — hook called before any canvas-space handle drag; StrokeLayer overrides to suspend `startSlot`/`endSlot`.
 - `applyStateSnapshot(snap)` — copies visual state (colour, opacity, scale, radius, strokeWidth, filled) from a `StrokeStateSnapshot`; used during StrokeLayer → PathLayer conversion.
 
+### `StrokeLayer` — chaining multiple strokes into one curve
+
+`chainSlot` (Point-typed, pushed onto `this.slots[]` alongside `startSlot`/
+`endSlot`) binds another `StrokeLayer`, splicing its points onto this one's
+for rendering/sampling so a whole chain draws as a single continuous curve.
+It's typed `Point` purely so drag-drop highlighting/rendering reuse the
+ordinary slot machinery (`SLOT_TC`, `renderSlotGroup`) — actual binding is
+restricted to `StrokeLayer` sources by a guard in `main.ts`'s
+`setBoundCallback`, since nothing in the `ValueType` system can express
+"must be this concrete class."
+
+- **`PathLayer._renderPoints(): Point[]`** (new protected hook, default
+  `return this._points`) — everywhere that used to read `this._points` for
+  *rendering* (`drawShape`, and `StrokeLayer`'s own `_rebuildArcSamples`,
+  which drives `samplePerimeter`/the artistic brush canvas via
+  `_arcSamples`) now calls this instead. `StrokeLayer` overrides it:
+  `chainSlot.isActive ? [...this._points, ...(chainSlot.source as
+  StrokeLayer)._renderPoints().slice(1)] : this._points` — recursive, so a
+  multi-link chain fully flattens. The chained stroke's own first point is
+  always dropped (same "pop the duplicate" convention `_checkClosure`
+  already uses for auto-closing a loop), so the join has one shared node —
+  this stroke's own last point — rather than two coincident ones; dragging
+  that last point reshapes the join with no extra bookkeeping needed.
+  **Editing stays scoped to `_points`** — control-point handles, curve-click
+  insertion (`_curveHit`), and drag hit-testing are untouched by this hook,
+  so a chain link is only ever edited on the layer that actually owns it
+  (see chained handles below).
+- **Creation** — `createChainedStroke(consumer)` (`main.ts`) makes a new
+  `StrokeLayer`, seeds colour/opacity/scale/stroke width/spline radius via
+  `applyStateSnapshot(consumer.getStateSnapshot())`, `insertAbove(consumer)`,
+  binds it into `consumer.chainSlot`, then re-binds any of those same style
+  slots that were *actively* bound on the consumer onto the new layer too
+  (so both segments keep tracking a shared source, not just its value at
+  creation time) — then runs it through `postInsertLayer` and returns it. A
+  fresh `StrokeLayer` already starts in draw mode with no points, so the
+  caller can begin drawing immediately. Two entry points, both routed
+  through this helper and both guarded to never replace an already-bound
+  `chainSlot` (an existing chain is left in place; the gesture is a no-op if
+  one exists):
+  - **Slot click** — `setSlotClickCallback`'s `StrokeLayer` branch.
+  - **Click-through** — `InteractionSystem`'s "true empty-area miss"
+    handling (the existing pattern that lets a click reach through to an
+    *empty* `StrokeLayer` below the current selection and start drawing on
+    it) now also fires when the currently **selected** layer is itself a
+    non-empty `StrokeLayer` (its own hit-test already had first refusal at
+    the point — handles/curve/pills — so a miss there means genuinely empty
+    space), and when the scan-below case lands on a non-empty stroke
+    instead of an empty one — both chain from it via
+    `setChainStrokeCallback` rather than leaving the click a no-op.
+- **Chained handles** — `StrokeLayer.renderOverlay` also calls
+  `_renderChainedHandles`, drawing every layer in `_chainedLayers()`'s own
+  control points (skipping each layer's index 0 — the point
+  `_renderPoints()` always drops, so it has no visible position) in
+  `CHAIN_HANDLE_COL` (`#e84a8f`, distinct from the amber `ACCENT` used for
+  this stroke's own handles) to flag that dragging one edits a *different*
+  layer. `hitTestSelf`/`handlePointerDown` try this stroke's own elements
+  first via `super`, then fall back to `_nearestChainPoint`; a hit drags via
+  `PathLayer.setPointAt(idx, p)` (new public method) called on the *owning*
+  layer, not `this` — dirty propagation needs no special-casing, since the
+  existing `chainSlot` dependency edges (source → consumer) already cascade
+  through every intermediate link up to whichever layer is selected.
+  Grabbing a chain layer's pinned last point suspends its own `endSlot`
+  binding first, same convention `_onControlPointDragStart` uses for this
+  stroke's own endpoint. `handleContextMenu` follows the same own-first,
+  chain-fallback order, deleting via the new `PathLayer.removePointAt(idx)`
+  (`_minPoints`-guarded; `handleContextMenu` itself is now a thin wrapper
+  around it) on the owning layer.
+- **Resolving a click on chained curve content** — a chained layer's
+  segment of the curve is only ever *rendered* by the head layer (via
+  `_renderPoints`); the chained layer itself still exists as an ordinary
+  stack member (or in Background/Deleted) and — when on-stack — usually
+  renders its own copy independently too, so ordinary top-down pixel-pick
+  (`_pickLayerAtPixel`) naturally finds it directly (it's inserted *above*
+  its predecessor, so it wins z-order) with no extra code. The gap is a
+  chained layer that's been sent to Background or archived: nothing else is
+  rendering that pixel, so pixel-pick can only find the head. `StrokeLayer.
+  chainSegmentOwnerAt(point)` (public) resolves this generically — samples
+  every layer in `[this, ...this._chainedLayers()]`'s own un-merged curve
+  independently (reusing this stroke's own `_radius`, matching how the
+  merged curve is actually rendered — an individual chain layer's radius
+  isn't separately honoured there) and returns whichever comes closest,
+  sidestepping any attempt to map an index back through the `_renderPoints`
+  splice. `InteractionSystem.setResolveChainClickCallback` calls this from
+  `_handleEmptyAreaClick` whenever pixel-pick lands on a `StrokeLayer`;
+  `main.ts`'s implementation checks `owner.outsideStack` and, if so, does
+  the same "remove from wherever it's parked, `insertAbove` the click
+  target, `forceDirty()` to restart any self-perpetuating loop, refresh"
+  restoration already used for hidden-helper exposure just below it in the
+  same file — landing it directly above the layer that was actually
+  clicked, per the same "restore where a chain link would naturally sit"
+  convention `createChainedStroke` uses.
+
 ### `ShapeLayer` — `_maskFilled()` hook
 
 `protected _maskFilled(): boolean { return true }` controls whether
