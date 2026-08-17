@@ -505,6 +505,8 @@ function wireCalcButton(layer: AmountLayer): void {
 // AmountLayer below, binds AnimPath's Point output to its y-position slot,
 // and keeps the AnimPath layer selected.
 function wireAnimPathLayer(animPath: AnimPathLayer): void {
+  animPath.phaseOffsetWidget.onInspectorRequest = (slot, cx, cy) =>
+    interaction.showInspectorForSlot(slot, cx, cy)
   animPath.setOnAddAmount(() => {
     const amount = new AmountLayer()
     Layer.assignDebugName(amount)

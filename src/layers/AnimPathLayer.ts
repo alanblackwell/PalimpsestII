@@ -12,6 +12,7 @@ import { graph } from '../dataflow/Graph.js'
 import { BindingLayer } from './BindingLayer.js'
 import { TempoLayer, sliderToHz, hzToSlider } from './TempoLayer.js'
 import { SliderRegion } from '../regions/SliderRegion.js'
+import { SliderSlot } from '../ui/SliderSlot.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { drawIcon } from '../ui/icons.js'
 
@@ -20,10 +21,20 @@ import { drawIcon } from '../ui/icons.js'
 // ------------------------------------------------------------
 //
 // Inputs:
-//   shapeSlot    (Point)  — shape/path whose perimeter is sampled
-//   phaseSlot    (Amount) — position along the perimeter [0, 1]
-//   runModeSlot  (Event)  — each pulse toggles run/stop; click the
-//                           radio checkbox to toggle directly
+//   shapeSlot       (Point)  — shape/path whose perimeter is sampled
+//   phaseSlot       (Amount) — cycling [0,1) time base, normally fed by an
+//                              auto-created hidden TempoLayer (the "rate")
+//   phaseOffsetSlot (Amount) — a slider+binding phase offset, 0 = path
+//                              start, 1 = path end. While `runModeSlot` is
+//                              off, this is the point's entire position.
+//                              While running, it's added to the rate-driven
+//                              cycle, so it acts as a live-adjustable shift.
+//                              Binding a fresh source here (not resuming a
+//                              suspended one) automatically stops run mode,
+//                              so the binding alone controls position until
+//                              the user switches running back on.
+//   runModeSlot     (Event)  — each pulse toggles run/stop; click the
+//                              radio checkbox to toggle directly
 //
 // Output:
 //   Point — the canvas coordinate at the current phase on the shape
@@ -50,10 +61,11 @@ const ADD_BTN_COLOUR  = '#4a8fe8'   // Amount accent
 export class AnimPathLayer extends Layer implements PointSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Point])
 
-  readonly shapeSlot:   ParameterSlot
-  readonly phaseSlot:   ParameterSlot
-  readonly runModeSlot: ParameterSlot
-  readonly cwSlot:      ParameterSlot
+  readonly shapeSlot:       ParameterSlot
+  readonly phaseSlot:       ParameterSlot
+  readonly phaseOffsetSlot: ParameterSlot
+  readonly runModeSlot:     ParameterSlot
+  readonly cwSlot:          ParameterSlot
 
   private _phase:         number = 0
   private _phaseOffset:   number = 0   // keeps effectiveT continuous across direction flips
@@ -64,6 +76,13 @@ export class AnimPathLayer extends Layer implements PointSource {
   private _lastCwTime:    EventValue = null
   private _toggleBounds:  { x: number; y: number; width: number; height: number } | null = null
   private _cwBounds:      { x: number; y: number; width: number; height: number } | null = null
+
+  // Manual/synced value for phaseOffsetSlot, and the slot's previous state —
+  // used to detect a *fresh* bind (Unbound -> Bound) as opposed to a resume
+  // from SuspendedBound, which should not re-trigger the auto-stop below.
+  private _offsetValue:         number    = 0
+  private _offsetSlotPrevState: SlotState = SlotState.Unbound
+  private readonly _offsetWidget: SliderSlot
 
   private _hiddenRate:  TempoLayer | null = null  // bound TempoLayer, if any
   private _rateSlider:  SliderRegion
@@ -78,14 +97,25 @@ export class AnimPathLayer extends Layer implements PointSource {
     super()
     this._currentPoint = { x: cx, y: cy }
 
-    this.shapeSlot   = new ParameterSlot(ValueType.Point,  this, 'shape')
-    this.phaseSlot   = new ParameterSlot(ValueType.Amount, this, 'tempo')
-    this.runModeSlot = new ParameterSlot(ValueType.Event,  this, 'run mode')
-    this.cwSlot      = new ParameterSlot(ValueType.Event,  this, 'clockwise')
-    this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot, this.cwSlot)
+    this.shapeSlot       = new ParameterSlot(ValueType.Point,  this, 'shape')
+    this.phaseSlot       = new ParameterSlot(ValueType.Amount, this, 'tempo')
+    this.runModeSlot     = new ParameterSlot(ValueType.Event,  this, 'run mode')
+    this.cwSlot          = new ParameterSlot(ValueType.Event,  this, 'clockwise')
+    this.phaseOffsetSlot = new ParameterSlot(ValueType.Amount, this, 'phase')
+    // phaseOffsetSlot appended last so old saves (positional slot restore)
+    // keep binding their first four slots correctly — see CLAUDE.md's
+    // Persistence section.
+    this.slots.push(this.shapeSlot, this.phaseSlot, this.runModeSlot, this.cwSlot, this.phaseOffsetSlot)
 
     this._rateSlider = new SliderRegion(this, hzToSlider(1.0))
     this._rateSlider.interactive = false
+
+    this._offsetWidget = new SliderSlot(
+      this.phaseOffsetSlot, 'phase', AMOUNT_TC,
+      () => this._currentPhaseOffset(),
+      v => this.setPhaseOffset(v),
+      () => this.markDirty(),
+    )
 
     graph.register(this)
   }
@@ -99,6 +129,26 @@ export class AnimPathLayer extends Layer implements PointSource {
       this._hiddenRate.setRateHz(sliderToHz(v))
     }
     this.markDirty()
+  }
+
+  get phaseOffsetWidget(): SliderSlot { return this._offsetWidget }
+
+  // Called by the phase-offset SliderSlot when the user drags its handle —
+  // suspend-on-touch, same convention as every other manual/slot pair.
+  setPhaseOffset(v: number): void {
+    if (this.phaseOffsetSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.phaseOffsetSlot)?.toggle()
+    }
+    this._offsetValue = Math.max(0, Math.min(1, v))
+    this.markDirty()
+  }
+
+  // Current phase-offset value — the bound source's amount, or the manual
+  // slider value when unbound/suspended.
+  private _currentPhaseOffset(): number {
+    return this.phaseOffsetSlot.isActive
+      ? Math.max(0, Math.min(1, (this.phaseOffsetSlot.source as AmountSource).getAmount() as number))
+      : this._offsetValue
   }
 
   // PointSource
@@ -140,13 +190,15 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   override serializeState(): Record<string, unknown> {
     return {
-      phase:          this._phase,
-      phaseOffset:    this._phaseOffset,
-      currentPoint:   this._currentPoint,
-      running:        this._running,
-      clockwise:      this._clockwise,
-      lastEventTime:  this._lastEventTime,
-      addAmountDone:  this._addAmountDone,
+      phase:               this._phase,
+      phaseOffset:         this._phaseOffset,
+      currentPoint:        this._currentPoint,
+      running:             this._running,
+      clockwise:           this._clockwise,
+      lastEventTime:       this._lastEventTime,
+      addAmountDone:       this._addAmountDone,
+      offsetValue:         this._offsetValue,
+      offsetSlotPrevState: this._offsetSlotPrevState,
     }
   }
 
@@ -162,6 +214,12 @@ export class AnimPathLayer extends Layer implements PointSource {
       this._lastEventTime = state.lastEventTime as EventValue
     }
     if (typeof state.addAmountDone === 'boolean') this._addAmountDone = state.addAmountDone
+    if (typeof state.offsetValue === 'number')    this._offsetValue = state.offsetValue
+    if (state.offsetSlotPrevState === SlotState.Unbound ||
+        state.offsetSlotPrevState === SlotState.Bound ||
+        state.offsetSlotPrevState === SlotState.SuspendedBound) {
+      this._offsetSlotPrevState = state.offsetSlotPrevState
+    }
   }
 
   // ----------------------------------------------------------
@@ -186,6 +244,16 @@ export class AnimPathLayer extends Layer implements PointSource {
         this._flipDirection()
       }
     }
+
+    // Phase-offset slot: the moment a source is *freshly* bound (Unbound ->
+    // Bound, not a resume from SuspendedBound), stop automatic running so
+    // the bound amount alone determines the point's position (start..end)
+    // until the user switches run mode back on.
+    const offsetState = this.phaseOffsetSlot.state
+    if (this._offsetSlotPrevState === SlotState.Unbound && offsetState === SlotState.Bound) {
+      this._running = false
+    }
+    this._offsetSlotPrevState = offsetState
 
     // Only advance the phase when running.
     if (this._running && this.phaseSlot.isActive) {
@@ -219,10 +287,20 @@ export class AnimPathLayer extends Layer implements PointSource {
   }
 
   // Effective perimeter parameter [0,1] accounting for direction and offset.
+  // While stopped *and* phaseOffsetSlot is bound, the bound amount *is* the
+  // position (0 = path start, 1 = path end) — the rate-driven cycle plays no
+  // part, so binding a source there is enough to scrub the point by hand.
+  // Otherwise (running, or offset unbound/manual/paused-for-unrelated-
+  // reasons) the offset is just added on top of the ordinary rate-driven
+  // cycle — 0 by default, so an untouched layer behaves exactly as before,
+  // and a manual drag on the slider always nudges the point live regardless
+  // of run state.
   private _effectiveT(): number {
+    const offset = this._currentPhaseOffset()
+    if (!this._running && this.phaseOffsetSlot.isActive) return offset
     const raw = this._clockwise
-      ? this._phase + this._phaseOffset
-      : this._phaseOffset - this._phase
+      ? this._phase + this._phaseOffset + offset
+      : this._phaseOffset - this._phase + offset
     return ((raw % 1) + 1) % 1
   }
 
@@ -260,10 +338,11 @@ export class AnimPathLayer extends Layer implements PointSource {
     this._renderAddButton(ctx)
   }
 
-  // Three-pill slot layout:
+  // Four-pill slot layout:
   //   Pill 1 — shape slot (standard renderSlotGroup)
   //   Pill 2 — rate slider + phase slot binding row (combined)
-  //   Pill 3 — run mode + clockwise slots (with toggle overlays)
+  //   Pill 3 — phase-offset slider + slot (SliderSlot)
+  //   Pill 4 — run mode + clockwise slots (with toggle overlays)
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
 
@@ -372,7 +451,21 @@ export class AnimPathLayer extends Layer implements PointSource {
       y += combinedH + SLOT_GAP
     }
 
-    // ── Pill 3: run mode + clockwise ─────────────────────────────
+    // ── Pill 3: phase-offset slider + slot ───────────────────────
+    {
+      const row = this._phaseOffsetRow()
+      ctx.save()
+      ctx.fillStyle = 'rgba(0,0,0,0.28)'
+      ctx.beginPath()
+      ctx.roundRect(row.x, row.y, row.width, row.height, 6)
+      ctx.fill()
+      ctx.restore()
+      this._slotBounds.set(this.phaseOffsetSlot, row)
+      this._offsetWidget.render(ctx, row)
+      y = row.y + row.height + SLOT_GAP
+    }
+
+    // ── Pill 4: run mode + clockwise ─────────────────────────────
     this.renderSlotGroup(ctx, [this.runModeSlot, this.cwSlot], y)
 
     // Run-mode radio checkbox overlay
@@ -430,6 +523,7 @@ export class AnimPathLayer extends Layer implements PointSource {
 
   protected override hitTestSelf(point: Point): Node | null {
     if (this._addBtnHitTest(point)) return this
+    if (this._offsetWidget.hitZone(point, this._phaseOffsetRow()) !== null) return this
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
@@ -453,6 +547,7 @@ export class AnimPathLayer extends Layer implements PointSource {
       this._addAmountDone = true
       return true
     }
+    if (this._offsetWidget.handlePointerDown(point, this._phaseOffsetRow())) return true
     if (this._toggleBounds !== null) {
       const b = this._toggleBounds
       if (point.x >= b.x && point.x <= b.x + b.width &&
@@ -475,11 +570,29 @@ export class AnimPathLayer extends Layer implements PointSource {
     return false
   }
 
-  handlePointerUp(): void {}
+  handlePointerMove(point: Point): void {
+    this._offsetWidget.handlePointerMove(point, this._phaseOffsetRow())
+  }
+
+  handlePointerUp(): void {
+    this._offsetWidget.handlePointerUp()
+  }
 
   // ----------------------------------------------------------
   // Private
   // ----------------------------------------------------------
+
+  // Bounds of the phase-offset pill (Pill 3) — computed on demand from
+  // panelBottom, matching the layout math in renderSlots, so interaction
+  // handlers don't need a render pass to have run first.
+  private _phaseOffsetRow(): { x: number; y: number; width: number; height: number } {
+    const PANEL_X    = contentLeft(Node.canvasWidth)
+    const PANEL_W    = panelWidth(Node.canvasWidth)
+    const showSlider = this._hiddenRate !== null
+    const combinedH  = (showSlider ? SLIDER_H : 0) + SLOT_H
+    const y = this.panelBottom + SLOT_H + SLOT_GAP + combinedH + SLOT_GAP
+    return { x: PANEL_X, y, width: PANEL_W, height: SLOT_H }
+  }
 
   private _syncSliderBounds(): void {
     if (this._hiddenRate === null) return

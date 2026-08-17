@@ -458,6 +458,44 @@ redirect into.
   silently rejecting the drop. Keep the two conditions in sync when adding a
   new adapter case.
 
+### `AnimPathLayer` — `phaseOffsetSlot` (scrub / live phase shift)
+
+A second `Amount` slot, `phaseOffsetSlot` (label `'phase'`, rendered as its
+own `SliderSlot` pill — Pill 3 of 4 — below the rate+phase pill and above
+the run-mode/clockwise pill), distinct from the rate-driving `phaseSlot`
+described above. Semantics: `0` = path start, `1` = path end.
+
+- **Binding a fresh source auto-stops `runModeSlot`.** `_offsetSlotPrevState`
+  tracks the slot's previous `SlotState` each `recompute()`; only the
+  transition `Unbound -> Bound` (a genuinely new bind, not a pause-button
+  resume from `SuspendedBound`) sets `_running = false`. This is what lets
+  the bound amount alone scrub the point from start to end without the rate
+  cycle fighting it, per the same "first bind" convention used elsewhere
+  (e.g. `TransformLayer`'s reflect auto-enable), generalized here from
+  `isActive` to explicit `SlotState` transitions specifically so that
+  suspending/resuming the same binding later (via the `SliderSlot`'s pause
+  button, or a manual drag's suspend-on-touch) doesn't re-trigger it.
+- **`_effectiveT()`** (the perimeter-sample parameter) branches on both
+  `_running` and `phaseOffsetSlot.isActive`: while stopped *and* bound, it
+  returns the offset directly, bypassing `_phase` entirely — "the amount
+  binding simply controls the position." In every other case (running, or
+  stopped-but-unbound) the offset is just added into the ordinary
+  `_phase + _phaseOffset` sum before wrapping — "the rate is applied with
+  this phase offset." Gating the bypass on `isActive` (not just `!_running`)
+  matters: without it, pausing via the ordinary run-mode checkbox on a
+  layer that has never touched this feature would snap the point to the
+  default `_offsetValue = 0` (path start) instead of freezing in place,
+  breaking pre-existing pause behaviour for every other `AnimPathLayer`.
+- The manual slider value (`_offsetValue`) always live-updates the point
+  regardless of run state or binding — suspend-on-touch via `setPhaseOffset`
+  — satisfying "phase can be modified locally while the animation still
+  runs" for both the bound and unbound cases.
+- `phaseOffsetSlot` is pushed onto `this.slots[]` *after* `cwSlot` (not
+  interleaved with the original four), so old saves' positional slot
+  restore still binds their first four slots correctly; the new slot is
+  simply unbound on an old save, matching the "clean break, no migration"
+  precedent documented under "Known issues" below.
+
 ### `Clip<Shape>` layer family
 
 `ClipRectLayer`, `ClipEllipseLayer`, `ClipPathLayer`, `ClipTextLayer`, and
