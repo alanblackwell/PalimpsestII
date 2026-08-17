@@ -249,6 +249,7 @@ function postInsertLayer(newLayer: Layer): void {
   }
   if (newLayer instanceof LineLayer) {
     wireLineMaskButton(newLayer)
+    wireAnimatableShape(newLayer)
     const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
     newLayer.widthWidget.onInspectorRequest   = wi
     newLayer.opacityWidget.onInspectorRequest = wi
@@ -544,10 +545,12 @@ function wireImageLayer(layer: ImageLayer): void {
   })
 }
 
-// Wire a shape or stroke layer's "Animate" convenience button. Pressing it
-// inserts an AnimPathLayer above the shape, binds the shape as its perimeter
-// source, and selects the new layer. The shape stays in the stack.
-function wireAnimatableShape(layer: ShapeLayer): void {
+// Wire a shape, stroke, or line layer's "Animate" convenience button.
+// Pressing it inserts an AnimPathLayer above the layer, binds the layer as
+// its perimeter source, and selects the new layer. The layer stays in the
+// stack. LineLayer implements samplePerimeter (0 = start, 1 = end) the same
+// way ShapeLayer subclasses do, so it needs no special-casing here.
+function wireAnimatableShape(layer: ShapeLayer | LineLayer): void {
   layer.setOnAddAnimate(() => {
     const animPath = new AnimPathLayer(Node.canvasWidth / 2, Node.canvasHeight / 2)
     Layer.assignDebugName(animPath)
@@ -1135,6 +1138,7 @@ function wireLoadedLayer(l: Layer): void {
   }
   if (l instanceof LineLayer) {
     wireLineMaskButton(l)
+    wireAnimatableShape(l)
     const wi = (slot: ParameterSlot, cx: number, cy: number) => interaction.showInspectorForSlot(slot, cx, cy)
     l.widthWidget.onInspectorRequest   = wi
     l.opacityWidget.onInspectorRequest = wi

@@ -924,7 +924,7 @@ update tick (gated by the `delay` slider, log-scaled), it fades the cache by
 - `delaySlot` (Amount) — `0` = update every frame; `1` = frozen; log-scaled
   so `0.5` ≈ every 10 frames. Slider suspends on touch.
 
-### `LineLayer` — produces `Image` and `Mask`
+### `LineLayer` — produces `Image`, `Mask`, `Direction`, and `Point`
 
 `LineLayer` renders into a private `_canvas: OffscreenCanvas` and declares
 `ValueType.Image` / `ValueType.Mask`. A second `_maskCanvas` is maintained in
@@ -932,6 +932,19 @@ parallel: rendered in opaque white with the same geometry (stroke width,
 arrowheads), so the mask covers exactly the visible line pixels rather than a
 filled interior. A **Mask** convenience button is wired via `wireLineMaskButton`
 in `postInsertLayer`.
+
+`LineLayer` also `implements PointSource` and declares `ValueType.Point`, with
+`getPoint()` returning the line's midpoint and `samplePerimeter(t)` linearly
+interpolating between the rendered start/end (`t=0` → start, `t=1` → end) —
+same duck-typed contract (`'samplePerimeter' in l`) that `ShapeLayer`/
+`StrokeLayer` use, so `LineLayer` is a valid `AnimPathLayer.shapeSlot` source
+with no changes needed to `AnimPathLayer` itself. An **Animate** convenience
+button (third slot in the existing Point/Mask row — `_lineBtnRect`/
+`_renderLineConvBtn`, extended from a 2-button to a 3-button layout matching
+`ShapeLayer._convBtnRect`'s order/geometry convention) is wired via
+`wireAnimatableShape` in `postInsertLayer`/`wireLoadedLayer` — the same
+function `ShapeLayer`/`PathLayer` use, its parameter type just widened to
+`ShapeLayer | LineLayer` since the body has no shape-specific logic.
 
 ### `TransformLayer` — reflect (mirror)
 

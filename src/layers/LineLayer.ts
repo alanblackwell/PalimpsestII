@@ -72,6 +72,9 @@ const BRUSH_TRANSITIONS = [5, 13, 25] as const
 const BRUSH_BLEND_HW    = 2
 const BRUSH_OFFSETS     = [0, 0, 3, 5, 11]
 
+const ANIM_BTN_W  = 72   // "Animate"
+const ANIM_BTN_COL = '#cf7ecf'   // Point/AnimPath accent
+
 const EP_SNAP_R        = 30   // px — shape ref-point snap activation radius
 const EP_SNAP_DWELL_MS = 600  // ms — dwell before snap is "locked"
 const EP_REF_R         = 8    // px — ref-point indicator circle radius
@@ -90,8 +93,9 @@ function bezier2(
   return out
 }
 
-export class LineLayer extends Layer implements ImageSource, MaskSource, DirectionSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask, ValueType.Direction])
+export class LineLayer extends Layer implements ImageSource, MaskSource, DirectionSource, PointSource {
+  readonly types: ReadonlySet<ValueType> =
+    new Set([ValueType.Image, ValueType.Mask, ValueType.Direction, ValueType.Point])
 
   readonly startSlot:     ParameterSlot
   readonly endSlot:       ParameterSlot
@@ -131,6 +135,11 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   private _addPointDone = false
   private _onAddPoint: (() => void) | null = null
   setOnAddPoint(fn: () => void): void { this._onAddPoint = fn }
+
+  // Animate convenience button
+  private _addAnimateDone = false
+  private _onAddAnimate: (() => void) | null = null
+  setOnAddAnimate(fn: () => void): void { this._onAddAnimate = fn }
 
   // Shape-snap state for endpoint drags
   private _epDragging:    'start' | 'end' | null = null
@@ -251,6 +260,23 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
   /** Start and end endpoints in canvas space. */
   getRefPoints(): Point[] { return [{ ...this._renderedStart }, { ...this._renderedEnd }] }
 
+  // PointSource — the line's midpoint, for consumers that just want "the point".
+  getPoint(): Point {
+    return {
+      x: (this._renderedStart.x + this._renderedEnd.x) / 2,
+      y: (this._renderedStart.y + this._renderedEnd.y) / 2,
+    }
+  }
+
+  // Perimeter sample for AnimPathLayer et al — 0 = start, 1 = end, linear
+  // along the (rendered) line. Duck-typed via 'samplePerimeter' in l, same
+  // as ShapeLayer/StrokeLayer, so this makes LineLayer a valid AnimPath
+  // shape source with no other wiring needed.
+  samplePerimeter(t: number): Point {
+    const s = this._renderedStart, e = this._renderedEnd
+    return { x: s.x + (e.x - s.x) * t, y: s.y + (e.y - s.y) * t }
+  }
+
   override getSnapBounds() {
     const minX = Math.min(this._start.x, this._end.x)
     const maxX = Math.max(this._start.x, this._end.x)
@@ -273,6 +299,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
       arrowEnd:     this._arrowEnd,
       addMaskDone:  this._addMaskDone,
       addPointDone: this._addPointDone,
+      addAnimateDone: this._addAnimateDone,
       manualOpacity: this._manualOpacity,
     }
   }
@@ -286,6 +313,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     if (typeof state.arrowEnd   === 'boolean')            this._arrowEnd   = state.arrowEnd
     if (typeof state.addMaskDone  === 'boolean') this._addMaskDone  = state.addMaskDone
     if (typeof state.addPointDone === 'boolean') this._addPointDone = state.addPointDone
+    if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
     if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
   }
 
@@ -539,6 +567,7 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     this._renderEpSnapIndicators(ctx)
     this._renderLineConvBtn(ctx, 'point')
     this._renderLineConvBtn(ctx, 'mask')
+    this._renderLineConvBtn(ctx, 'animate')
   }
 
   private _renderEpSnapIndicators(ctx: Ctx2D): void {
@@ -573,35 +602,42 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     ctx.restore()
   }
 
-  // Layout for LineLayer's own convenience buttons (point left, mask right).
-  private _lineBtnRect(which: 'mask' | 'point'): { x: number; y: number; w: number; h: number } {
+  // Layout for LineLayer's own convenience buttons (point, mask, animate),
+  // same order/geometry convention as ShapeLayer._convBtnRect.
+  private _lineBtnRect(which: 'mask' | 'point' | 'animate'): { x: number; y: number; w: number; h: number } {
     const POINT_W = 55, MASK_W = 60, BTN_H = 30, GAP = 14, SEP = 8
-    const left     = contentLeft(Node.canvasWidth)
-    const y        = Node.viewportHeight - BTN_H - GAP
-    const showP    = !this._addPointDone && this._onAddPoint !== null
-    const showM    = !this._addMaskDone  && this._onAddMask  !== null
-    if (showP && showM) {
-      const total  = POINT_W + SEP + MASK_W
-      const startX = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
-      return which === 'point'
-        ? { x: startX,                 y, w: POINT_W, h: BTN_H }
-        : { x: startX + POINT_W + SEP, y, w: MASK_W,  h: BTN_H }
+    const left  = contentLeft(Node.canvasWidth)
+    const y     = Node.viewportHeight - BTN_H - GAP
+    type K = 'point' | 'mask' | 'animate'
+    const order:  K[]               = ['point', 'mask', 'animate']
+    const widths: Record<K, number> = { point: POINT_W, mask: MASK_W, animate: ANIM_BTN_W }
+    const show:   Record<K, boolean> = {
+      point:   !this._addPointDone   && this._onAddPoint   !== null,
+      mask:    !this._addMaskDone    && this._onAddMask    !== null,
+      animate: !this._addAnimateDone && this._onAddAnimate !== null,
     }
-    const w = which === 'point' ? POINT_W : MASK_W
-    return { x: left + Math.max(0, (Node.viewportWidth - left - w) / 2), y, w, h: BTN_H }
+    const visible = order.filter(k => show[k])
+    const total   = visible.reduce((s, k, i) => s + widths[k] + (i > 0 ? SEP : 0), 0)
+    const startX  = left + Math.max(0, (Node.viewportWidth - left - total) / 2)
+    let xOff = 0
+    for (const k of visible) {
+      if (k === which) return { x: startX + xOff, y, w: widths[k], h: BTN_H }
+      xOff += widths[k] + SEP
+    }
+    return { x: left + Math.max(0, (Node.viewportWidth - left - widths[which]) / 2), y, w: widths[which], h: BTN_H }
   }
 
-  // Refactored from _renderMaskBtn to handle both mask and point buttons.
+  // Refactored from _renderMaskBtn to handle mask/point/animate buttons.
   private _maskBtnRect() { return this._lineBtnRect('mask') }
 
-  private _renderLineConvBtn(ctx: Ctx2D, which: 'mask' | 'point'): void {
-    const done     = which === 'mask' ? this._addMaskDone  : this._addPointDone
-    const callback = which === 'mask' ? this._onAddMask    : this._onAddPoint
+  private _renderLineConvBtn(ctx: Ctx2D, which: 'mask' | 'point' | 'animate'): void {
+    const done     = which === 'mask' ? this._addMaskDone  : which === 'point' ? this._addPointDone  : this._addAnimateDone
+    const callback = which === 'mask' ? this._onAddMask    : which === 'point' ? this._onAddPoint     : this._onAddAnimate
     if (done || callback === null) return
     const { x, y, w, h } = this._lineBtnRect(which)
     const midY  = y + h / 2
-    const col   = which === 'mask' ? '#cfcf7ecc' : '#cf7ecfcc'
-    const label = which === 'mask' ? 'Mask'       : 'Point'
+    const col   = which === 'mask' ? '#cfcf7ecc' : which === 'point' ? '#cf7ecfcc' : ANIM_BTN_COL + 'cc'
+    const label = which === 'mask' ? 'Mask'      : which === 'point' ? 'Point'     : 'Animate'
     ctx.save()
     ctx.fillStyle = 'rgba(0,0,0,0.55)'
     ctx.beginPath(); ctx.roundRect(x, y, w, h, 5); ctx.fill()
@@ -856,6 +892,10 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
       const { x, y, w, h } = this._lineBtnRect('mask')
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
     }
+    if (!this._addAnimateDone && this._onAddAnimate !== null) {
+      const { x, y, w, h } = this._lineBtnRect('animate')
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) return this
+    }
     if (this._arrowStartBounds !== null && this._inBox(point, this._arrowStartBounds)) return this
     if (this._arrowEndBounds   !== null && this._inBox(point, this._arrowEndBounds))   return this
     const dirMode = this._dirTranslateMode
@@ -888,6 +928,14 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
       if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
         this._addMaskDone = true
         this._onAddMask()
+        return true
+      }
+    }
+    if (!this._addAnimateDone && this._onAddAnimate !== null) {
+      const { x, y, w, h } = this._lineBtnRect('animate')
+      if (point.x >= x && point.x <= x + w && point.y >= y && point.y <= y + h) {
+        this._addAnimateDone = true
+        this._onAddAnimate()
         return true
       }
     }
