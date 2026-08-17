@@ -435,6 +435,43 @@ function postInsertLayer(newLayer: Layer): void {
   }
 }
 
+// Create a new StrokeLayer chained onto `consumer` (bound into its
+// chainSlot), inserted directly above it — used both when the user clicks
+// the empty chain slot row and when an empty-area click-through lands on a
+// stroke that already has content (InteractionSystem's chain-stroke
+// callback). A new StrokeLayer already starts in draw mode with no points,
+// so the caller can call beginStrokeAt/select it to continue drawing
+// immediately.
+//
+// Visual style (colour/opacity/scale/stroke width/spline radius) is
+// inherited from the consumer so the continuation reads as the same
+// stroke: applyStateSnapshot seeds the manual values as a default, then
+// any of those slots that are actively bound on the consumer get the same
+// binding recreated on the new layer (so both segments keep tracking that
+// shared source, not just its value at creation time). Routed through
+// postInsertLayer (setOnClose, endpoint snap wiring, Mask/Point/Animate
+// buttons, default bindings) same as every other creation path.
+function createChainedStroke(consumer: StrokeLayer): StrokeLayer {
+  const newLayer = new StrokeLayer()
+  newLayer.applyStateSnapshot(consumer.getStateSnapshot())
+  Layer.assignSlotCreatedName(newLayer, consumer, consumer.chainSlot)
+  newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+  newLayer.insertAbove(consumer)
+  BindingLayer.create(newLayer, consumer.chainSlot)
+  const styleSlots: [ParameterSlot, ParameterSlot][] = [
+    [consumer.colourSlot,      newLayer.colourSlot],
+    [consumer.opacitySlot,     newLayer.opacitySlot],
+    [consumer.scaleSlot,       newLayer.scaleSlot],
+    [consumer.strokeWidthSlot, newLayer.strokeWidthSlot],
+    [consumer.radiusSlot,      newLayer.radiusSlot],
+  ]
+  for (const [from, to] of styleSlots) {
+    if (from.isActive) BindingLayer.create(from.source!, to)
+  }
+  postInsertLayer(newLayer)
+  return newLayer
+}
+
 // Wire an AmountLayer's "Calc" convenience button: creates a MathLayer below,
 // binds the AmountLayer as its input, and selects the new MathLayer. Any slot
 // still bound directly to the AmountLayer is rewired to the MathLayer's
@@ -1431,9 +1468,47 @@ interaction.setCollectionAction(() => {
 })
 
 interaction.setBoundCallback((source, slot) => {
+  // StrokeLayer's chain slot links two strokes into one continuous render;
+  // it's typed Point (like start/end) so it highlights like any other
+  // position source while dragging, but only another StrokeLayer is a
+  // valid chain link — reject anything else rather than binding it.
+  if (slot.owner instanceof StrokeLayer && slot === slot.owner.chainSlot && !(source instanceof StrokeLayer)) {
+    refreshStack()
+    return
+  }
   if (tryBindRateIntoPhase(source, slot)) { refreshStack(); return }
   BindingLayer.create(source, slot)
   refreshStack()
+})
+
+// An empty-area click-through (InteractionSystem) found a StrokeLayer below
+// the current selection that already has content — rather than starting to
+// draw into it (which would overwrite its existing curve), chain a new
+// stroke onto it and hand back the new layer so InteractionSystem can begin
+// the freehand drag there instead.
+interaction.setChainStrokeCallback((consumer) => {
+  const newLayer = createChainedStroke(consumer)
+  refreshStack(newLayer)
+  return newLayer
+})
+
+// Pixel-pick landed on a StrokeLayer whose rendered curve includes content
+// contributed by a chained layer (see StrokeLayer._renderPoints/
+// chainSegmentOwnerAt) — resolve the click to whichever layer actually owns
+// that segment. If it's off-stack (sent to Background, or archived via
+// DeletionLayer), restore it directly above the picked layer so it's
+// editable, same "restart any self-perpetuating loop" bookkeeping as the
+// hidden-helper-exposure restore below.
+interaction.setResolveChainClickCallback((picked, point) => {
+  const owner = picked.chainSegmentOwnerAt(point)
+  if (owner === null || owner === picked) return picked
+  if (owner.outsideStack) {
+    if (!deletionLayer.removeFromArchive(owner)) backgroundLayer.removeItem(owner)
+    owner.insertAbove(picked)
+    owner.forceDirty()
+    refreshStack()
+  }
+  return owner
 })
 
 // Dragging a Mask-producing layer's card from the stack onto an Image/Fill/
@@ -1518,6 +1593,13 @@ interaction.setSlotClickCallback((consumer, slot) => {
         refreshStack(newLayer)
         return
       }
+    }
+
+    // StrokeLayer chain slot: create a fresh StrokeLayer chained onto the
+    // consumer and select it — see createChainedStroke for what it inherits.
+    if (consumer instanceof StrokeLayer && slot === consumer.chainSlot) {
+      refreshStack(createChainedStroke(consumer))
+      return
     }
 
     // DirectionLayer position/handle slots: initialise the new PointLayer

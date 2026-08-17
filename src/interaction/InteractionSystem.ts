@@ -191,6 +191,8 @@ export class InteractionSystem {
   private _onSlotClick:    ((consumer: Layer, slot: ParameterSlot) => void) | null = null
   private _refreshCallback: (() => void) | null = null
   private _createBindingMap: ((source: Node) => void) | null = null
+  private _onChainStroke:  ((consumer: StrokeLayer) => StrokeLayer) | null = null
+  private _onResolveChainClick: ((picked: StrokeLayer, point: Point) => StrokeLayer) | null = null
 
   // Inspector popup element (right-click on a slot).
   private _inspector: HTMLElement | null = null
@@ -320,6 +322,25 @@ export class InteractionSystem {
   // (empty or bound) on the selected layer.
   setSlotClickCallback(fn: (consumer: Layer, slot: ParameterSlot) => void): void {
     this._onSlotClick = fn
+  }
+
+  // Register a callback invoked when an empty-area click-through (see the
+  // "true empty-area miss" handling below) lands on a StrokeLayer that
+  // already has content: creates a new chained StrokeLayer above it (same
+  // style/bindings, inserted into the stack, selected) and returns it, so
+  // drawing can continue on the new layer instead of overwriting the old one.
+  setChainStrokeCallback(fn: (consumer: StrokeLayer) => StrokeLayer): void {
+    this._onChainStroke = fn
+  }
+
+  // Register a callback invoked when pixel-pick selects a StrokeLayer,
+  // to resolve which layer in its chain actually owns the clicked curve
+  // segment — including restoring it to the main stack (above the picked
+  // layer) if it's currently off-stack (Background or the Deleted
+  // archive), where pixel-pick alone could never have found it. Returns
+  // the layer that should actually end up selected.
+  setResolveChainClickCallback(fn: (picked: StrokeLayer, point: Point) => StrokeLayer): void {
+    this._onResolveChainClick = fn
   }
 
   // Register a callback invoked when a binding inspector action mutates the stack
@@ -623,19 +644,47 @@ export class InteractionSystem {
             this._pendingPickDrag = { layer: picked, point, pointerId: e.pointerId }
             this._canvas.setPointerCapture(e.pointerId)
           } else if (picked === null) {
-            // True empty-area miss (not a slot tap) — if a StrokeLayer is below
-            // the current layer, switch to it and begin a new stroke at this point.
+            // True empty-area miss (not a slot tap) — if a StrokeLayer is
+            // selected or below the current layer, switch to it (if needed)
+            // and begin a new stroke at this point. If that stroke already
+            // has content, don't overwrite it: create a new stroke chained
+            // onto it instead, and draw there.
             const sel = this._widget?.selected ?? null
-            if (sel !== null && !(sel instanceof StrokeLayer) && sel.hitTestSlot(testPt) === null) {
-              for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
-                if (!l.isHiddenHelper && l instanceof StrokeLayer && l.isEmpty) {
-                  this._widget!.selected = l
-                  l.beginStrokeAt(point)
-                  this._active = { node: l, pointerId: e.pointerId, useVpt: false }
-                  this._canvas.setPointerCapture(e.pointerId)
-                  this._setCursor('grabbing')
-                  Node.scheduleFrame?.()
-                  break
+            if (sel !== null && sel.hitTestSlot(testPt) === null) {
+              const beginOn = (target: StrokeLayer): void => {
+                this._widget!.selected = target
+                target.beginStrokeAt(point)
+                this._active = { node: target, pointerId: e.pointerId, useVpt: false }
+                this._canvas.setPointerCapture(e.pointerId)
+                this._setCursor('grabbing')
+                Node.scheduleFrame?.()
+              }
+              if (sel instanceof StrokeLayer) {
+                // The selected stroke's own hit-test already had first crack
+                // at this point (handles, curve, pill rows) and found nothing
+                // — an empty stroke would have claimed the click itself via
+                // its draw-mode hitTestSelf, so reaching here means it has
+                // content. Continue it with a chained stroke — but only if
+                // it isn't already chained; an existing chain binding is
+                // left in place, and the click does nothing further.
+                if (!sel.chainSlot.isActive) {
+                  const target = this._onChainStroke?.(sel) ?? null
+                  if (target !== null) beginOn(target)
+                }
+              } else {
+                for (let l: Layer | null = sel.layerBelow; l !== null; l = l.layerBelow) {
+                  if (!l.isHiddenHelper && l instanceof StrokeLayer) {
+                    if (l.isEmpty) {
+                      beginOn(l)
+                    } else if (!l.chainSlot.isActive) {
+                      const target = this._onChainStroke?.(l) ?? null
+                      if (target !== null) beginOn(target)
+                    }
+                    // Already chained (or the callback declined) — leave it
+                    // as-is; this candidate is still the first StrokeLayer
+                    // found, so stop scanning rather than trying the next one.
+                    break
+                  }
                 }
               }
             }
@@ -881,9 +930,16 @@ export class InteractionSystem {
     if (this._widget !== null && !blocked) {
       const picked = this._pickLayerAtPixel(point)
       if (picked !== null) {
-        this._widget.selected = picked
+        // A StrokeLayer's own rendered content can include curve contributed
+        // by a chained layer (see StrokeLayer._renderPoints) — resolve which
+        // layer actually owns the clicked segment, restoring it from
+        // Background/Deleted if it isn't on-stack to be pixel-picked itself.
+        const resolved = picked instanceof StrokeLayer
+          ? this._onResolveChainClick?.(picked, point) ?? picked
+          : picked
+        this._widget.selected = resolved
         Node.scheduleFrame?.()
-        return picked
+        return resolved
       }
     }
     return null

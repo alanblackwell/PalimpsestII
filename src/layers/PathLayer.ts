@@ -184,6 +184,13 @@ export class PathLayer extends ShapeLayer {
   // Override in subclasses to protect pinned endpoints.
   protected _positionPinned(): Set<number> { return new Set() }
 
+  // Points used for rendering (drawShape, and any derived mask/image/arc
+  // sampling built from it) — defaults to the editable control points.
+  // Overridden by StrokeLayer to splice in a chained stroke's own points,
+  // without changing what handles/curveHit/hit-testing operate on (they
+  // always read _points directly).
+  protected _renderPoints(): Point[] { return this._points }
+
   constructor(points?: Point[], cx = 500, cy = 300, colour?: Colour) {
     // Pass dummy w/h — PathLayer geometry is defined by control points, not bbox.
     super(cx, cy, 1, 1, colour)
@@ -216,6 +223,16 @@ export class PathLayer extends ShapeLayer {
 
   /** All control points in canvas space. */
   getRefPoints(): Point[] { return this._points.map(p => ({ ...p })) }
+
+  /** Overwrite one control point directly (canvas space) and mark dirty.
+   *  Used by StrokeLayer's chained-handle dragging, where the handle
+   *  belongs to a different (chained) StrokeLayer instance than the one
+   *  currently selected/rendering it. */
+  setPointAt(idx: number, p: Point): void {
+    if (idx < 0 || idx >= this._points.length) return
+    this._points[idx] = { ...p }
+    this.markDirty()
+  }
 
   // ----------------------------------------------------------
   // Node — slot-driven rotation and position are applied to the
@@ -359,7 +376,8 @@ export class PathLayer extends ShapeLayer {
     filled: boolean,
     strokeWidth: number,
   ): void {
-    if (this._points.length < 2) return
+    const pts = this._renderPoints()
+    if (pts.length < 2) return
     const css = `rgba(${Math.round(colour.r*255)},${Math.round(colour.g*255)},${Math.round(colour.b*255)},${colour.a})`
     ctx.save()
     ctx.globalAlpha = opacity
@@ -375,8 +393,8 @@ export class PathLayer extends ShapeLayer {
     for (let i = 0; i <= SAMPLES; i++) {
       const t  = i / SAMPLES
       const pt = this._closedPath
-        ? samplePath(this._points, t % 1, this._radius)
-        : samplePathOpen(this._points, t, this._radius)
+        ? samplePath(pts, t % 1, this._radius)
+        : samplePathOpen(pts, t, this._radius)
       if (i === 0) ctx.moveTo(pt.x, pt.y)
       else         ctx.lineTo(pt.x, pt.y)
     }
@@ -597,15 +615,25 @@ export class PathLayer extends ShapeLayer {
     return false
   }
 
-  /** Right-click on a control point removes it. */
-  handleContextMenu(point: Point): boolean {
+  /** Remove one control point directly (used by handleContextMenu, and by
+   *  StrokeLayer's chain-handle right-click delete, which calls this on the
+   *  layer that actually owns the point rather than on itself). Returns
+   *  false if idx is out of range or removing it would leave fewer than
+   *  the minimum number of points. */
+  removePointAt(idx: number): boolean {
+    if (idx < 0 || idx >= this._points.length) return false
     if (this._points.length <= this._minPoints) return false
-    const idx = this._nearest(point)
-    if (idx < 0) return false
     this._points.splice(idx, 1)
     if (this._dragIndex === idx) this._dragIndex = -1
     this.markDirty()
     return true
+  }
+
+  /** Right-click on a control point removes it. */
+  handleContextMenu(point: Point): boolean {
+    const idx = this._nearest(point)
+    if (idx < 0) return false
+    return this.removePointAt(idx)
   }
 
   override startCenterDrag(point: Point): boolean {

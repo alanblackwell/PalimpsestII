@@ -47,6 +47,13 @@ const EP_SNAP_DWELL_MS = 600  // ms — dwell before snap is "locked"
 const EP_REF_R         = 8    // px — ref-point indicator circle radius
 const EP_SNAP_COL      = '#7ecfcf'
 
+// Handles for a chained stroke's own control points, shown alongside this
+// stroke's handles so the whole chain is editable from one layer. Distinct
+// colour from ACCENT flags that dragging one edits a *different* layer.
+const CHAIN_HANDLE_COL = '#e84a8f'
+const CHAIN_CP_R       = 6    // px — chain handle indicator circle radius
+const CHAIN_HIT_R      = 14   // px — chain handle hit-test radius
+
 export type StrokeStateSnapshot = {
   points:      Point[]
   colour:      Colour
@@ -79,6 +86,12 @@ export class StrokeLayer extends PathLayer {
 
   readonly startSlot: ParameterSlot
   readonly endSlot:   ParameterSlot
+  // Binds another StrokeLayer, appended after this stroke's own points —
+  // the chained stroke's first point is dropped so the join has a single
+  // shared node (this stroke's own last point), same convention as
+  // _checkClosure's duplicate-endpoint removal below. Recursive: if the
+  // chained stroke itself has an active chain, the whole tail flattens in.
+  readonly chainSlot: ParameterSlot
 
   private _drawMode  = true
   private _rawPoints: Point[] = []
@@ -101,6 +114,12 @@ export class StrokeLayer extends PathLayer {
   // Closure callback — set by main.ts via setOnClose
   private _onClose: ((stroke: StrokeLayer) => void) | null = null
 
+  // Active drag of a control point that belongs to a *chained* StrokeLayer
+  // (rendered here via _renderChainedHandles, but edited in place on the
+  // owning layer — see _nearestChainPoint / setPointAt).
+  private _chainDragLayer: StrokeLayer | null = null
+  private _chainDragIndex = -1
+
   // Draw button bounds (written in renderPanel, read in hitTestSelf)
   private _drawBtnBounds: BoundingBox | null = null
 
@@ -112,7 +131,8 @@ export class StrokeLayer extends PathLayer {
 
     this.startSlot = new ParameterSlot(ValueType.Point, this, 'start')
     this.endSlot   = new ParameterSlot(ValueType.Point, this, 'end')
-    this.slots.push(this.startSlot, this.endSlot)
+    this.chainSlot = new ParameterSlot(ValueType.Point, this, 'chain')
+    this.slots.push(this.startSlot, this.endSlot, this.chainSlot)
   }
 
   // ----------------------------------------------------------
@@ -214,6 +234,100 @@ export class StrokeLayer extends PathLayer {
     return pinned
   }
 
+  // Own points, with the chained stroke's points (recursively flattened)
+  // appended — dropping the chained stroke's first point so the join has
+  // one shared node rather than two coincident ones. Only used for
+  // rendering/sampling (drawShape, arc-length table); control-point
+  // handles, curve-click insertion, and drag hit-testing all read
+  // _points directly and are unaffected by chaining.
+  protected override _renderPoints(): Point[] {
+    if (!this.chainSlot.isActive) return this._points
+    const next = (this.chainSlot.source as StrokeLayer)._renderPoints()
+    return next.length > 0 ? [...this._points, ...next.slice(1)] : this._points
+  }
+
+  // Every StrokeLayer reached by following chainSlot, in order (excludes
+  // this stroke itself). Terminates because Graph.bind rejects any binding
+  // that would close a cycle through this (non-feedback) slot.
+  private _chainedLayers(): StrokeLayer[] {
+    const result: StrokeLayer[] = []
+    let cur: StrokeLayer = this
+    while (cur.chainSlot.isActive) {
+      const next = cur.chainSlot.source as StrokeLayer
+      result.push(next)
+      cur = next
+    }
+    return result
+  }
+
+  // Which layer (this stroke, or one of its chained descendants) actually
+  // owns the rendered curve nearest `point` — found by sampling each
+  // layer's own (un-merged) curve independently and taking whichever comes
+  // closest, rather than trying to map an index back through the merged
+  // _renderPoints() splice. Used to resolve a pixel-pick hit on the merged
+  // curve to its real source layer, including one that isn't on the main
+  // stack right now (moved to Background or archived) and so could never
+  // be pixel-picked directly. Reuses this stroke's own _radius for every
+  // candidate, matching how the merged curve is actually rendered (a
+  // chained layer's individual radius isn't separately honoured there —
+  // see _renderPoints). Returns null only if nothing in the chain has
+  // enough points to sample.
+  chainSegmentOwnerAt(point: Point): StrokeLayer | null {
+    const SEG_SAMPLES = 200
+    let best: StrokeLayer | null = null
+    let bestD2 = Infinity
+    for (const layer of [this, ...this._chainedLayers()]) {
+      const pts = layer.getRefPoints()
+      if (pts.length < 2) continue
+      for (let i = 0; i <= SEG_SAMPLES; i++) {
+        const p  = samplePathOpen(pts, i / SEG_SAMPLES, this._radius)
+        const d2 = (point.x - p.x) ** 2 + (point.y - p.y) ** 2
+        if (d2 < bestD2) { bestD2 = d2; best = layer }
+      }
+    }
+    return best
+  }
+
+  // Hit-test against every chained layer's own control points, skipping
+  // each layer's index 0 — that point is always the one _renderPoints()
+  // drops when splicing the chain together, so it has no visible effect
+  // on the rendered curve and isn't worth exposing as a draggable handle.
+  private _nearestChainPoint(p: Point): { layer: StrokeLayer; index: number } | null {
+    const r2 = CHAIN_HIT_R * CHAIN_HIT_R
+    let best: { layer: StrokeLayer; index: number } | null = null
+    let bestD2 = Infinity
+    for (const layer of this._chainedLayers()) {
+      const pts = layer.getRefPoints()
+      for (let i = 1; i < pts.length; i++) {
+        const cp = pts[i]!
+        const d2 = (p.x - cp.x) ** 2 + (p.y - cp.y) ** 2
+        if (d2 <= r2 && d2 < bestD2) { bestD2 = d2; best = { layer, index: i } }
+      }
+    }
+    return best
+  }
+
+  private _renderChainedHandles(ctx: Ctx2D): void {
+    const chained = this._chainedLayers()
+    if (chained.length === 0) return
+    ctx.save()
+    for (const layer of chained) {
+      const pts = layer.getRefPoints()
+      for (let i = 1; i < pts.length; i++) {
+        const pt  = pts[i]!
+        const lit = this._chainDragLayer === layer && this._chainDragIndex === i
+        ctx.fillStyle   = lit ? CHAIN_HANDLE_COL : CHAIN_HANDLE_COL + '55'
+        ctx.strokeStyle = lit ? '#ffffff' : CHAIN_HANDLE_COL
+        ctx.lineWidth   = lit ? 2 : 1.5
+        ctx.beginPath()
+        ctx.arc(pt.x, pt.y, CHAIN_CP_R, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+      }
+    }
+    ctx.restore()
+  }
+
   private _rebuildBrushCanvas(): void {
     const w = Node.canvasWidth, h = Node.canvasHeight
     if (this._brushCanvas.width !== w || this._brushCanvas.height !== h)
@@ -263,11 +377,12 @@ export class StrokeLayer extends PathLayer {
   }
 
   private _rebuildArcSamples(): void {
-    if (this._points.length < 2) { this._arcSamples = []; this._totalLen = 0; return }
+    const points = this._renderPoints()
+    if (points.length < 2) { this._arcSamples = []; this._totalLen = 0; return }
     const pts: Point[] = []
     const c = this._scale !== 1 ? this._centroid() : null
     for (let i = 0; i <= ARC_SAMPLES; i++) {
-      let p = samplePathOpen(this._points, i / ARC_SAMPLES, this._radius)
+      let p = samplePathOpen(points, i / ARC_SAMPLES, this._radius)
       if (c !== null) p = { x: c.x + (p.x - c.x) * this._scale, y: c.y + (p.y - c.y) * this._scale }
       pts.push(p)
     }
@@ -401,6 +516,7 @@ export class StrokeLayer extends PathLayer {
     if (!this._drawMode) {
       super.renderOverlay(ctx)   // PathLayer: handles + snap guides + animate btn
       this._renderEpSnapIndicators(ctx)
+      this._renderChainedHandles(ctx)
     } else {
       this._renderConvBtn(ctx, 'animate')
     }
@@ -471,7 +587,10 @@ export class StrokeLayer extends PathLayer {
   protected override hitTestSelf(point: Point): this | null {
     if (this._drawMode) return this
     if (this._drawBtnBounds !== null && boundingBoxContains(this._drawBtnBounds, point)) return this
-    return super.hitTestSelf(point)
+    const own = super.hitTestSelf(point)
+    if (own !== null) return own
+    if (this._nearestChainPoint(point) !== null) return this
+    return null
   }
 
   // ----------------------------------------------------------
@@ -502,7 +621,35 @@ export class StrokeLayer extends PathLayer {
       return true
     }
 
-    return super.handlePointerDown(point)
+    if (super.handlePointerDown(point)) return true
+
+    // Nothing of this stroke's own claimed the click — check the chained
+    // strokes' handles (rendered by _renderChainedHandles). _nearestChainPoint
+    // never returns index 0 (that point is always dropped by _renderPoints,
+    // so it has no visible position to drag), but the last point of a chain
+    // layer is real and may be pinned by that layer's own endSlot — suspend
+    // it first, same convention as _onControlPointDragStart uses for this
+    // stroke's own endpoint.
+    const hit = this._nearestChainPoint(point)
+    if (hit !== null) {
+      const n = hit.layer.getRefPoints().length
+      if (hit.index === n - 1 && hit.layer.endSlot.state === SlotState.Bound)
+        BindingLayer.findForSlot(hit.layer.endSlot)?.toggle()
+      this._chainDragLayer = hit.layer
+      this._chainDragIndex = hit.index
+      this.markDirty()
+      return true
+    }
+    return false
+  }
+
+  /** Right-click on a control point removes it — including a chained
+   *  layer's handle, removed from the layer that actually owns it. */
+  override handleContextMenu(point: Point): boolean {
+    if (super.handleContextMenu(point)) return true
+    const hit = this._nearestChainPoint(point)
+    if (hit === null) return false
+    return hit.layer.removePointAt(hit.index)
   }
 
   override handlePointerMove(point: Point): void {
@@ -511,11 +658,19 @@ export class StrokeLayer extends PathLayer {
       this.markDirty()
       return
     }
+    if (this._chainDragLayer !== null) {
+      this._chainDragLayer.setPointAt(this._chainDragIndex, point)
+      this.markDirty()
+      return
+    }
     super.handlePointerMove(point)
     this._updateEpSnap(point)
   }
 
   override handlePointerUp(): void {
+    this._chainDragLayer = null
+    this._chainDragIndex = -1
+
     // Capture snap state before clearing it.
     const snap  = this._epSnapTarget
     const which = this._epDragging
