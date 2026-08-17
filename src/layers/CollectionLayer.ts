@@ -5,6 +5,7 @@ import {
   ValueType,
   boundingBoxContains,
   type ImageValue, type ImageSource,
+  type MaskValue, type MaskSource,
   type CountSource,
   type Ctx2D, type Point,
 } from '../core/types.js'
@@ -24,7 +25,12 @@ import { sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow } from '
 // inside the Collection in order.
 //
 // The composite is exposed as an ImageSource so it can be fed
-// into any image-accepting slot (ClipLayer, TileLayer, …).
+// into any image-accepting slot (ClipLayer, TileLayer, …). It's also a
+// MaskSource: getMask() unions getMask() from every ingested item that's
+// itself Mask-producing, so a collection of shapes can be dropped onto any
+// Mask-typed slot as one aggregated region — see MaskLayer's collectionSlot,
+// which pairs a single shapeSlot with this for "one shape, or any number
+// via a collection" instead of a fixed row of shape slots.
 //
 // Double-clicking a thumbnail in the grid ejects that layer back into the
 // main stack, above the CollectionLayer. Clicking a thumbnail's × button
@@ -62,11 +68,15 @@ type GridLayout = {
 
 type BBox = { x: number; y: number; width: number; height: number }
 
-export class CollectionLayer extends Layer implements ImageSource {
-  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image])
+export class CollectionLayer extends Layer implements ImageSource, MaskSource {
+  readonly types: ReadonlySet<ValueType> = new Set([ValueType.Image, ValueType.Mask])
 
   private _layers:          Layer[] = []
   private _compositeCanvas: OffscreenCanvas | null = null
+  // Union of getMask() from every ingested item that's itself Mask-producing
+  // — lets a CollectionLayer stand in anywhere a single Mask source could
+  // (e.g. MaskLayer's collectionSlot), aggregating any number of shapes.
+  private _maskCanvas:      OffscreenCanvas | null = null
   private _ejectCallback:   (() => void) | null = null
   private _deleteCallback:  ((layer: Layer) => void) | null = null
   private _onSave: (() => void) | null = null
@@ -105,6 +115,14 @@ export class CollectionLayer extends Layer implements ImageSource {
 
   getImage(): ImageValue {
     return this._layers.length > 0 ? this._compositeCanvas : null
+  }
+
+  // ----------------------------------------------------------
+  // MaskSource
+  // ----------------------------------------------------------
+
+  getMask(): MaskValue {
+    return this._layers.length > 0 ? this._maskCanvas : null
   }
 
   // ----------------------------------------------------------
@@ -177,9 +195,19 @@ export class CollectionLayer extends Layer implements ImageSource {
     this._deleteCallback?.(layer)
   }
 
-  // Exposed for InteractionSystem duck-typing — drop zone for ingest.
+  // Exposed for InteractionSystem duck-typing — drop zone for ingest. The
+  // whole content-canvas area counts (not just the thumbnail grid), so
+  // dropping a dragged layer's thumbnail anywhere on the canvas — not just
+  // precisely on the grid — ingests it into this collection, as long as the
+  // collection is the selected layer (InteractionSystem._handleUp resolves
+  // the drop target from `widget.selected`, not from what's under the
+  // cursor, so this is safe: nothing else in that path keys off position
+  // here besides the slot-row check, which still takes priority). The
+  // drag-active highlight stays scoped to just the grid pill (_drawGrid).
   get dropZoneBounds(): { x: number; y: number; width: number; height: number } {
-    return this._gridBounds()
+    const cw = Node.canvasWidth
+    const x  = contentLeft(cw)
+    return { x, y: 0, width: cw - x, height: Node.canvasHeight }
   }
 
   // ----------------------------------------------------------
@@ -189,6 +217,7 @@ export class CollectionLayer extends Layer implements ImageSource {
   protected recompute(): void {
     if (this._layers.length === 0) {
       this._compositeCanvas = null
+      this._maskCanvas = null
       this._snapBounds = null
       return
     }
@@ -203,15 +232,28 @@ export class CollectionLayer extends Layer implements ImageSource {
     ) {
       this._compositeCanvas = new OffscreenCanvas(w, h)
     }
+    if (
+      this._maskCanvas === null ||
+      this._maskCanvas.width  !== w ||
+      this._maskCanvas.height !== h
+    ) {
+      this._maskCanvas = new OffscreenCanvas(w, h)
+    }
 
-    const ctx = this._compositeCanvas.getContext('2d')!
+    const ctx  = this._compositeCanvas.getContext('2d')!
+    const mctx = this._maskCanvas.getContext('2d')!
     ctx.clearRect(0, 0, w, h)
+    mctx.clearRect(0, 0, w, h)
 
     let bMinX = Infinity, bMaxX = -Infinity, bMinY = Infinity, bMaxY = -Infinity
 
     const renderAndAccum = (layer: Layer): void => {
       layer.evaluate()
       layer.renderSelf(ctx)
+      if (layer.types.has(ValueType.Mask)) {
+        const mask = (layer as unknown as MaskSource).getMask()
+        if (mask !== null) mctx.drawImage(mask, 0, 0)
+      }
       const b = layer.getSnapBounds()
       if (b !== null) {
         if (b.minX < bMinX) bMinX = b.minX

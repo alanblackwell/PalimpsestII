@@ -503,6 +503,16 @@ export abstract class Layer extends Node {
     return false
   }
 
+  // True if `slot` is conventionally filled with a freshly-created empty
+  // CollectionLayer via the slot-click-to-create gesture, rather than the
+  // slot type's canonical default layer — e.g. a MaskLayer's collection
+  // slot. The slot itself stays ordinarily typed (Mask, in that case) and
+  // will still accept any structurally-compatible source dropped onto it;
+  // this only governs what an *empty* click creates.
+  wantsCollectionForSlot(_slot: ParameterSlot): boolean {
+    return false
+  }
+
   // True if `slot` doesn't accept `sourceTypes` directly, but the app layer
   // knows how to bind it anyway via an auto-created adapter/converter layer
   // (e.g. AnimPathLayer/RotateLayer's phaseSlot accepting a Rate-only source

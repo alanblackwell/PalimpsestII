@@ -748,7 +748,7 @@ and the mask source to `BackgroundLayer`).
 | `src/interaction/thumbnail.ts` | Shared thumbnail rendering utility (used by widget and DeletionLayer) |
 | `src/interaction/layout.ts` | `contentLeft`/`stackWidgetWidth` — widget/content boundary |
 | `src/interaction/AngleSnapper.ts` | `AngleSnapper` and `ValueSnapper` — reusable snap-and-refine helpers for handles |
-| `src/layers/MaskLayer.ts` | Composite mask: shape slots + freehand paint/erase |
+| `src/layers/MaskLayer.ts` | Composite mask: shape + collection slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
 | `src/layers/TileLayer.ts` | Tile an image's content bbox across the canvas, or fit (contain) it within the canvas |
@@ -1665,3 +1665,14 @@ folding `DeletionLayer`'s archive (not just Background) into
   `ShapeLayer`, causing a TS2415 error. Pre-existing.
 - `MaskLayer.resize()` from the original implementation is gone; canvas size
   changes are handled automatically via `Node.canvasWidth/Height`.
+- `MaskLayer` was changed from 4 fixed shape slots to one `shapeSlot` + one
+  `collectionSlot` (conventionally bound to a `CollectionLayer`, whose own
+  `getMask()` unions any number of ingested shapes — see `CollectionLayer.ts`).
+  `Persistence.ts` restores slot bindings positionally
+  (`record.slots[i]` ↔ `layer.slotList[i]`), so loading a session saved
+  before this change will silently drop a MaskLayer's 2nd–4th shape binding
+  and/or its invert-slot binding (the shape slot and painted/erased content
+  are unaffected). No migration was written for this — accepted as a clean
+  break. Clip&lt;Shape&gt; mask-tracker helpers are unaffected regardless, since
+  `clipRegionSlot` is always excluded from that positional array and
+  restored separately by id.

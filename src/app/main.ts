@@ -526,7 +526,7 @@ function wireMaskButton(layer: ShapeLayer): void {
     Layer.assignDebugName(mask)
     mask.bounds = { ...layer.bounds }
     mask.insertBelow(layer)
-    BindingLayer.create(layer, mask.firstShapeSlot)
+    BindingLayer.create(layer, mask.shapeSlot)
     postInsertLayer(mask)
     refreshStack()   // no arg — keep shape layer selected
   })
@@ -538,7 +538,7 @@ function wireTextMaskButton(layer: TextLayer): void {
     Layer.assignDebugName(mask)
     mask.bounds = { ...layer.bounds }
     mask.insertBelow(layer)
-    BindingLayer.create(layer, mask.firstShapeSlot)
+    BindingLayer.create(layer, mask.shapeSlot)
     postInsertLayer(mask)
     refreshStack()
   })
@@ -550,7 +550,7 @@ function wireLineMaskButton(layer: LineLayer): void {
     Layer.assignDebugName(mask)
     mask.bounds = { ...layer.bounds }
     mask.insertBelow(layer)
-    BindingLayer.create(layer, mask.firstShapeSlot)
+    BindingLayer.create(layer, mask.shapeSlot)
     postInsertLayer(mask)
     refreshStack()
   })
@@ -811,7 +811,7 @@ function wireTutorialLayer(tl: TutorialLayer): void {
 // ------------------------------------------------------------------
 // Generic shape factory — used to populate empty slots that are
 // conventionally bound to a shape (AnimPath's shape slot, MaskLayer's
-// shape slots; see Layer.wantsShapeForSlot). Picks a closed shape type at
+// shape slot; see Layer.wantsShapeForSlot). Picks a closed shape type at
 // random and starts it in outline mode, since its role here is to define
 // a region/path, not to add coloured content.
 // ------------------------------------------------------------------
@@ -829,8 +829,8 @@ function randomClosedShapeLayer(canvasW: number, canvasH: number): Layer {
 
 // Search down the stack from `consumer` for an existing shape layer whose
 // silhouette could serve as a Mask's initial content — used when an empty
-// Mask-typed slot (other than MaskLayer's own shape slots, see
-// Layer.wantsShapeForSlot) is clicked.
+// Mask-typed slot (other than MaskLayer's own shape/collection slots, see
+// Layer.wantsShapeForSlot/wantsCollectionForSlot) is clicked.
 function findSuitableMaskShape(consumer: Layer): Layer | null {
   for (let l: Layer | null = consumer.layerBelow; l !== null; l = l.layerBelow) {
     if (l.isInfrastructure || l.isHiddenHelper) continue
@@ -1445,7 +1445,7 @@ interaction.setBoundCallback((source, slot) => {
 // If the dropped layer is a shape (Rect/Ellipse/Path/Text) rather than a
 // dedicated mask source, it doesn't have a usable mask output on its own in
 // this context — so a new MaskLayer is created, the shape is bound into its
-// first shape slot, and that MaskLayer (not the shape) feeds clip.maskSlot.
+// shape slot, and that MaskLayer (not the shape) feeds clip.maskSlot.
 // Both the shape and the new MaskLayer move to Background, never appearing
 // in the stack.
 interaction.setMaskDropCallback((source, target) => {
@@ -1467,7 +1467,7 @@ interaction.setMaskDropCallback((source, target) => {
     // immediately afterwards (in the order that unwinds the stack cleanly),
     // leaving the visible stack untouched.
     maskLayer.insertAbove(target)
-    const bl = BindingLayer.create(source, maskLayer.firstShapeSlot)
+    const bl = BindingLayer.create(source, maskLayer.shapeSlot)
     if (bl !== null) backgroundLayer.add(bl)
     backgroundLayer.add(maskLayer)
     maskSource = maskLayer
@@ -1569,10 +1569,24 @@ interaction.setSlotClickCallback((consumer, slot) => {
     }
 
     // Slots conventionally bound to a shape (AnimPath's shape slot,
-    // MaskLayer's shape slots) get a fresh random closed shape in outline
+    // MaskLayer's shape slot) get a fresh random closed shape in outline
     // mode, instead of the slot type's normal canonical default.
     if (consumer.wantsShapeForSlot(slot)) {
       const newLayer = randomClosedShapeLayer(Node.viewportWidth, Node.viewportHeight)
+      Layer.assignSlotCreatedName(newLayer, consumer, slot)
+      newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+      newLayer.insertAbove(consumer)
+      BindingLayer.create(newLayer, slot)
+      refreshStack(newLayer)
+      return
+    }
+
+    // Slots conventionally bound to a CollectionLayer (MaskLayer's
+    // collection slot) get a fresh empty CollectionLayer instead of the
+    // plain Mask default below, so the user lands somewhere they can start
+    // dragging shapes into right away.
+    if (consumer.wantsCollectionForSlot(slot)) {
+      const newLayer = new CollectionLayer()
       Layer.assignSlotCreatedName(newLayer, consumer, slot)
       newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
       newLayer.insertAbove(consumer)
@@ -1620,7 +1634,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
       // Background immediately afterwards, leaving shapeLayer's position
       // (and the rest of the stack) untouched.
       maskLayer.insertAbove(shapeLayer)
-      const bl = BindingLayer.create(shapeLayer, maskLayer.firstShapeSlot)
+      const bl = BindingLayer.create(shapeLayer, maskLayer.shapeSlot)
       if (bl !== null) backgroundLayer.add(bl)
       backgroundLayer.add(maskLayer)
 

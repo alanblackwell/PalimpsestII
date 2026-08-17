@@ -19,11 +19,18 @@ type BBox = { x: number; y: number; width: number; height: number }
 // ------------------------------------------------------------
 //
 // Produces a greyscale mask (white = included, black = excluded)
-// by combining two sources:
+// by combining three sources:
 //
-//   1. Shape slots  — up to 4 MaskSource inputs (e.g. RectLayer,
-//                     EllipseLayer) dropped onto the slot rows.
-//   2. Painted layer — freehand strokes drawn directly on the canvas.
+//   1. Shape slot    — a single MaskSource input (e.g. RectLayer,
+//                      EllipseLayer) dropped onto the slot row.
+//   2. Collection slot — conventionally a CollectionLayer full of shapes
+//                      (any number), whose own getMask() already unions its
+//                      contents — see CollectionLayer.ts. Structurally just
+//                      another Mask-typed slot, so anything else Mask-
+//                      producing works too; the slot-click-to-create default
+//                      is what makes "collection" the convention (see
+//                      Layer.wantsCollectionForSlot).
+//   3. Painted layer — freehand strokes drawn directly on the canvas.
 //      Hold Shift while dragging to constrain the stroke to a horizontal or
 //      vertical line (standard axis-constrain convention, driven by
 //      `Node.shiftKey`). Moving substantially perpendicular to the current
@@ -43,7 +50,7 @@ type BBox = { x: number; y: number; width: number; height: number }
 //     [✕]        — clear all freehand paint (undoable via [↺])
 //     [↺]        — undo: one-level undo of the last stroke *or* the last
 //                  clear, whichever happened most recently; falls back to a
-//                  full reset (clear paint + unbind all shape slots) if
+//                  full reset (clear paint + unbind shape/collection slots) if
 //                  there's nothing left to undo
 //   Row 2 — brush shape/size presets + size slider:
 //     [●][●][●][■][╱] — presets: three round sizes (small/medium/large),
@@ -52,7 +59,7 @@ type BBox = { x: number; y: number; width: number; height: number }
 //     ──●──      — brush-size slider (4–100 px), drag to adjust; applies to
 //                  whichever shape is currently selected
 //
-// Below the 4-shape-slot pill, a second pill holds the "invert" slot
+// Below the shape/collection-slot pill, a second pill holds the "invert" slot
 // (Event) and its manual [⏺/⏸] toggle button. Either the rising edge of
 // a bound event, or a click on the toggle, flips `_inverted`, which swaps
 // white <-> transparent across the whole composited mask. Operating the
@@ -88,8 +95,6 @@ const BRUSH_PRESETS: BrushPreset[] = [
   { shape: 'line',   size: 24 },
 ]
 
-const N_SHAPES      =  4
-
 // Tools-panel geometry (drawn at the canvas-space panel x, above the slot rows).
 // Row 1 — big paint/erase/clear/undo touch buttons; row 2 — brush presets + slider.
 const TOOL_SZ      = 52   // target square size for the row-1 buttons
@@ -110,7 +115,8 @@ const SLOT_H    = 30   // must match Layer.renderSlotGroup's row height
 export class MaskLayer extends Layer implements MaskSource {
   readonly types: ReadonlySet<ValueType> = new Set([ValueType.Mask])
 
-  private readonly _shapeSlots: ParameterSlot[]
+  private readonly _shapeSlot: ParameterSlot
+  private readonly _collectionSlot: ParameterSlot
   private readonly _invertSlot: ParameterSlot
   private readonly _clipRegionSlot: ParameterSlot
 
@@ -156,9 +162,8 @@ export class MaskLayer extends Layer implements MaskSource {
     this._offscreen = new OffscreenCanvas(w, h)
     this._scratch   = new OffscreenCanvas(w, h)
 
-    this._shapeSlots = Array.from({ length: N_SHAPES }, (_, i) =>
-      new ParameterSlot(ValueType.Mask, this, `shape ${i + 1}`),
-    )
+    this._shapeSlot      = new ParameterSlot(ValueType.Mask, this, 'shape')
+    this._collectionSlot = new ParameterSlot(ValueType.Mask, this, 'collection')
     this._invertSlot = new ParameterSlot(ValueType.Event, this, 'invert')
     // Feedback slot: a Clip<Shape> host is bound here (a raw, cardless
     // ParameterSlot.bind() — see main.ts's postInsertLayer) as its hidden
@@ -169,7 +174,7 @@ export class MaskLayer extends Layer implements MaskSource {
     // it from the cycle check. Appended last (not grouped with the shape
     // slots) so existing save files' shape/invert slot indices are unaffected.
     this._clipRegionSlot = new ParameterSlot(ValueType.Mask, this, 'clip region', true)
-    this.slots.push(...this._shapeSlots, this._invertSlot, this._clipRegionSlot)
+    this.slots.push(this._shapeSlot, this._collectionSlot, this._invertSlot, this._clipRegionSlot)
     this.debugName = 'MaskLayer'
     graph.register(this)
   }
@@ -180,20 +185,32 @@ export class MaskLayer extends Layer implements MaskSource {
 
   getMask(): MaskValue { return this._offscreen }
 
-  // The conventional "first shape" binding target — exposed so main.ts can
-  // bind a dropped shape directly (e.g. the mask-drop-on-image shortcut's
-  // shape branch, which wraps a Rect/Ellipse/Path/Text in a new MaskLayer).
-  get firstShapeSlot(): ParameterSlot { return this._shapeSlots[0]! }
+  // The single-shape binding target — exposed so main.ts can bind a dropped
+  // shape directly (e.g. the mask-drop-on-image shortcut's shape branch,
+  // which wraps a Rect/Ellipse/Path/Text in a new MaskLayer).
+  get shapeSlot(): ParameterSlot { return this._shapeSlot }
+
+  // Conventionally a CollectionLayer full of shapes, whose getMask() already
+  // unions its contents — see CollectionLayer.ts. Structurally just another
+  // Mask-typed slot; nothing stops a plain shape being dropped here too.
+  get collectionSlot(): ParameterSlot { return this._collectionSlot }
 
   // The mask-tracker feedback slot — see the constructor comment. Public so
   // main.ts's postInsertLayer and Persistence (save/load) can bind it
   // directly to a Clip<Shape> host.
   get clipRegionSlot(): ParameterSlot { return this._clipRegionSlot }
 
-  // The shape slots are conventionally filled with a fresh closed shape
+  // The shape slot is conventionally filled with a fresh closed shape
   // (Rect/Ellipse/Path) in outline mode, not another MaskLayer.
   override wantsShapeForSlot(slot: ParameterSlot): boolean {
-    return this._shapeSlots.includes(slot)
+    return slot === this._shapeSlot
+  }
+
+  // The collection slot is conventionally filled with a fresh empty
+  // CollectionLayer, so the user lands somewhere they can start dragging
+  // shapes into right away.
+  override wantsCollectionForSlot(slot: ParameterSlot): boolean {
+    return slot === this._collectionSlot
   }
 
   // ----------------------------------------------------------
@@ -210,7 +227,7 @@ export class MaskLayer extends Layer implements MaskSource {
 
     ctx.drawImage(this._painted, 0, 0)
 
-    for (const slot of this._shapeSlots) {
+    for (const slot of [this._shapeSlot, this._collectionSlot]) {
       if (slot.isActive) {
         const mask = (slot.source as MaskSource).getMask()
         if (mask !== null) ctx.drawImage(mask, 0, 0)
@@ -273,11 +290,11 @@ export class MaskLayer extends Layer implements MaskSource {
 
   override autoBindRules(): ReturnType<Layer['autoBindRules']> {
     return [
-      // A shape bound straight into a freshly-created MaskLayer's first
+      // A shape bound straight into a freshly-created MaskLayer's shape
       // slot is unlikely to be used for anything else — move it to the
       // Background collection (still evaluated, recoverable via
       // DeletionLayer's toggle) rather than leaving it cluttering the stack.
-      { slot: this._shapeSlots[0]!, accepts: (l: Layer) => l.types.has(ValueType.Mask), sendToBackgroundAfterBind: true },
+      { slot: this._shapeSlot, accepts: (l: Layer) => l.types.has(ValueType.Mask), sendToBackgroundAfterBind: true },
     ]
   }
 
@@ -370,11 +387,11 @@ export class MaskLayer extends Layer implements MaskSource {
   // Hook for subclasses to inject rendering after the mask overlay but before UI controls.
   protected _renderBeforeUI(_ctx: Ctx2D): void {}
 
-  // Renders the 4 shape-binding slots as their normal pill, then a second
+  // Renders the shape + collection slots as their normal pill, then a second
   // pill directly below for the invert slot + its manual toggle button.
   override renderSlots(ctx: Ctx2D): void {
     this._slotBounds.clear()
-    let y = this.renderSlotGroup(ctx, this._shapeSlots, this.panelBottom)
+    let y = this.renderSlotGroup(ctx, [this._shapeSlot, this._collectionSlot], this.panelBottom)
     // Only shown once bound — a plain user-created MaskLayer never has
     // anything bound here, so this stays invisible for the common case and
     // only appears on an exposed Clip<Shape> mask-tracker helper.
@@ -912,7 +929,7 @@ export class MaskLayer extends Layer implements MaskSource {
   }
 
   // [↺] button: undo the last stroke or clear on first press; falls back to
-  // a full reset (clear + unbind shape slots) once there's nothing left to
+  // a full reset (clear + unbind shape/collection slots) once there's nothing left to
   // undo.
   private _handleUndoBtn(): void {
     if (this._undoPainted !== null) {
@@ -936,9 +953,8 @@ export class MaskLayer extends Layer implements MaskSource {
 
   private _reset(): void {
     this._clearPaint()
-    for (const slot of this._shapeSlots) {
-      if (slot.isActive) slot.unbind()
-    }
+    if (this._shapeSlot.isActive) this._shapeSlot.unbind()
+    if (this._collectionSlot.isActive) this._collectionSlot.unbind()
     this.markDirty()
   }
 
