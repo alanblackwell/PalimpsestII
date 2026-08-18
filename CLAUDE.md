@@ -833,7 +833,7 @@ manually-set field that isn't fully derived from slot inputs in
   manual save → reload → load round-trip of a stack using the new/changed
   layer.
 
-### Session teardown and `Layer.onDiscard()` — releasing resources on reload
+### Session teardown, archive purge, and `Layer.onDiscard()` — releasing resources permanently
 
 Loading a new session in place (`Persistence.deserialize()`, used by the
 Load button's "Session" choice, an OS/marshalling-panel `.json` drop, and
@@ -877,6 +877,20 @@ camera/audio issue). `CaptureLayer.onDiscard()` follows the same pattern for
 its own equivalents: a still-running movie recording (`MediaRecorder` + its
 independent rAF loop) and its `_liveCanvas` (also appended straight to
 `document.body`).
+
+**A second, independent permanent-discard path**: purging a layer from
+`DeletionLayer`'s archive (the trash-can × button on an archived card — not
+the same as ordinary archiving via the Delete key, which only sets
+`outsideStack` and stays restorable). `deletionLayer.setPurgeCallback`'s
+handler in `main.ts` already severed the layer's `BindingLayer`s and cleaned
+up its `VideoFileHandleStore` entry, but — same gap as `teardownSession`
+before this — never called `onDiscard()` or `graph.unregister()`. A purged
+`VideoLayer` with an active camera leaked exactly the same way a session
+reload's discarded one did. Fixed the same way: the purge callback now calls
+`layer.onDiscard()` and `graph.unregister(layer)` right after severing
+bindings, before `refreshStack()`. Verified against the real running app:
+archived a live `VideoLayer` (stubbed stream/`AudioContext`), clicked its
+real × purge button in the widget, confirmed all the same releases fired.
 
 Any future layer that opens a camera/mic/screen stream, creates an
 `AudioContext`, or appends a DOM node/listener outside the normal

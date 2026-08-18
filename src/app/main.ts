@@ -1953,12 +1953,24 @@ interaction.setCreateBindingMapCallback((source) => {
 // Permanently remove a layer from the archive and clear any bindings that
 // still source from it.  We snapshot dependents before iterating because
 // each BindingLayer.remove() call modifies the set in-place.
+//
+// Purge is the other permanent-discard path besides a session reload (see
+// CLAUDE.md's "Session teardown and Layer.onDiscard()") — unlike ordinary
+// archiving, a purged layer is never coming back, so onDiscard()/
+// graph.unregister() are exactly as safe to call here as they are in
+// Persistence.teardownSession. Without this, purging e.g. a VideoLayer with
+// an active camera left the stream running indefinitely (archiving alone
+// only sets outsideStack, which stops recompute() but not anything already
+// in motion outside the dataflow graph) — same leak as the one fixed for
+// session reloads, just reachable from a different UI action.
 deletionLayer.setPurgeCallback((layer) => {
   const bls = [...layer.dependents].filter(d => d instanceof BindingLayer)
   for (const bl of bls) (bl as BindingLayer).remove()
   if (layer instanceof VideoLayer && layer.fileHandleId !== null) {
     void VideoFileHandleStore.deleteHandle(layer.fileHandleId)
   }
+  layer.onDiscard()
+  graph.unregister(layer)
   refreshStack()
 })
 
