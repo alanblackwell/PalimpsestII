@@ -1220,12 +1220,13 @@ export class InteractionSystem {
       e.preventDefault()
       return
     }
-    // Letterbox mode — cycles Debug (green box/cross overlay) -> Reuse (no
-    // overlay, fill-to-canvas layers ignore the letterbox) -> Replay (no
-    // overlay, fill-to-canvas layers constrain to the letterbox rect, black
-    // bars outside it) -> Debug. See core/Node.ts's LetterboxMode doc.
+    // Letterbox mode — cycles Reuse (no overlay, fill-to-canvas layers
+    // ignore the letterbox — the default) -> Replay (no overlay,
+    // fill-to-canvas layers constrain to the letterbox rect, black bars
+    // outside it) -> Debug (green box/cross overlay) -> Reuse. See
+    // core/Node.ts's LetterboxMode doc.
     if (e.key === 'l' && !e.ctrlKey && !e.metaKey) {
-      const order: LetterboxMode[] = ['debug', 'reuse', 'replay']
+      const order: LetterboxMode[] = ['reuse', 'replay', 'debug']
       const next = order[(order.indexOf(Node.letterboxMode) + 1) % order.length]!
       Node.letterboxMode = next
       e.preventDefault()

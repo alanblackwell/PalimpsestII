@@ -88,6 +88,23 @@ Abstract base. Key statics:
   Distinct from the per-shape `_filled` flag (filled vs. stroke boundary of an
   individual shape), which uses the local variable name `strokeMode` in
   `ShapeLayer` / `TraceLayer` render code.
+- `Node.letterboxMode: 'reuse' | 'replay' | 'debug'` — how a reloaded session
+  is fit into a browser window sized differently than the one it was saved
+  in (see `persistence/letterboxRescale.ts` for the shared scale/centre
+  math, and `ui/letterboxDebug.ts` for the overlays). Defaults to `'reuse'`
+  (no overlay, fill-to-canvas layers — `TileLayer`/`FillLayer`/`NoiseLayer`
+  — ignore the letterbox and paint the full canvas). The `'l'` hotkey
+  (`InteractionSystem`) cycles `reuse -> replay -> debug -> reuse`:
+  `'replay'` draws solid black bars outside the letterbox rect and confines
+  those same fill-to-canvas layers to it, so a saved stack replays exactly
+  as composed; `'debug'` draws a green dotted box + centre cross purely as
+  a visual aid, touching no layer's actual position/scale. Positional
+  layers (`ShapeLayer`, `PathLayer`, `TextLayer`, `LineLayer`, `PointLayer`,
+  `TransformLayer`, `ClipLayer`, `WarpLayer`, `CaptureLayer`, `ImageLayer`)
+  independently rescale their own saved manual position/points through
+  `computeLetterboxRescale()`/`rescalePoint()` in their `deserializeState`,
+  regardless of which of these three modes is active — that rescale isn't
+  what `letterboxMode` itself toggles.
 
 Dirty propagation is **push** (marking dirty propagates to dependents immediately).
 Evaluation is **pull** (lazy — `evaluate()` depth-first resolves dependencies before recomputing).

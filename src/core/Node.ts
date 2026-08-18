@@ -207,9 +207,10 @@ export abstract class Node {
   // viewportWidth/viewportHeight to draw the letterbox fit.
   static lastLoadedViewport: { width: number; height: number } | null = null
 
-  // Defaults to 'debug' while the reload-time rescale policy is under
-  // active development — reconsider the default once it's settled.
-  private static _letterboxMode: LetterboxMode = 'debug'
+  // Defaults to 'reuse' (no bars — fill-to-canvas layers ignore the
+  // letterbox) so a reloaded session behaves unobtrusively out of the box;
+  // 'l' cycles to 'replay' (black bars) then 'debug' (green overlay).
+  private static _letterboxMode: LetterboxMode = 'reuse'
   static get letterboxMode(): LetterboxMode  { return Node._letterboxMode }
   static set letterboxMode(v: LetterboxMode) {
     if (Node._letterboxMode === v) return
