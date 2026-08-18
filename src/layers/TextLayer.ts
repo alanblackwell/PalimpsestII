@@ -333,8 +333,50 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
       },
       () => this.markDirty(),
     )
-    this.debugName = 'TextLayer'
+    this._syncDebugName()
     graph.register(this)
+  }
+
+  // Disambiguation suffix (e.g. " (a)") applied by main.ts's load-time
+  // debugName collision check. Content-derived names are re-synced every
+  // recompute(), so an ordinary `debugName +=` would be wiped out on the
+  // next frame — the suffix has to be threaded through _syncDebugName
+  // instead to survive.
+  private _debugNameSuffix = ''
+
+  setDebugNameSuffix(suffix: string): void {
+    this._debugNameSuffix = suffix
+    this._syncDebugName()
+  }
+
+  // Explicit author-chosen name (LayerStackWidget's in-place rename field —
+  // click the top-left name label). Once set, it replaces the content-derived
+  // name outright — a deliberate identifier the user picked for navigating a
+  // complex stack shouldn't get silently clobbered by the next keystroke in
+  // this layer's own text. Not persisted separately: debugName itself isn't
+  // saved for TextLayer either way, this just changes what recompute()
+  // resyncs it to.
+  private _manualDebugName: string | null = null
+
+  setManualDebugName(name: string): void {
+    this._manualDebugName = name
+    this._syncDebugName()
+  }
+
+  // Keeps the stack-widget/collection label in sync with the current text
+  // content, so multiple TextLayers can be told apart at a glance instead of
+  // all reading "TextLayer". Called from recompute() so every mutation site
+  // (typed input, paste dialog, load) picks it up via the ordinary dirty cycle.
+  // Skipped (aside from the suffix) once a manual name has been set.
+  private _syncDebugName(): void {
+    let base: string
+    if (this._manualDebugName !== null) {
+      base = this._manualDebugName
+    } else {
+      const flat = this._text.replace(/\s+/g, ' ').trim()
+      base = flat.length > 10 ? flat.slice(0, 10) + '…' : (flat || 'TextLayer')
+    }
+    this.debugName = base + this._debugNameSuffix
   }
 
   // ----------------------------------------------------------
@@ -954,6 +996,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (typeof state.localMaskFittedSize === 'number') this._localMaskFittedSize = state.localMaskFittedSize
     if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
     this._applyLetterboxRescale()
+    this._syncDebugName()
   }
 
   // Reload-time letterbox rescale — see persistence/letterboxRescale.ts and
@@ -973,6 +1016,8 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   protected recompute(): void {
+    this._syncDebugName()
+
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
       : this._manualOpacity

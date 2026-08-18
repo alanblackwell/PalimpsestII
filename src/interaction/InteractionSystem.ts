@@ -517,6 +517,13 @@ export class InteractionSystem {
   private _handleDown(e: PointerEvent): void {
     if (e.button !== 0) return   // only handle primary (left) button
 
+    // A click anywhere outside the widget strip commits a pending rename —
+    // clicks inside the strip are handled by LayerStackWidget.handlePointerDown
+    // itself, which owns the field's bounds (see its own "blur commits" check).
+    if (this._widget?.isLabelEditActive() && !this._inWidgetStrip(e.clientX)) {
+      this._widget.commitLabelEdit()
+    }
+
     const point = this._point(e)
     const isTouch = e.pointerType === 'touch'
 
@@ -1151,6 +1158,16 @@ export class InteractionSystem {
     // Let text inputs (textarea, input, contenteditable) handle their own keys.
     if (e.target instanceof HTMLElement &&
         e.target.closest('textarea, input, select, [contenteditable]')) return
+
+    // The stack widget's own in-place layer-rename field (click the top-left
+    // name label) claims every keydown while open — same reasoning as the
+    // per-layer text-edit case just below, checked first since it isn't tied
+    // to any one selected layer's own hover state.
+    if (this._widget !== null && this._widget.isLabelEditActive()) {
+      this._widget.handleLabelEditKey(e)
+      e.preventDefault()
+      return
+    }
 
     // A layer in in-place text-edit mode (e.g. TextLayer with the pointer
     // hovering its edit region) claims all keyboard input, including keys

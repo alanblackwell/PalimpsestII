@@ -5,6 +5,7 @@ import { typeColor, drawLayerThumbnail } from './thumbnail.js'
 import { stackWidgetWidth } from './layout.js'
 import { drawIcon } from '../ui/icons.js'
 import { AmountLayer } from '../layers/AmountLayer.js'
+import { TextLayer } from '../layers/TextLayer.js'
 import {
   HOTSPOT_RGB, sumEvalCost, hotspotBarFraction, hotspotWorst, drawHotspotGlow,
 } from './hotspot.js'
@@ -96,6 +97,18 @@ export class LayerStackWidget {
   private _visible     = true
   private _dragging    = false
   private _helpBtnBounds: { x: number; y: number; w: number; h: number } | null = null
+
+  // ── Authoring: in-place rename of the current layer's debugName ────
+  // Clicking the top-left name label (outside the help button) turns it
+  // into an editable field; Tab/Enter commits, Escape cancels. See
+  // isLabelEditActive()/handleLabelEditKey() — InteractionSystem checks
+  // these before any global keyboard shortcut so typing doesn't trigger
+  // hotkeys while renaming.
+  private _labelBounds:    { x: number; y: number; w: number; h: number } | null = null
+  private _editingLabel    = false
+  private _labelEditLayer: Layer | null = null
+  private _labelEditText   = ''
+  private _labelCursorPos  = 0
   private _dragLayer:    Layer | null = null
   private _dragOffsetY = 0      // pointer y relative to card top when drag started
   private _dragY       = 0      // current absolute pointer y
@@ -620,25 +633,127 @@ export class LayerStackWidget {
       const tc = typeColor(this._selected)
       ctx.fillStyle = tc
       ctx.fillRect(0, 0, 3, lh)
-      ctx.fillStyle    = 'rgba(255,255,255,0.90)'
-      ctx.font         = '11px monospace'
-      ctx.textAlign    = 'left'
-      ctx.textBaseline = 'middle'
-      ctx.fillText(`▸ ${this._selected.debugName}`, 8, lh / 2)
 
       // ? help button — right end of the strip, icon fills nearly the full bar height
       const iconSz = lh - 2
       const bx     = this._widgetW() - iconSz - 3
       const by     = 1
       this._helpBtnBounds = { x: bx, y: by, w: iconSz, h: iconSz }
+
+      const labelX = 8
+      this._labelBounds = { x: 0, y: 0, w: bx - 2, h: lh }
+
+      ctx.font         = '11px monospace'
+      ctx.textAlign    = 'left'
+      ctx.textBaseline = 'middle'
+
+      if (this._editingLabel) {
+        ctx.fillStyle = 'rgba(255,255,255,0.14)'
+        ctx.fillRect(labelX - 3, 1, this._labelBounds.w - labelX + 1, lh - 2)
+        ctx.strokeStyle = 'rgba(200,220,255,0.7)'
+        ctx.lineWidth   = 1
+        ctx.strokeRect(labelX - 2.5, 1.5, this._labelBounds.w - labelX, lh - 3)
+
+        ctx.fillStyle = 'rgba(255,255,255,0.95)'
+        ctx.fillText(this._labelEditText, labelX, lh / 2)
+
+        const caretX = labelX + ctx.measureText(this._labelEditText.slice(0, this._labelCursorPos)).width
+        ctx.fillStyle = 'rgba(200,220,255,0.9)'
+        ctx.fillRect(Math.round(caretX) + 0.5, 3, 1, lh - 6)
+      } else {
+        ctx.fillStyle = 'rgba(255,255,255,0.90)'
+        ctx.fillText(`▸ ${this._selected.debugName}`, labelX, lh / 2)
+      }
+
       ctx.fillStyle = Node.helpVisible
         ? 'rgba(200,220,255,0.90)'
         : 'rgba(255,255,255,0.45)'
       drawIcon(ctx, 'question', bx + iconSz / 2, by + iconSz / 2, iconSz)
     } else {
       this._helpBtnBounds = null
+      this._labelBounds   = null
     }
     ctx.restore()
+  }
+
+  // ── Authoring: in-place rename ──────────────────────────────────────
+
+  private static _inRect(pt: Point, r: { x: number; y: number; w: number; h: number }): boolean {
+    return pt.x >= r.x && pt.x < r.x + r.w && pt.y >= r.y && pt.y < r.y + r.h
+  }
+
+  // Duck-typed by InteractionSystem — true while the rename field should
+  // claim all keyboard input instead of global shortcuts.
+  isLabelEditActive(): boolean {
+    return this._editingLabel
+  }
+
+  private _startLabelEdit(): void {
+    if (this._selected === null) return
+    this._editingLabel   = true
+    this._labelEditLayer = this._selected
+    this._labelEditText  = this._selected.debugName
+    this._labelCursorPos = this._labelEditText.length
+    Node.scheduleFrame?.()
+  }
+
+  // Applies the pending edit (if any) to the layer it was started on.
+  // Called both by Tab/Enter and, from InteractionSystem, when a click
+  // lands anywhere outside the field — same "blur commits" behaviour as an
+  // ordinary HTML text input.
+  commitLabelEdit(): void {
+    if (!this._editingLabel) return
+    const layer = this._labelEditLayer
+    const name  = this._labelEditText.trim()
+    if (layer !== null && name.length > 0) {
+      // TextLayer's debugName is re-derived from its text content every
+      // recompute() (see TextLayer._syncDebugName) — a plain assignment
+      // here would be overwritten on the very next frame, so the manual
+      // name has to be threaded through its own sync logic instead.
+      if (layer instanceof TextLayer) layer.setManualDebugName(name)
+      else layer.debugName = name
+    }
+    this._editingLabel   = false
+    this._labelEditLayer = null
+    Node.scheduleFrame?.()
+  }
+
+  private _cancelLabelEdit(): void {
+    this._editingLabel   = false
+    this._labelEditLayer = null
+    Node.scheduleFrame?.()
+  }
+
+  // Duck-typed by InteractionSystem — handles a keydown while
+  // isLabelEditActive() is true. Every key is consumed (caller always
+  // preventDefault()s) so typing never falls through to a hotkey.
+  handleLabelEditKey(e: KeyboardEvent): void {
+    const key = e.key
+    if (key === 'Enter' || key === 'Tab') { this.commitLabelEdit(); return }
+    if (key === 'Escape')                 { this._cancelLabelEdit(); return }
+    if (key === 'Backspace') {
+      if (this._labelCursorPos > 0) {
+        this._labelEditText =
+          this._labelEditText.slice(0, this._labelCursorPos - 1) + this._labelEditText.slice(this._labelCursorPos)
+        this._labelCursorPos--
+      }
+    } else if (key === 'Delete') {
+      this._labelEditText =
+        this._labelEditText.slice(0, this._labelCursorPos) + this._labelEditText.slice(this._labelCursorPos + 1)
+    } else if (key === 'ArrowLeft') {
+      this._labelCursorPos = Math.max(0, this._labelCursorPos - 1)
+    } else if (key === 'ArrowRight') {
+      this._labelCursorPos = Math.min(this._labelEditText.length, this._labelCursorPos + 1)
+    } else if (key === 'Home') {
+      this._labelCursorPos = 0
+    } else if (key === 'End') {
+      this._labelCursorPos = this._labelEditText.length
+    } else if (key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      this._labelEditText =
+        this._labelEditText.slice(0, this._labelCursorPos) + key + this._labelEditText.slice(this._labelCursorPos)
+      this._labelCursorPos++
+    }
+    Node.scheduleFrame?.()
   }
 
   // ── Card ──────────────────────────────────────────────────────────
@@ -741,11 +856,24 @@ export class LayerStackWidget {
     if (!this.inBounds(pt)) return false
     this._canvas.focus()   // ensure canvas receives subsequent key events
 
+    // A click anywhere else while the rename field is open commits it first
+    // — same "blur commits" behaviour as an ordinary HTML text input — then
+    // falls through to handle this click normally.
+    if (this._editingLabel && !(this._labelBounds !== null && LayerStackWidget._inRect(pt, this._labelBounds))) {
+      this.commitLabelEdit()
+    }
+
     // ? help button — top-right of the name strip
     const hb = this._helpBtnBounds
-    if (hb !== null && pt.x >= hb.x && pt.x < hb.x + hb.w && pt.y >= hb.y && pt.y < hb.y + hb.h) {
+    if (hb !== null && LayerStackWidget._inRect(pt, hb)) {
       Node.helpVisible = !Node.helpVisible
       Node.scheduleFrame?.()
+      return true
+    }
+
+    // Name label — click to start (or continue) an in-place rename.
+    if (this._labelBounds !== null && LayerStackWidget._inRect(pt, this._labelBounds) && this._selected !== null) {
+      if (!this._editingLabel) this._startLabelEdit()
       return true
     }
 

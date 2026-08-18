@@ -1281,6 +1281,101 @@ function discardImportedCollectionRoot(root: CollectionLayer): void {
   graph.unregister(root)
 }
 
+// ── Load-time debugName collision check ─────────────────────────────────
+// Loading a collection assigns every layer a fresh, session-unique
+// "Type N" name (see deserializeCollection's own header comment) — but a
+// TextLayer's debugName isn't of that form: it's re-derived from the text
+// content on every recompute() (see TextLayer._syncDebugName), so two
+// TextLayers with the same (or same-first-10-char) content collide no
+// matter when either was created. This is the general safety net for that
+// case, run once per load/merge batch after every newly loaded layer's own
+// state has settled.
+const DEBUG_NAME_SUFFIX_RE = / \(([a-z]+)\)$/
+
+function debugNameBase(name: string): string {
+  return name.replace(DEBUG_NAME_SUFFIX_RE, '')
+}
+
+function nextSuffixLetter(used: ReadonlySet<string>): string {
+  for (let i = 0; i < 26; i++) {
+    const letter = String.fromCharCode(97 + i)
+    if (!used.has(letter)) return letter
+  }
+  for (let i = 0; i < 26; i++) {
+    for (let j = 0; j < 26; j++) {
+      const letter = String.fromCharCode(97 + i) + String.fromCharCode(97 + j)
+      if (!used.has(letter)) return letter
+    }
+  }
+  return '?'
+}
+
+// TextLayer's debugName is overwritten every recompute() from its own text
+// content, so a plain `debugName += suffix` would be wiped out on the next
+// frame — the suffix has to be threaded through TextLayer's own sync logic
+// instead. Every other layer type's debugName is a one-time assignment, so
+// setting it directly is permanent.
+function setLayerDebugName(layer: Layer, name: string): void {
+  if (layer instanceof TextLayer) {
+    const m = name.match(DEBUG_NAME_SUFFIX_RE)
+    layer.setDebugNameSuffix(m ? ` (${m[1]})` : '')
+  } else {
+    layer.debugName = name
+  }
+}
+
+// Flattens a CollectionLayer's own nested items in, matching the recursion
+// wireLoadedLayer already does — a name collision inside a nested
+// collection is just as confusing as one at the top level.
+function flattenLayersForNameCheck(layers: readonly Layer[]): Layer[] {
+  const out: Layer[] = []
+  for (const l of layers) {
+    out.push(l)
+    if (l instanceof CollectionLayer) out.push(...flattenLayersForNameCheck(l.items))
+  }
+  return out
+}
+
+// Compares every newly loaded layer's debugName against every other layer
+// currently in the graph (old and new alike) and disambiguates exact
+// collisions: the first layer holding a given name — preferring an
+// already-live one over a newly loaded one, since graph.nodes preserves
+// creation order — becomes "Name (a)", the next "Name (b)", and so on.
+// Layers that already carry a valid "(x)" suffix (e.g. a group that
+// collided on an earlier load) keep their letter; only newly-colliding,
+// still-plain-named layers in the same group get one assigned.
+function resolveDebugNameCollisions(newLayers: readonly Layer[]): void {
+  const newSet = new Set<Layer>(flattenLayersForNameCheck(newLayers))
+  if (newSet.size === 0) return
+  const allLayers = [...graph.nodes].filter((n): n is Layer => n instanceof Layer)
+
+  const groups = new Map<string, Layer[]>()
+  for (const l of allLayers) {
+    const base = debugNameBase(l.debugName)
+    let g = groups.get(base)
+    if (!g) { g = []; groups.set(base, g) }
+    g.push(l)
+  }
+
+  for (const [base, group] of groups) {
+    if (group.length < 2) continue
+    if (!group.some((l) => newSet.has(l))) continue
+
+    const used = new Set<string>()
+    const unlettered: Layer[] = []
+    for (const l of group) {
+      const m = l.debugName.match(DEBUG_NAME_SUFFIX_RE)
+      if (m) used.add(m[1]!)
+      else unlettered.push(l)
+    }
+    for (const l of unlettered) {
+      const letter = nextSuffixLetter(used)
+      used.add(letter)
+      setLayerDebugName(l, `${base} (${letter})`)
+    }
+  }
+}
+
 function handleLoadCollection(target: CollectionLayer): void {
   const input = document.createElement('input')
   input.type   = 'file'
@@ -1315,6 +1410,7 @@ function handleLoadCollection(target: CollectionLayer): void {
       for (const bg of result.backgroundLayers) backgroundLayer.add(bg)
       for (const item of result.itemLayers)       wireLoadedLayer(item)
       for (const bg of result.backgroundLayers)   wireLoadedLayer(bg)
+      resolveDebugNameCollisions([...result.itemLayers, ...result.backgroundLayers])
       refreshStack()
     })()
   }
@@ -2138,6 +2234,7 @@ canvas.addEventListener('drop', (e) => {
       postInsertLayer(result.root)
       for (const item of result.itemLayers)     wireLoadedLayer(item)
       for (const bg of result.backgroundLayers) wireLoadedLayer(bg)
+      resolveDebugNameCollisions([result.root, ...result.itemLayers, ...result.backgroundLayers])
       refreshStack(result.root)
     })()
     return

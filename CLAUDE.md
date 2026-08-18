@@ -1799,6 +1799,87 @@ half was missing.
 folding `DeletionLayer`'s archive (not just Background) into
 `backgroundCostMs`.
 
+## Debug names (layer labels)
+
+`debugName` is the friendly label shown in the stack-widget top strip
+(`LayerStackWidget._drawCurrentLabel`), the thumbnail card/collection grid
+(`interaction/thumbnail.ts`), and the binding inspector — normally assigned
+once at creation via `Layer.assignDebugName` ("`<Type> N`", a session-wide
+counter, see "Adding a new layer type" above) and never touched again.
+Three features layer on top of that baseline:
+
+**`TextLayer` content-derived naming** — `TextLayer.debugName` is instead
+re-derived from its own text every `recompute()` via the private
+`_syncDebugName()`: whitespace/newlines collapsed to single spaces, trimmed,
+then truncated to the first 10 characters + `…` if longer (falling back to
+`'TextLayer'` for empty content). This lets multiple text layers be told
+apart at a glance in the stack widget instead of all reading "TextLayer".
+`deserializeState` also calls `_syncDebugName()` directly (rather than
+waiting for the first post-load `recompute()`) so a freshly loaded
+`TextLayer`'s name is correct immediately, before anything (e.g. the
+collision check below) might read it.
+
+**Load-time debugName collision check** (`main.ts`) — `deserializeCollection`
+already gives every instantiated layer a fresh, session-unique "Type N" name
+via `assignDebugName` (see "Collection save/load" above), which structurally
+can't collide with anything already live. `TextLayer`'s content-derived name
+is the one exception — two text layers with the same (or same-first-10-char)
+content collide no matter when either was created. `resolveDebugNameCollisions
+(newLayers)` is the general-purpose safety net for this: run once per
+load/merge batch (both `handleLoadCollection` — the Load button merging a
+file into an existing `CollectionLayer` — and the OS-drop `.json`
+collection-load path), it groups every layer currently in the graph (old and
+new) by base name (`debugNameBase`, strips a trailing `" (x)"` suffix), and
+for any group containing at least one newly loaded layer, assigns the next
+free letter suffix to every still-plain-named member — preferring an
+already-live layer for `" (a)"` since `graph.nodes` (a `Set`, so insertion
+order) puts it before anything just loaded; the second colliding layer gets
+`" (b)"`, and so on. A layer that already carries a valid suffix (from an
+earlier collision) keeps it. Recurses into nested `CollectionLayer.items`
+(`flattenLayersForNameCheck`), matching `wireLoadedLayer`'s own recursion —
+a collision inside a nested collection is just as confusing as one at the
+top level.
+
+Setting the suffix has to go through `setLayerDebugName`'s
+`instanceof TextLayer` branch rather than a plain `debugName +=`: a
+`TextLayer`'s name is overwritten wholesale by `_syncDebugName()` next
+frame, so the suffix wouldn't survive a direct append. `TextLayer` exposes
+`setDebugNameSuffix(suffix)` for this, which stores it in `_debugNameSuffix`
+and folds it into every future `_syncDebugName()` call; every other layer
+type's `debugName` is a one-time assignment, so setting it directly is
+permanent.
+
+**In-place rename (authoring feature)** — for naming layers in a
+particularly complex stack, clicking the top-left name label itself (the
+strip `_drawCurrentLabel` draws, anywhere left of the `?` help button) turns
+it into an editable field (`LayerStackWidget._editingLabel` /
+`_labelEditText` / `_labelCursorPos`), seeded with the selected layer's
+current `debugName`. Typing edits it in place (Backspace/Delete/arrow
+keys/Home/End all work, drawn with a caret via `ctx.measureText`); **Enter or
+Tab commits**, **Escape cancels**. A click anywhere else — inside the widget
+strip (handled in `LayerStackWidget.handlePointerDown`) or out on the canvas
+content (handled in `InteractionSystem._handleDown`, gated on
+`!_inWidgetStrip(e.clientX)`) — also commits first, same "blur commits"
+behaviour as an ordinary HTML text input, via the shared public
+`commitLabelEdit()`.
+
+Duck-typed like `TextLayer`'s own in-place text editing (see
+`isTextEditActive`/`handleTextEditKey` under "Interaction" above), but at
+the *widget* level rather than per-layer: `LayerStackWidget.isLabelEditActive()`
+/ `handleLabelEditKey(e)` are checked by `InteractionSystem._handleKey`
+**before** every other branch, including the per-layer text-edit check and
+every global hotkey (space, delete, `m`, `h`, ...) — while the field is
+open, every keydown is consumed and `e.preventDefault()`'d, so typing a
+letter that happens to also be a shortcut never fires it. Committing calls
+`layer.debugName = name` directly for most layer types; for a `TextLayer`
+specifically it calls `setManualDebugName(name)` instead, which makes
+`_syncDebugName()` prefer the author's chosen name over the content-derived
+one outright (still with `_debugNameSuffix` applied on top) — a deliberate
+identifier the user picked for navigating a complex stack shouldn't get
+silently overwritten by the next keystroke in that layer's own text. There
+is currently no way to revert a `TextLayer` back to automatic content-derived
+naming once a manual name is set.
+
 ## Known issues / pre-existing tech debt
 
 - `npm run typecheck` reports ~80 `TS2352` cast warnings throughout the codebase
