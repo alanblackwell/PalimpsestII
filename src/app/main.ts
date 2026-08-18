@@ -29,6 +29,7 @@ import { EventLayer }        from '../layers/EventLayer.js'
 import { MaskLayer, settleMaskTrackerPair } from '../layers/MaskLayer.js'
 import { CollectionLayer }   from '../layers/CollectionLayer.js'
 import { LayerStackWidget }  from '../interaction/LayerStackWidget.js'
+import { MarshallingPanel, MARSHALLING_DRAG_MIME } from '../interaction/MarshallingPanel.js'
 import { StartupLayer }      from '../layers/StartupLayer.js'
 import { TutorialLayer }     from '../layers/TutorialLayer.js'
 import { StrokeLayer }       from '../layers/StrokeLayer.js'
@@ -1009,6 +1010,10 @@ const widget = new LayerStackWidget(widgetCanvas)
 widget.setVisible(false)   // hidden at startup; revealed when a mode is chosen
 evaluator.setLayerStackWidget(widget)
 
+// Floating panel for performance-prep content — see setSaveLoadCallbacks
+// wiring below (MenuLayer's Load button, "Folder" choice).
+const marshallingPanel = new MarshallingPanel()
+
 // Lets any layer change the selected/current layer programmatically —
 // see CaptureLayer's edit-mode shutter sequence.
 Node.selectLayer = (layer) => {
@@ -1259,6 +1264,33 @@ function handleLoadDesktop(): void {
   input.click()
 }
 
+// One-time snapshot of a folder's contents into the MarshallingPanel — an
+// alternative to loading a session file, offered as a "Session"/"Folder"
+// choice from the same Load button (MenuLayer). No File System Access API
+// and no live re-sync with the folder: the picked files are read once, and
+// the panel holds onto them (as in-memory File objects) for the rest of
+// the session. Desktop only — see the isMobile-gated wiring below.
+function handleLoadFolderDesktop(): void {
+  const input = document.createElement('input')
+  input.type = 'file'
+  // webkitdirectory switches the native dialog into folder-selection mode;
+  // it cannot be combined with ordinary file selection (see handleLoadDesktop
+  // above for that path) — this is a real platform limitation, not a gap.
+  input.webkitdirectory = true
+  input.multiple = true
+  input.style.display = 'none'
+  document.body.appendChild(input)
+  input.onchange = () => {
+    const files = input.files
+    document.body.removeChild(input)
+    if (!files || files.length === 0) return
+    const first = files[0]!
+    const folderName = first.webkitRelativePath.split('/')[0] || 'Folder'
+    marshallingPanel.load(folderName, Array.from(files))
+  }
+  input.click()
+}
+
 // ── Collection save/load — scoped to a single CollectionLayer, wired to
 // its own header-pill Save/Load buttons (CollectionLayer.setSaveLoadCallbacks),
 // not the main menu. Desktop file download/upload only, same as the full-
@@ -1452,6 +1484,7 @@ function handleLoadMobile(): void {
 menuLayer.setSaveLoadCallbacks(
   isMobile ? handleSaveMobile  : handleSaveDesktop,
   isMobile ? handleLoadMobile  : handleLoadDesktop,
+  isMobile ? null : handleLoadFolderDesktop,
 )
 
 // DeletionLayer restore: put the layer just above DeletionLayer, then refresh.
@@ -2096,9 +2129,17 @@ function updateAudioDropHover(pt: Point | null): boolean {
 }
 
 canvas.addEventListener('dragover', (e) => {
-  if (!e.dataTransfer?.types.includes('Files')) return
+  const dt = e.dataTransfer
+  const hasFiles      = !!dt?.types.includes('Files')
+  const hasMarshalled = !!dt?.types.includes(MARSHALLING_DRAG_MIME)
+  if (!dt || (!hasFiles && !hasMarshalled)) return
   e.preventDefault()
-  e.dataTransfer.dropEffect = 'copy'
+  dt.dropEffect = 'copy'
+  // Safari fallback drag (see MarshallingPanel.ts): no real Files entry, so
+  // skip the Files-specific ghost/insert-position mechanic below — the drop
+  // is still accepted (preventDefault + dropEffect above), just without that
+  // extra affordance.
+  if (!hasFiles) return
 
   const pt = { x: e.offsetX, y: e.offsetY }
 
@@ -2155,8 +2196,13 @@ canvas.addEventListener('drop', (e) => {
   Node.fileDragActive = false
   updateAudioDropHover(null)
 
-  const files = e.dataTransfer?.files
-  const file  = files?.[0]
+  const files  = e.dataTransfer?.files
+  const dragId = e.dataTransfer?.getData(MARSHALLING_DRAG_MIME)
+  // Safari fallback: dataTransfer.files comes back empty for a
+  // page-initiated drag there (see MarshallingPanel.ts's file header
+  // comment), so look the File up via the string id every panel drag also
+  // carries.
+  const file: File | undefined = files?.[0] ?? (dragId ? marshallingPanel.getFileForDrag(dragId) ?? undefined : undefined)
 
   if (fileDragGhost !== null) {
     let ghost = fileDragGhost

@@ -786,6 +786,7 @@ and the mask source to `BackgroundLayer`).
 | `src/interaction/thumbnail.ts` | Shared thumbnail rendering utility (used by widget and DeletionLayer) |
 | `src/interaction/layout.ts` | `contentLeft`/`stackWidgetWidth` — widget/content boundary |
 | `src/interaction/AngleSnapper.ts` | `AngleSnapper` and `ValueSnapper` — reusable snap-and-refine helpers for handles |
+| `src/interaction/MarshallingPanel.ts` | Floating DOM panel for prepared performance content — see "Content marshalling panel" below |
 | `src/layers/MaskLayer.ts` | Composite mask: shape + collection slots + freehand paint/erase |
 | `src/layers/ShapeLayer.ts` | Abstract shape base — produces Point + Mask |
 | `src/layers/CompositeLayer.ts` | Blends two images with optional Mask input |
@@ -1977,6 +1978,110 @@ identifier the user picked for navigating a complex stack shouldn't get
 silently overwritten by the next keystroke in that layer's own text. There
 is currently no way to revert a `TextLayer` back to automatic content-derived
 naming once a manual name is set.
+
+## Content marshalling panel (performance-prep)
+
+`src/interaction/MarshallingPanel.ts` — a small floating DOM panel holding a
+one-time snapshot of an OS folder's images/video/JSON files, so a performer
+running Palimpsest full-screen (which hides the OS desktop and any file
+manager) can still drag prepared content onto the canvas. Populated in
+advance of a show; not a live/synced view of the folder.
+
+**Trigger**: MenuLayer's existing Load button, not a new button. Clicking
+Load toggles a small in-place choice — the Load/Save slots in the Control
+column's bottom row temporarily swap to "Session"/"Folder" (`MenuLayer.
+_loadChoiceOpen`, substituted into `_drawGrid`'s `resolved` columns just
+before rendering, so this reuses the ordinary button grid/hit-test machinery
+with no new layout code). "Session" behaves exactly like the old Load
+button; "Folder" calls `handleLoadFolderDesktop()` (`main.ts`), which opens
+an `<input type="file" webkitdirectory multiple>` picker (typed via the
+ambient `src/types/file-input-directory.d.ts`, since `webkitdirectory`/
+`webkitRelativePath` aren't in TypeScript's bundled `dom` lib) and feeds the
+resulting `File[]` into `marshallingPanel.load(folderName, files)`. Desktop
+only — `isMobile ? null : handleLoadFolderDesktop` passed into
+`setSaveLoadCallbacks`'s third argument; on mobile the choice never appears
+and Load behaves exactly as before this feature. No File System Access API
+and no live re-sync with the folder — deliberately a one-time snapshot,
+matching "content prepared in advance of the performance."
+
+**Why a DOM overlay, not a Layer or canvas widget**: researched three
+existing non-Layer UI patterns (`LayerStackWidget`'s own overlay canvas,
+`AudioScopeWidget`'s host-supplied-position delegation, and
+`InteractionSystem`'s right-click binding-inspector panel) before choosing
+to follow the binding-inspector's approach — a plain `document.
+createElement('div')` appended to `document.body`, entirely outside the
+`Evaluator` render loop and `InteractionSystem`'s pointer pipeline. The
+deciding factor: a real HTML `draggable="true"` element's `dragstart`
+handler can attach an actual `File` object to the native browser drag
+(`DataTransfer.items.add(file)` — Chromium), so dragging a panel item over
+the canvas fires the **exact same** `dragover`/`drop` listeners already
+wired in `main.ts` for OS file drops, with zero duplicated placement logic:
+the image/video slot-binding rules, the `LayerStackWidget` ghost-card
+insert-position mechanic, the `.json` shape-dispatch between
+`applyLoadedSession`/`deserializeCollection`, and the `StartupLayer`
+promotion guard all apply unchanged. The panel's own header is its own drag
+handle (plain `pointerdown`/`pointermove`/`pointerup` on `_header`,
+independent of `InteractionSystem`) for repositioning it anywhere on
+screen — this is what "floating panel" means here, not a canvas overlay.
+
+**Cross-browser drag fallback (Safari)**: confirmed live that WebKit does
+not support injecting a JS-constructed `File` into a page-initiated drag via
+`items.add()` — `dataTransfer.types` comes back empty on both `dragover` and
+`dragend` there, even though the same code works in Chromium. Every panel
+drag therefore *also* carries a plain string id via `setData`/`getData` on a
+custom MIME type, `MARSHALLING_DRAG_MIME` (`'application/x-palimpsest-
+marshalled-item'`) — ordinary same-page custom-type drag data, which every
+browser supports reliably. `main.ts`'s canvas `dragover` handler now accepts
+either `'Files'` or this custom type in `dataTransfer.types` (calling
+`preventDefault()`/setting `dropEffect` for both, but only running the
+Files-specific ghost-card mechanic — `isImageOrVideoDrag`, etc. — when real
+Files are present); its `drop` handler resolves the dropped `File` as
+`files?.[0] ?? marshallingPanel.getFileForDrag(dragId)`, falling back to a
+lookup on the panel's own item list when `dataTransfer.files` came back
+empty. `getFileForDrag` is a non-destructive lookup — removal is still
+driven solely by each item's own `dragend` handler checking `dropEffect !==
+'none'` (`main.ts`'s `dragover` sets `dropEffect = 'copy'` for both
+channels), so item removal behaves identically regardless of which channel
+actually delivered the file. If a future browser/Chromium regression
+reintroduces the same failure mode, this is the mechanism to check first —
+verify with a synthetic `DragEvent`/`DataTransfer` test (construct a real
+`DataTransfer`, call `setData`/`items.add` from a script, dispatch
+`dragstart`/`dragover`/`drop` on the actual elements) rather than assuming
+from reading the code, since the browser's behavior here is what's actually
+in question, not the JS logic.
+
+**Visual design** (arrived at through several rounds of "make it more
+unobtrusive" — it's meant to sit on stage without drawing audience
+attention): single column of small (28×28px) square thumbnails — each one
+just the image/video frame/JSON glyph with a 2-letter monogram
+(`_monogramOf`, first two raw characters of the filename, uppercased —
+deliberately *not* letters-only, so a performer's own numbering scheme like
+`1_intro.mp4`/`2_build.mp4` stays visible as "1_"/"2_") centred on top via a
+white fill + 4-directional black `text-shadow` outline (plain CSS, not
+`-webkit-text-stroke`, so it renders identically everywhere and stays
+legible regardless of the thumbnail's own brightness/colour). No visible
+folder-name heading — the header strip is just a close button + drag
+handle; the folder name is preserved only as a native hover tooltip
+(`_root.title`). The whole panel is `opacity: 0.5`. Capped at
+`VISIBLE_ITEMS = 4` rows (`_body`'s `max-height`, computed from
+`THUMB_SIZE`/`ITEM_GAP`) with a hover-only scrollbar beyond that — the
+scrollbar is real CSS injected once globally via `ensureScrollbarStyle()`
+(pseudo-elements aren't reachable from inline styles), transparent
+track/thumb by default and only revealing a thin 3px thumb via `.
+palimpsest-marshalling-root:hover .palimpsest-marshalling-body::-webkit-
+scrollbar-thumb`. **Gotcha hit while building this**: capping `_body`'s
+`max-height` alone did nothing — flex children shrink to fit by default, so
+all items were being squashed to fit within 4 rows' worth of height instead
+of actually overflowing; each item needs `flex-shrink: 0` to hold its true
+size and force genuine overflow/scroll.
+
+**Removed on use**: dragging an item onto the canvas and having the drop
+accepted (`dropEffect !== 'none'` at `dragend`) removes it from the panel.
+Loading a second folder replaces the panel's contents outright (one panel
+at a time). Nothing here is persisted in `Persistence.ts` — deliberately
+ephemeral, re-loaded fresh each session, consistent with the one-time-
+snapshot design and with browsers not allowing silent re-access to
+previously-picked files anyway.
 
 ## Known issues / pre-existing tech debt
 

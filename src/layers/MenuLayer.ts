@@ -79,7 +79,7 @@ type BtnDef = {
   label:              string
   colour:             string
   height?:            number   // default panel height override (px)
-  kind?:              'save' | 'load'
+  kind?:              'save' | 'load' | 'choiceSession' | 'choiceFolder'
   factory?:           (cx: number, cy: number, w: number, h: number) => Layer
   selectAfterCreate?: boolean  // select the new layer instead of keeping Menu selected
 }
@@ -228,6 +228,8 @@ export class MenuLayer extends Layer {
 
   private _onSave: (() => void) | null = null
   private _onLoad: (() => void) | null = null
+  private _onLoadFolder: (() => void) | null = null
+  private _loadChoiceOpen = false
 
   private _cpBounds:     BBox | null  = null
   private _btnBounds:    PlacedBtn[]  = []
@@ -239,9 +241,10 @@ export class MenuLayer extends Layer {
     this.debugName = 'Menu'
   }
 
-  setSaveLoadCallbacks(onSave: () => void, onLoad: () => void): void {
+  setSaveLoadCallbacks(onSave: () => void, onLoad: () => void, onLoadFolder: (() => void) | null = null): void {
     this._onSave = onSave
     this._onLoad = onLoad
+    this._onLoadFolder = onLoadFolder
   }
 
   protected recompute(): void {}
@@ -304,7 +307,21 @@ export class MenuLayer extends Layer {
     const btn = this._btnBounds[idx]!.btn
 
     if (btn.kind === 'save') { this._onSave?.(); return true }
-    if (btn.kind === 'load') { this._onLoad?.(); return true }
+    if (btn.kind === 'load') {
+      // Folder loading is available (desktop only) — open the Session/Folder
+      // choice instead of loading a session file directly. See _drawGrid's
+      // temporary substitution of the Load/Save slots for the choice buttons.
+      if (this._onLoadFolder !== null) {
+        this._loadChoiceOpen = !this._loadChoiceOpen
+        this.markDirty()
+        return true
+      }
+      this._onLoad?.()
+      return true
+    }
+    if (btn.kind === 'choiceSession') { this._loadChoiceOpen = false; this.markDirty(); this._onLoad?.(); return true }
+    if (btn.kind === 'choiceFolder')  { this._loadChoiceOpen = false; this.markDirty(); this._onLoadFolder?.(); return true }
+    if (this._loadChoiceOpen) { this._loadChoiceOpen = false }
 
     const vw    = Node.viewportWidth
     const vh    = Node.viewportHeight
@@ -434,6 +451,23 @@ export class MenuLayer extends Layer {
   private _drawGrid(ctx: Ctx2D): void {
     const { cols, btnW, panX, panW } = this._layout()
     const resolved  = this._resolveColumns(cols)
+
+    // While the Session/Folder choice is open, temporarily swap the Load and
+    // Save slots (always the last two bottom-row entries, in whichever
+    // resolved column they folded into) for the two choice buttons — reuses
+    // the grid's existing layout/hit-test machinery with no extra bounds
+    // tracking or panel-height change. Save is briefly unavailable; clicking
+    // Load again closes the choice and restores it.
+    if (this._loadChoiceOpen) {
+      const lastCol = resolved[resolved.length - 1]
+      if (lastCol !== undefined) {
+        const loadIdx = lastCol.bottom.findIndex(b => b.kind === 'load')
+        const saveIdx = lastCol.bottom.findIndex(b => b.kind === 'save')
+        if (loadIdx >= 0) lastCol.bottom[loadIdx] = { label: 'Session', colour: '#a0a4b8', kind: 'choiceSession' }
+        if (saveIdx >= 0) lastCol.bottom[saveIdx] = { label: 'Folder',  colour: '#a0a4b8', kind: 'choiceFolder' }
+      }
+    }
+
     const totalRows = resolved.reduce((mx, c) => Math.max(mx, c.top.length + c.bottom.length), 0)
     const gridH     = totalRows > 0 ? totalRows * BTN_H + (totalRows - 1) * BTN_GAP : 0
     const panH      = HEADER_H + PAD + gridH + PAD
