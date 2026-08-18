@@ -198,6 +198,10 @@ function postInsertLayer(newLayer: Layer): void {
       () => handleSaveCollection(newLayer),
       () => handleLoadCollection(newLayer),
     )
+    newLayer.setEjectAllCallback((topmost) => {
+      deletionLayer.archive(newLayer)
+      refreshStack(topmost)
+    })
   }
   if (newLayer instanceof TutorialLayer) {
     wireTutorialLayer(newLayer)
@@ -1106,6 +1110,10 @@ function wireLoadedLayer(l: Layer): void {
     l.setEjectCallback(() => refreshStack())
     l.setDeleteCallback((layer) => deletionLayer.archive(layer))
     l.setSaveLoadCallbacks(() => handleSaveCollection(l), () => handleLoadCollection(l))
+    l.setEjectAllCallback((topmost) => {
+      deletionLayer.archive(l)
+      refreshStack(topmost)
+    })
     for (const item of l.items) wireLoadedLayer(item)
   }
   if (l instanceof AmountLayer)      wireCalcButton(l)
@@ -1562,6 +1570,10 @@ interaction.setCollectionAction(() => {
         () => handleSaveCollection(collection),
         () => handleLoadCollection(collection),
       )
+      collection.setEjectAllCallback((topmost) => {
+        deletionLayer.archive(collection)
+        refreshStack(topmost)
+      })
       collection.insertAbove(selected)
       collection.ingest(selected)
       refreshStack(collection)
@@ -1775,6 +1787,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
       newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
       newLayer.insertAbove(consumer)
       BindingLayer.create(newLayer, slot)
+      postInsertLayer(newLayer)
       refreshStack(newLayer)
       return
     }
@@ -1855,7 +1868,7 @@ interaction.setSlotClickCallback((consumer, slot) => {
     newLayer.insertAbove(consumer)
     BindingLayer.create(newLayer, slot)
     if (newLayer instanceof TempoLayer) bindRateClock(newLayer)
-    if (newLayer instanceof AmountLayer) postInsertLayer(newLayer)
+    if (newLayer instanceof AmountLayer || newLayer instanceof CollectionLayer) postInsertLayer(newLayer)
     refreshStack(newLayer)
     return
   }

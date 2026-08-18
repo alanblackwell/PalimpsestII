@@ -18,6 +18,8 @@ export type IconName =
   | 'dots-nine' | 'shapes' | 'palette' | 'paint-brush' | 'pen-nib'
   | 'text-align-left' | 'text-align-center' | 'text-align-right' | 'text-align-justify'
   | 'text-valign-top' | 'text-valign-center' | 'text-valign-bottom' | 'text-valign-justify'
+  | 'layout-rows' | 'layout-columns'
+  | 'eject'
 
 const PATH_DATA: Record<IconName, string> = {
   'play':
@@ -111,6 +113,15 @@ const PATH_DATA: Record<IconName, string> = {
     'M32,140h192v24H32ZM32,172h192v24H32ZM32,204h192v24H32Z',
   'text-valign-justify':
     'M32,28h192v24H32ZM32,116h192v24H32ZM32,204h192v24H32Z',
+  // Two horizontal bars stacked — items flow across then wrap downward.
+  'layout-rows':
+    'M32,40h192v76H32ZM32,140h192v76H32Z',
+  // Two vertical bars side by side — items flow downward then wrap right.
+  'layout-columns':
+    'M40,32h76v192H40ZM140,32h76v192H140Z',
+  // Classic "eject" glyph — upward triangle over a bar.
+  'eject':
+    'M128,48L204,152H52ZM48,176H208V208H48Z',
 }
 
 const _cache: Partial<Record<IconName, Path2D>> = {}

@@ -1600,6 +1600,100 @@ unchanged in every other respect (shape-reference mode, wander sim,
 mask-tracking, etc. — see the file's own header comment for the full
 picture).
 
+### `CollectionLayer` — row/column grid layout, viewport-aware reflow, eject-all
+
+The thumbnail grid (`_gridBounds()`) supports two layout modes via a
+per-instance `_layout: 'row' | 'column'` field, toggled by a header button
+(persisted in `serializeState`/`deserializeState`):
+- **row** (default) — fills a row left-to-right before wrapping to a new
+  row below; grid grows downward as items are added.
+- **column** — the transpose: fills a column top-to-bottom before wrapping
+  to a new column to the right; grid grows rightward instead.
+
+Either way, array index 0 — the earliest-ingested item, i.e. originally
+**topmost** in the main stack, since the `'c'` key ingests top-down (see
+`postInsertLayer`/`interaction.setCollectionAction` in `main.ts`) — sits at
+the grid's top-left in both layouts, and stays there as later items are
+added around it (no more "newest ingested jumps to the front" reversal).
+**Composite render order in `recompute()` is the *reverse* of this array
+order** (index 0 drawn *last*): this is what keeps index 0 frontmost in the
+actual pixel output, matching where it was in the original stack, even
+though it's *first* in ingestion/array/grid-reading order. Don't "fix" one
+side without the other — the grid position and the z-order are
+deliberately opposite ends of the same array for exactly this reason. See
+the `items` getter's doc comment for the full reasoning, and `_cellOrigin`/
+`_computeDropIdx`/`_commitReorder` for how drag-reorder and the insertion
+line stay layout-aware.
+
+**Thumbnail size floor**: `MIN_TW === MAX_TW === 120` (and the derived
+`MIN_TH`/`MAX_TH`, both 90) — thumbnails render at a fixed size regardless
+of item count; once a row/column can't fit another item at that size,
+`_gridBounds()` adds another row/column instead of shrinking the
+thumbnail. (Previously `MIN_TW` was 60, which meant thumbnails visibly
+shrank right at the wrap boundary — the point where the row/column was
+almost, but not quite, full.)
+
+**Viewport-aware reflow (desktop only)**: `_gridBounds()` and the
+`canvasBounds` override source their width/height from `_layoutWidth()`/
+`_layoutHeight()`, not `Node.canvasWidth`/`Node.canvasHeight` directly.
+`Node.canvasWidth`/`Height` are deliberately **grow-only** (see
+`Evaluator.setViewport`) so mobile's address-bar-driven viewport changes
+don't constantly reflow content — but that has no benefit on desktop, and
+actively breaks reflow there: after a desktop window is enlarged and then
+shrunk again, `canvasWidth`/`Height` stay stuck at the larger size, so a
+naive `canvasWidth`-based grid would keep sizing itself for a window that
+no longer exists. `_layoutWidth()`/`_layoutHeight()` return
+`Node.viewportWidth`/`Node.viewportHeight` (which track the actual current
+window exactly, both growing and shrinking) on desktop, falling back to
+the old `canvasWidth`/`canvasHeight`-based behaviour when
+`Node.isMobileDevice`. `canvasBounds` is overridden (not just
+`_gridBounds()`) so the header pill reflows in sync with the grid instead
+of drifting apart — the header, index-slot row (`panelBottom`), and grid's
+`leftX` are all anchored off the *same* `canvasBounds`. Deliberately left
+alone: the `cw`/`ch` used for `drawLayerThumbnail`'s render-resolution
+params and the composite/mask `OffscreenCanvas` sizing in `recompute()` —
+those need the true full canvas size to render correctly, not the
+viewport.
+
+**Index-slot row is pinned above the grid, not below it**: `panelBottom` is
+a fixed position right after the header pill
+(`canvasBounds.y + canvasBounds.height + 8`), *not* derived from the
+grid's own height the way most layers' `panelBottom` overrides work. This
+matters specifically because the grid's height varies a lot as items are
+added (especially in column layout), and a `panelBottom` tied to grid
+height would make the index-binding row migrate toward the bottom of the
+viewport as the collection grows. `_gridBounds()` positions the grid
+*below* this same fixed row in turn (`panelBottom + INDEX_PILL_H + 8`).
+
+**Eject-all** (`ejectAll()`) restores every ingested item back to the main
+stack at once, directly above the collection, preserving order — reusing
+`eject()`'s single-item `insertAbove(this)` mechanics in ascending array
+order, which naturally re-stacks the whole run in its original top-to-
+bottom order (each subsequent `insertAbove(this)` call lands directly
+above the collection, displacing the previous insert one further up).
+Fires `setEjectAllCallback(fn: (topmost) => void)` once, after every item
+is back on the stack, with the restored topmost layer — `main.ts` archives
+the (now-empty) collection via `deletionLayer.archive(...)` (same
+non-destructive convention as the plain Delete key) and selects `topmost`.
+Wired at all three real CollectionLayer creation/rewiring sites
+(`postInsertLayer`, the `'c'` key handler, `wireLoadedLayer`) — any *new*
+per-instance CollectionLayer callback needs the same treatment at all
+three, or it'll silently work for menu-created collections and silently
+not work for ones created via the `'c'` key or loaded from a save (this has
+bitten this feature twice already — see "Bugfix" below).
+
+**Bugfix found while wiring eject-all**: the slot-click "create a default
+value for an empty slot" paths — both the generic
+`DEFAULT_VALUE_LAYER[ValueType.Collection]` factory and
+`consumer.wantsCollectionForSlot(slot)` (MaskLayer's `collectionSlot`
+convenience) — never called `postInsertLayer`, so a `CollectionLayer`
+created that way had **no** Save/Load/Delete/EjectAll callbacks wired at
+all (silently inert buttons, not a crash). Both now call
+`postInsertLayer(newLayer)`.
+
+**Header pill is now a big-button row**, not a thin label+status-text
+strip — see the Big-button mobile touch-target pass below.
+
 ## Big-button mobile touch-target pass (wound down)
 
 Ongoing multi-session effort to replace small/cramped panel buttons with
@@ -1625,7 +1719,11 @@ shutter + flip-camera control once Camera is tapped), NoiseLayer
 button shows a live-generated-but-static preview of that style),
 CountLayer/"Index" (−/+/reset), TileLayer (Tile/Fit buttons with live mode
 previews; margin converted from a −/+ stepper to a bindable Amount slot +
-slider, matching opacity).
+slider, matching opacity), CollectionLayer (eject-all/layout-toggle/Save/Load
+row, replacing the thin "Collect" label + "N layers" status-text strip —
+same `LG_SZ=52`/wrap-to-grid choice as CaptureLayer's 4-button row, since the
+status text wasn't adding anything the grid of thumbnails below doesn't
+already show).
 
 MaskLayer's tools panel is now two rows: row 1 is a 4-button grid of
 touch-sized paint/erase/clear/undo buttons (`TOOL_SZ`-style constants),
