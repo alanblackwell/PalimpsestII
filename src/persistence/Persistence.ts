@@ -415,7 +415,15 @@ export function teardownSession(ctx: PersistenceContext): void {
     if (touchesDoomed) node.remove()
   }
 
-  for (const l of doomed) graph.unregister(l)
+  // onDiscard releases resources acquired outside the dataflow graph
+  // (camera/screen streams, AudioContexts, document-level listeners, DOM
+  // nodes appended outside the canvas) — see Layer.onDiscard and
+  // VideoLayer's override. Unlike DeletionLayer archiving, a doomed layer
+  // here is never coming back, so this is always safe to run.
+  for (const l of doomed) {
+    l.onDiscard()
+    graph.unregister(l)
+  }
 }
 
 // ------------------------------------------------------------

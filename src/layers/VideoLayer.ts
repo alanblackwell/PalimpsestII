@@ -374,15 +374,23 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     // render one big button per camera before the user has picked a source.
     void this._refreshDeviceList()
 
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') return
-      if (this._sourceType !== 'camera') return
-      if (this.outsideStack && !this.inBackground) return
-      // Always restart: on mobile suspension the tracks stay 'live' but
-      // stop delivering frames, so a track-state check isn't reliable.
-      if (this._devices.length > 0) void this._startCameraStream()
-      else void this._startCamera()
-    })
+    document.addEventListener('visibilitychange', this._onVisibilityChange)
+  }
+
+  // Stored as a bound field (not an inline arrow function passed directly to
+  // addEventListener) so onDiscard() below can remove exactly this listener
+  // — document holds a strong reference to it for as long as it's attached,
+  // which would otherwise keep this whole VideoLayer instance (video
+  // elements, MediaStream, AudioContext, ...) alive forever once discarded,
+  // regardless of anything else onDiscard cleans up.
+  private readonly _onVisibilityChange = (): void => {
+    if (document.visibilityState !== 'visible') return
+    if (this._sourceType !== 'camera') return
+    if (this.outsideStack && !this.inBackground) return
+    // Always restart: on mobile suspension the tracks stay 'live' but
+    // stop delivering frames, so a track-state check isn't reliable.
+    if (this._devices.length > 0) void this._startCameraStream()
+    else void this._startCamera()
   }
 
   // ── ImageSource ───────────────────────────────────────────────
@@ -1310,6 +1318,49 @@ export class VideoLayer extends Layer implements ImageSource, AudioSource {
     }
     if (this._playing && this._objectUrl !== null) this._video.pause()
     this._video.srcObject = null
+  }
+
+  // Called once by Persistence.teardownSession for every layer a session
+  // reload discards (including via the marshalling panel — see CLAUDE.md's
+  // "Session teardown and Layer.onDiscard()" section) — this layer is never
+  // coming back, unlike DeletionLayer archiving. Releases everything _stopCurrentSource
+  // doesn't, since that's only ever called mid-lifetime when switching this
+  // layer's own source, not when the whole layer is being discarded:
+  //   - camera/screen MediaStream tracks — per spec, a "potentially
+  //     playing" media element is protected from GC, so leaving these
+  //     running isn't a "GC gets to it eventually" situation; the capture
+  //     device (and its recording indicator) stays live until this runs.
+  //   - the lazily-created AudioContext from getAudio() — never closed
+  //     anywhere else, and Chrome caps concurrent AudioContexts per page.
+  //   - the document-level visibilitychange listener — document holds a
+  //     strong reference to it for as long as it's attached, which would
+  //     otherwise keep this entire instance unreachable-but-unfreeable.
+  //   - both <video> elements — appended straight to document.body in the
+  //     constructor and otherwise never removed, so discarding a layer
+  //     without this leaves an orphaned, invisible <video> node behind.
+  override onDiscard(): void {
+    document.removeEventListener('visibilitychange', this._onVisibilityChange)
+
+    if (this._stream) {
+      this._stream.getTracks().forEach(t => t.stop())
+      this._stream = null
+    }
+    if (this._audioCtx !== null && this._audioCtx.state !== 'closed') {
+      void this._audioCtx.close()
+    }
+    if (this._objectUrl !== null) {
+      URL.revokeObjectURL(this._objectUrl)
+      this._objectUrl = null
+    }
+
+    this._video.pause()
+    this._video.srcObject = null
+    this._video.src = ''
+    this._video.remove()
+
+    this._previewVideo.pause()
+    this._previewVideo.src = ''
+    this._previewVideo.remove()
   }
 
   private _computeAutoFit(): void {

@@ -673,6 +673,21 @@ export class CaptureLayer extends Layer implements ImageSource {
     }
   }
 
+  // See Layer.onDiscard — called once by Persistence.teardownSession when a
+  // session reload permanently discards this layer. `_liveCanvas` is
+  // appended straight to document.body (lazily, on first recording) and
+  // otherwise never removed; a still-running recording also has its own
+  // rAF loop independent of the dataflow graph, same class of leak as
+  // VideoLayer's camera stream.
+  override onDiscard(): void {
+    if (this._recording) this._stopRecording()
+    this._liveCanvas?.remove()
+    if (this._previewVideo !== null) {
+      this._previewVideo.pause()
+      URL.revokeObjectURL(this._previewVideo.src)
+    }
+  }
+
   // Drives movie-frame capture independently of the dataflow evaluate()
   // loop, which only visits layers between the root and the currently
   // selected layer — that range may exclude this layer once the user

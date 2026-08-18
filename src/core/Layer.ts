@@ -79,6 +79,20 @@ export abstract class Layer extends Node {
   // its toggle to Background when it has no archived layers).
   onSelected(): void {}
 
+  // Called once by Persistence.teardownSession for every layer a session
+  // reload permanently discards — unlike DeletionLayer archiving (which
+  // just sets outsideStack, keeping the layer restorable), this layer is
+  // never coming back. outsideStack alone stops the dataflow side (dirty
+  // propagation, self-perpetuating recompute loops), but does nothing about
+  // resources a layer acquired outside the dataflow graph — a running
+  // camera/screen MediaStream, an AudioContext, a DOM node appended
+  // straight to document.body, a listener registered on `document`/
+  // `window` rather than on the layer's own element. Override to release
+  // those; see VideoLayer.onDiscard for the concrete case that motivated
+  // this. Full investigation and rationale: CLAUDE.md's "Session teardown
+  // and Layer.onDiscard()" section.
+  onDiscard(): void {}
+
   // Hidden helper layers remain part of the stack (evaluated in stack
   // order via renderStack) but have no thumbnail in the LayerStackWidget
   // and are never rendered to the canvas. They stay directly above (or,

@@ -833,6 +833,59 @@ manually-set field that isn't fully derived from slot inputs in
   manual save → reload → load round-trip of a stack using the new/changed
   layer.
 
+### Session teardown and `Layer.onDiscard()` — releasing resources on reload
+
+Loading a new session in place (`Persistence.deserialize()`, used by the
+Load button's "Session" choice, an OS/marshalling-panel `.json` drop, and
+`applyLoadedSession()` generally) calls `teardownSession(ctx)` first. That
+function has always correctly handled the *dataflow* side of discarding the
+old stack: it unlinks the whole chain (`removeFromStack()`, which sets
+`outsideStack = true` — this alone is what stops every self-perpetuating
+`recompute()` loop, since they all guard on `!outsideStack`), empties
+`BackgroundLayer`/`DeletionLayer`'s archive, severs every `BindingLayer`
+touching a discarded layer, and `graph.unregister()`s each one.
+
+What it didn't handle — found while investigating whether the marshalling
+panel (see "Content marshalling panel" above) could leak resources across
+repeated stack switches during a performance, since a reload-via-drag has no
+page-reload to fall back on — is anything a layer acquired *outside* the
+dataflow graph: a live camera/screen `MediaStream`, a lazily-created
+`AudioContext`, a `<video>` element appended straight to `document.body`, a
+listener registered on `document`/`window` rather than on the layer's own
+element. `outsideStack` stops `recompute()` from being called again, but
+does nothing to stop something already in motion — and per spec, a
+"potentially playing" media element is explicitly protected from garbage
+collection, so an abandoned camera/screen stream doesn't even resolve itself
+eventually; it stays live (recording indicator and all) until an actual page
+reload.
+
+`Layer.onDiscard()` (default no-op) is the fix: `teardownSession` now calls
+it on every doomed layer, right before `graph.unregister()`. Unlike
+`DeletionLayer` archiving (`outsideStack = true`, but restorable), a layer
+reaching `onDiscard()` is never coming back, so any cleanup here is always
+safe. `VideoLayer.onDiscard()` is the motivating override: stops
+`MediaStream` tracks, closes the `AudioContext` if one was ever created
+(never closed anywhere else — `getAudio()` caches it forever), removes
+`document`'s `visibilitychange` listener (stored as a bound field,
+`_onVisibilityChange`, specifically so it can be removed — leaving it
+attached would keep the *entire* `VideoLayer` instance unreachable-but-
+unfreeable forever, since `document` holds a strong reference to the
+closure), and removes both `_video` and `_previewVideo` from the DOM (both
+appended in the constructor, otherwise never removed — a pre-existing DOM-
+node leak on every discarded `VideoLayer`, independent of the
+camera/audio issue). `CaptureLayer.onDiscard()` follows the same pattern for
+its own equivalents: a still-running movie recording (`MediaRecorder` + its
+independent rAF loop) and its `_liveCanvas` (also appended straight to
+`document.body`).
+
+Any future layer that opens a camera/mic/screen stream, creates an
+`AudioContext`, or appends a DOM node/listener outside the normal
+render/slot machinery should override `onDiscard()` the same way — verified
+by stubbing the resource fields and either calling `onDiscard()` directly,
+or (for the full wiring) dispatching a synthetic session-load `drop` on the
+canvas and checking the fields were released, same technique as verifying
+the marshalling panel's own drag mechanism.
+
 ### Collection save/load (`src/persistence/CollectionExport.ts`)
 
 A `CollectionLayer` can be saved/loaded as its own standalone `.json` file,
