@@ -30,6 +30,11 @@
 
 export const MARSHALLING_DRAG_MIME = 'application/x-palimpsest-marshalled-item'
 
+// Natural sort (numeric: true) so a numeric planning prefix like
+// "2_build.mp4" sorts before "10_outro.mp4" — a plain string sort would put
+// "10_" before "2_" since '1' < '2' character-by-character.
+const FILENAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
 type ItemKind = 'image' | 'video' | 'json'
 
 interface PanelItem {
@@ -175,7 +180,8 @@ export class MarshallingPanel {
     // available as a native hover tooltip on the panel itself.
     this._root.title = folderName
 
-    for (const file of files) {
+    const sorted = [...files].sort((a, b) => FILENAME_ORDER.compare(a.name, b.name))
+    for (const file of sorted) {
       const kind = this._kindOf(file)
       if (kind === null) continue
       const item = this._buildItem(file, kind)

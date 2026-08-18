@@ -2117,6 +2117,12 @@ verify with a synthetic `DragEvent`/`DataTransfer` test (construct a real
 from reading the code, since the browser's behavior here is what's actually
 in question, not the JS logic.
 
+**Item order**: `load()` sorts `files` by filename before building items,
+using `Intl.Collator(undefined, { numeric: true })` (natural sort) rather
+than a plain string sort — a numeric planning prefix like "2_build.mp4"
+needs to sort before "10_outro.mp4", which plain lexicographic comparison
+gets wrong (`'1' < '2'` character-by-character).
+
 **Visual design** (arrived at through several rounds of "make it more
 unobtrusive" — it's meant to sit on stage without drawing audience
 attention): single column of small (28×28px) square thumbnails — each one
