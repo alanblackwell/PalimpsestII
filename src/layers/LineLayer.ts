@@ -12,6 +12,7 @@ import {
   type Ctx2D,
 } from '../core/types.js'
 import { graph }         from '../dataflow/Graph.js'
+import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxRescale.js'
 import { BindingLayer }  from './BindingLayer.js'
 import { contentLeft, panelWidth } from '../interaction/layout.js'
 import { AngleSnapper } from '../interaction/AngleSnapper.js'
@@ -315,6 +316,16 @@ export class LineLayer extends Layer implements ImageSource, MaskSource, Directi
     if (typeof state.addPointDone === 'boolean') this._addPointDone = state.addPointDone
     if (typeof state.addAnimateDone === 'boolean') this._addAnimateDone = state.addAnimateDone
     if (typeof state.manualOpacity === 'number') this._manualOpacity = state.manualOpacity
+    // Reload-time letterbox rescale (persistence/letterboxRescale.ts) — keep
+    // both endpoints at the same proportional position when the session is
+    // reloaded at a different browser-window size than it was saved at.
+    // _renderedStart/_renderedEnd are re-derived from these in recompute(),
+    // so they don't need their own rescale pass.
+    const r = computeLetterboxRescale()
+    if (r !== null) {
+      this._start = rescalePoint(r, this._start)
+      this._end   = rescalePoint(r, this._end)
+    }
   }
 
   override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
