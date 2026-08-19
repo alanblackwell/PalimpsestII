@@ -184,6 +184,7 @@ export class InteractionSystem {
   private _backgroundAction: (() => void) | null = null
   private _menuFocusAction:  (() => void) | null = null
   private _pauseClockAction: (() => void) | null = null
+  private _saveAction:       (() => void) | null = null
   private _pasteAction:      ((text: string) => void) | null = null
   private _imagePasteAction: ((file: File) => void) | null = null
   private _onBound:        ((source: Node, slot: ParameterSlot) => void) | null = null
@@ -290,6 +291,12 @@ export class InteractionSystem {
   // Register a callback invoked when the user presses 'p' (pause/resume the clock).
   setPauseClockAction(fn: () => void): void {
     this._pauseClockAction = fn
+  }
+
+  // Register a callback invoked when the user presses 's' (save session —
+  // same action as MenuLayer's Save button, usable from any selected layer).
+  setSaveAction(fn: () => void): void {
+    this._saveAction = fn
   }
 
   // Register a callback invoked on a system paste (Cmd/Ctrl+V) when no layer
@@ -1217,6 +1224,11 @@ export class InteractionSystem {
     }
     if (e.key === 'p' && !e.ctrlKey && !e.metaKey) {
       this._pauseClockAction?.()
+      e.preventDefault()
+      return
+    }
+    if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
+      this._saveAction?.()
       e.preventDefault()
       return
     }

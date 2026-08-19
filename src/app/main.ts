@@ -1565,6 +1565,12 @@ interaction.setPauseClockAction(() => {
   }
 })
 
+// 's' key — save the session, same action as MenuLayer's Save button, usable
+// regardless of which layer is currently selected.
+interaction.setSaveAction(() => {
+  void (isMobile ? handleSaveMobile() : handleSaveDesktop())
+})
+
 // 'c' key — collect the layer below into a CollectionLayer.
 //
 // First press: create a Collection above the selected layer, ingest the
