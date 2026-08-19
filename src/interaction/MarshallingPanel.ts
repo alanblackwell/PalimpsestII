@@ -171,9 +171,10 @@ export class MarshallingPanel {
   // Public API
   // ----------------------------------------------------------
 
-  // Replaces any current contents with `files` (already the full recursive
-  // listing of a picked folder) and shows the panel. Non-image/video/json
-  // entries (and dotfiles) are silently skipped.
+  // Replaces any current contents with `files` (already filtered down to a
+  // picked folder's top-level entries — see handleLoadFolderDesktop in
+  // main.ts) and shows the panel. Non-image/video/json entries (and
+  // dotfiles) are silently skipped.
   load(folderName: string, files: File[]): void {
     this._clear()
     // No visible heading (see constructor) — the folder name is still

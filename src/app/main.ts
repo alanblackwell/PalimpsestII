@@ -1286,7 +1286,16 @@ function handleLoadFolderDesktop(): void {
     if (!files || files.length === 0) return
     const first = files[0]!
     const folderName = first.webkitRelativePath.split('/')[0] || 'Folder'
-    marshallingPanel.load(folderName, Array.from(files))
+    // webkitdirectory's FileList is a full recursive walk of the picked
+    // folder — every nested subfolder included, with no way to ask the
+    // picker to stop at depth 1. That's surprising for a "prepared content"
+    // snapshot: a stray subfolder (an old take, an archive of a previous
+    // show) silently floods the panel with content the performer didn't
+    // mean to bring on stage. Keep only entries directly inside the picked
+    // folder ("Folder/file.ext" — two webkitRelativePath segments); a
+    // deeper path means it came from a subfolder and is dropped.
+    const topLevel = Array.from(files).filter(f => f.webkitRelativePath.split('/').length === 2)
+    marshallingPanel.load(folderName, topLevel)
   }
   input.click()
 }

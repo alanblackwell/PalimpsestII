@@ -2080,8 +2080,15 @@ with no new layout code). "Session" behaves exactly like the old Load
 button; "Folder" calls `handleLoadFolderDesktop()` (`main.ts`), which opens
 an `<input type="file" webkitdirectory multiple>` picker (typed via the
 ambient `src/types/file-input-directory.d.ts`, since `webkitdirectory`/
-`webkitRelativePath` aren't in TypeScript's bundled `dom` lib) and feeds the
-resulting `File[]` into `marshallingPanel.load(folderName, files)`. Desktop
+`webkitRelativePath` aren't in TypeScript's bundled `dom` lib). The
+resulting `FileList` is a full recursive walk of the picked folder — every
+nested subfolder included, with no picker option to stop at depth 1 — so
+`handleLoadFolderDesktop` filters it down to entries whose
+`webkitRelativePath` has exactly two segments (`"Folder/file.ext"`) before
+calling `marshallingPanel.load(folderName, topLevel)`; anything deeper came
+from a subfolder and is dropped. Found live: an old/archived subfolder
+sitting inside the picked folder was silently flooding the panel with
+stale content the performer never meant to bring on stage. Desktop
 only — `isMobile ? null : handleLoadFolderDesktop` passed into
 `setSaveLoadCallbacks`'s third argument; on mobile the choice never appears
 and Load behaves exactly as before this feature. No File System Access API
