@@ -379,7 +379,12 @@ export class InteractionSystem {
   // landed on the pause icon, resume it; otherwise delegate to _onSlotClick.
   private _handleSlotTap(layer: Layer, slot: ParameterSlot, point: Point): void {
     if (slot.state === SlotState.SuspendedBound && layer.hitTestSlotResume(point) === slot) {
-      slot.resume()
+      // Route through BindingLayer.toggle() (not a raw slot.resume()) so this
+      // gesture gets the same "did the manual value change while suspended →
+      // push it back to the source" handling as the toggle button on the
+      // BindingLayer's own stack row — otherwise a manual edit made while
+      // suspended is silently discarded the moment this icon resumes it.
+      BindingLayer.findForSlot(slot)?.toggle()
       this._refreshCallback?.()
       Node.scheduleFrame?.()
       return

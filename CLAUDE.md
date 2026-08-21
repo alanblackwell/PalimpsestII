@@ -1213,6 +1213,102 @@ step would take hundreds of clicks to cross the now much wider range; the
 scale-drag handle (`renderOverlay`) remains the fastest way to reach the top
 of the range.
 
+### `TextLayer` — shared style binding (`styleSlot`)
+
+`styleSlot` lets one `TextLayer` (the "master") drive another's typography —
+font family, bold, italic, point size, horizontal + vertical justify, line
+spacing, and pad — live, every frame, while bound. Rendered as the last row
+of the standard slot pill, directly under rotation. Typed `ValueType.Mask`
+purely so drag-drop highlighting/binding reuse the ordinary slot machinery —
+same "reused type for highlighting, class-restricted for binding" convention
+as `StrokeLayer.chainSlot` — with a guard in `main.ts`'s `setBoundCallback`
+rejecting any source that isn't a `TextLayer`. No new cycle-detection code
+was needed: `styleSlot` is an ordinary non-feedback `ParameterSlot`, so
+`Graph.bind()`'s existing reachability check already rejects any bind that
+would close a loop, the same as for any other slot type.
+
+**Live propagation.** `recompute()` pulls the master's
+`getStyleSnapshot()` (a `TextStyleSnapshot` — the 8 fields above) and writes
+them straight into the consumer's own *manual* fields (`_fontFamily`,
+`_manualSize`, etc.) whenever `styleSlot.isActive`, rather than introducing a
+separate override layer. This is deliberate: every one of those fields
+already has its own manual/slot priority chain (e.g. `sizeSlot` beats
+`_manualSize`), so writing into the manual field means a more specific local
+slot binding still wins over shared style exactly like it already wins over
+a hand-dragged value — no changes needed to any of that existing priority
+logic.
+
+**Suspend-on-touch, generalized to a whole bundle.** Touching *any* of the
+eight controls — font picker, bold/italic buttons, justify/vJustify buttons,
+the scale handle, size stepper, line-spacing slider, pad slider — calls a
+shared `_touchStyle()` helper first, which suspends `styleSlot` via the
+standard `BindingLayer.findForSlot(slot)?.toggle()` convention. `setJustify`/
+`setVJustify` themselves stay untouched by this (they're also called from the
+live-propagation pull above, and from `receiveValue` below, neither of which
+should suspend anything) — `_touchStyle()` is called at each individual
+click-handler call site for those two instead.
+
+**Push-back on resume reuses the existing generic pipeline.**
+`Layer.getSlotDefault`/`pushResumedValue`/`receiveValue` (`src/core/Layer.ts`)
+already existed to let *any* slot's binding, once resumed, push a manually-
+edited value back onto its source — previously only ever exercised for a
+single scalar (`Point | number | Direction | Colour`). `TextStyleSnapshot`
+(and a duck-typed `isTextStyleSnapshot` guard) widens that same union so a
+whole style bundle rides through unchanged: `getSlotDefault(styleSlot)`
+returns the bundle, `receiveValue` applies a pushed bundle to the master's
+own manual fields. `BindingLayer._slotValuesEqual` (used to detect "did the
+value actually change while suspended") gained one more branch, comparing
+all 8 fields structurally.
+
+**Master-of-a-master.** `TextLayer.receiveValue` calls `this._touchStyle()`
+*before* applying a pushed bundle — so if the layer receiving the push
+(itself a master to whoever pushed) is itself bound to a further-upstream
+master, that binding gets suspended too, "as if a manual change had been
+made" to it, before its fields are overwritten. This is what makes a
+2+-level chain (A ← B ← C) behave correctly: editing C, then resuming C,
+pushes the edit up to B *and* disables B's own binding to A — the cascade
+deliberately stops there (propagating further requires the user to
+explicitly resume B → A too), consistent with every other suspend/resume
+gesture in the app being an explicit action, never automatic.
+
+**Bugfix found while testing the above**: `InteractionSystem._handleSlotTap`
+(the inline ⏸ pause-icon click on a suspended slot row, as opposed to the
+toggle button on the `BindingLayer`'s own stack row) called raw
+`slot.resume()` instead of `BindingLayer.findForSlot(slot)?.toggle()` —
+skipping the "did the manual value change while suspended → push it back"
+logic entirely for that one gesture. This silently discarded any manual edit
+made while suspended, for every slot type, not just `styleSlot` — just far
+more visible here since push-back is the entire point of this feature. Now
+routes through the same `toggle()` as the BindingLayer row.
+
+**MASTER badge.** `TextLayer._isStyleMaster()` scans `this.dependents`
+(every node already depending on this one via any active slot — not a
+dedicated masters list) for another `TextLayer` whose own `styleSlot.source
+=== this`. When true — and only when this layer's *own* `styleSlot` is
+unbound; a layer that's itself bound to something else shows the plain
+"style" label regardless of whether others are bound to it, since a filled
+slot row already makes that state visible — `_renderStyleRoleBadge`
+overpaints the slot row's label column with a small "MASTER" badge: a plain
+low-saturation grey fill (opaque enough to occlude the "style" text
+underneath, bounded exactly to the badge's own rounded outline — no
+separate backing rect) with an accent-coloured border.
+
+**Click-to-create a master.** Clicking an empty `styleSlot` (guarded ahead
+of the generic Mask-typed-slot fallback in `main.ts`'s
+`setSlotClickCallback`, which would otherwise try to wrap a shape in a
+`MaskLayer`) creates a fresh `TextLayer` exactly as the Text menu button
+does, inserts it above the clicked layer, and binds the slot to it —
+mirroring `createChainedStroke`'s "seed then bind" pattern:
+`TextLayer.applyStyleSnapshot()` copies the clicked layer's *current* style
+onto the new layer first (raw field assignment, not `setJustify`/
+`setVJustify` — this runs before the new layer's own `_textHalfW`/
+`_textHalfH` have ever been computed from real content, so their
+"keep visually anchored" repositioning would only have stale placeholder
+extents to work from), so the bind starts as a no-op. Runs through the same
+`postInsertLayer` wiring every Text-button-created layer gets, then selects
+the new layer — which now shows the MASTER badge immediately, since the
+clicked layer is its first dependent.
+
 ### Slot label convention
 
 All `ParameterSlot` constructors should use a descriptive label string (third

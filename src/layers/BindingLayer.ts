@@ -1,4 +1,4 @@
-import { Layer } from '../core/Layer.js'
+import { Layer, isTextStyleSnapshot, type TextStyleSnapshot } from '../core/Layer.js'
 import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import {
@@ -91,7 +91,7 @@ export class BindingLayer extends Layer
   private _enabled = true
   // Value captured from getSlotDefault at the moment the binding was suspended.
   // Used on resume to decide whether the user actually changed the control.
-  private _valueAtSuspend: Point | number | Direction | Colour | null = null
+  private _valueAtSuspend: Point | number | Direction | Colour | TextStyleSnapshot | null = null
 
   // Button geometry — derived from bounds, computed on demand.
   private static readonly BTN = 24   // button size in px
@@ -183,8 +183,8 @@ export class BindingLayer extends Layer
   }
 
   private _slotValuesEqual(
-    a: Point | number | Direction | Colour | null,
-    b: Point | number | Direction | Colour | null,
+    a: Point | number | Direction | Colour | TextStyleSnapshot | null,
+    b: Point | number | Direction | Colour | TextStyleSnapshot | null,
   ): boolean {
     if (a === b) return true
     if (a === null || b === null) return false
@@ -195,6 +195,10 @@ export class BindingLayer extends Layer
       return a.angle === (b as Direction).angle && a.magnitude === (b as Direction).magnitude
     if ('r' in a && typeof b === 'object' && 'r' in b)
       return a.r === (b as Colour).r && a.g === (b as Colour).g && a.b === (b as Colour).b && a.a === (b as Colour).a
+    if (isTextStyleSnapshot(a) && isTextStyleSnapshot(b))
+      return a.fontFamily === b.fontFamily && a.bold === b.bold && a.italic === b.italic &&
+        a.size === b.size && a.justify === b.justify && a.vJustify === b.vJustify &&
+        a.lineSpacing === b.lineSpacing && a.pad === b.pad
     return false
   }
 

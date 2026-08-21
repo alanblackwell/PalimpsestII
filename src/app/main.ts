@@ -1638,6 +1638,15 @@ interaction.setBoundCallback((source, slot) => {
     refreshStack()
     return
   }
+  // TextLayer's style slot shares font/weight/justification/spacing/pad with
+  // another TextLayer; it's typed Mask (like maskSlot) so it highlights like
+  // any other mask-source drag, but only another TextLayer is a valid master
+  // — same "typed for highlighting, class-restricted for binding" convention
+  // as StrokeLayer.chainSlot just above.
+  if (slot.owner instanceof TextLayer && slot === slot.owner.styleSlot && !(source instanceof TextLayer)) {
+    refreshStack()
+    return
+  }
   if (tryBindRateIntoPhase(source, slot)) { refreshStack(); return }
   BindingLayer.create(source, slot)
   refreshStack()
@@ -1737,6 +1746,27 @@ interaction.setMaskDropCallback((source, target) => {
 interaction.setSlotClickCallback((consumer, slot) => {
   if (slot.state === SlotState.Unbound) {
     if (slot.type === null) return
+
+    // TextLayer's style slot: unlike every other Mask-typed slot below
+    // (which wraps a shape), the sensible default here is a fresh TextLayer,
+    // same as pressing the Text menu button — placed above the consumer and
+    // bound immediately, so the consumer becomes this new layer's first
+    // slave and the new layer becomes the master. Seeded from the consumer's
+    // own current style so the binding starts as a no-op (see
+    // applyStyleSnapshot), then run through the same postInsertLayer wiring
+    // (Mask/Point convenience buttons, opacity inspector, applyDefaultBindings)
+    // every other Text-button-created layer gets.
+    if (consumer instanceof TextLayer && slot === consumer.styleSlot) {
+      const newLayer = new TextLayer(undefined, Node.greyDefault ? OUTLINE_COLOUR : rndColour())
+      newLayer.applyStyleSnapshot(consumer.getStyleSnapshot())
+      Layer.assignDebugName(newLayer)
+      newLayer.bounds = { x: X, y: 24, width: W, height: 36 }
+      newLayer.insertAbove(consumer)
+      BindingLayer.create(newLayer, slot)
+      postInsertLayer(newLayer)
+      refreshStack(newLayer)
+      return
+    }
 
     // StrokeLayer start/end slots: initialise the new PointLayer at the
     // actual stroke endpoint so the binding is a no-op by default.

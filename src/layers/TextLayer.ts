@@ -1,4 +1,4 @@
-import { Layer } from '../core/Layer.js'
+import { Layer, isTextStyleSnapshot, type TextStyleSnapshot } from '../core/Layer.js'
 import { Node } from '../core/Node.js'
 import { ParameterSlot } from '../core/ParameterSlot.js'
 import { SliderSlot } from '../ui/SliderSlot.js'
@@ -44,6 +44,7 @@ import { computeLetterboxRescale, rescalePoint } from '../persistence/letterboxR
 //   [✎] opens a multiline overlay dialog with a Paste button.
 
 const ACCENT       = '#c8c8e8'
+const STYLE_ROLE_COL = '#cfcf7e'   // Mask accent — matches styleSlot's reused ValueType
 const DIR_ACCENT   = '#7ecfcf'
 const AM_COL       = '#4a8fe8'   // Amount type accent
 const MIN_SIZE     = 6
@@ -211,6 +212,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   private readonly _maskSlot:     ParameterSlot
   private readonly _rotationSlot: ParameterSlot
   private readonly _opacitySlot:  ParameterSlot
+  // Shares font/weight/justification/spacing/pad with another TextLayer (the
+  // "master") — see getStyleSnapshot/receiveValue and _touchStyle below.
+  // Public (unlike the other slots above) because main.ts's setBoundCallback/
+  // setSlotClickCallback need to reference it by identity, same convention as
+  // StrokeLayer.chainSlot. Reuses ValueType.Mask purely for drag-drop
+  // highlighting; only another TextLayer is actually accepted as a source.
+  readonly styleSlot: ParameterSlot
 
   // Persisted text content
   private _text: string = ''
@@ -322,7 +330,13 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._rotationSlot    = new ParameterSlot(ValueType.Direction, this, 'rotation')
     this._opacitySlot     = new ParameterSlot(ValueType.Amount,    this, 'opacity')
     this._lineSpacingSlot = new ParameterSlot(ValueType.Amount,    this, 'line spacing')
-    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot, this._lineSpacingSlot)
+    this.styleSlot        = new ParameterSlot(ValueType.Mask,      this, 'style')
+    // styleSlot is pushed last (not interleaved after rotationSlot, where it
+    // renders) so old saves' positional slot restore still binds their first
+    // seven slots correctly — same "clean break, no migration" precedent as
+    // AnimPathLayer.phaseOffsetSlot. renderSlots' `standard` filter below
+    // reorders it back to directly under rotation for display purposes.
+    this.slots.push(this._positionSlot, this._colourSlot, this._sizeSlot, this._maskSlot, this._rotationSlot, this._opacitySlot, this._lineSpacingSlot, this.styleSlot)
     this._opacityWidget = new SliderSlot(
       this._opacitySlot, 'opacity', AM_COL,
       () => this._manualOpacity,
@@ -400,6 +414,110 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   get manualLineSpacing(): number                       { return this._manualLineSpacing }
   get lineSpacingSlot():   ParameterSlot                { return this._lineSpacingSlot   }
 
+  // The bundle of properties shared via styleSlot. Read by a bound "slave"
+  // layer's recompute() (live, every frame) and by getSlotDefault(styleSlot)
+  // (a one-shot read used for suspend/resume comparison and slot-click seeding).
+  getStyleSnapshot(): TextStyleSnapshot {
+    return {
+      fontFamily:  this._fontFamily,
+      bold:        this._bold,
+      italic:      this._italic,
+      size:        this._manualSize,
+      justify:     this._justify,
+      vJustify:    this._vJustify,
+      lineSpacing: this._manualLineSpacing,
+      pad:         this._maskBorderPad,
+    }
+  }
+
+  // Seeds this layer's style fields from a snapshot — used by main.ts's
+  // styleSlot click-to-create gesture when it creates a brand-new master
+  // layer, so binding the consumer to it starts as a no-op (the consumer's
+  // on-screen style doesn't visibly change the moment it's bound). Same
+  // "seed with the current value" convention as the generic Point/Amount/
+  // Direction slot-click path, and the same shape as StrokeLayer's
+  // applyStateSnapshot. Raw field assignment (not via setJustify/setVJustify)
+  // — this runs at construction time, before this layer's own _textHalfW/
+  // _textHalfH have ever been computed from real content, so their
+  // "keep visually anchored" repositioning math would only have stale
+  // placeholder extents to work from.
+  applyStyleSnapshot(s: TextStyleSnapshot): void {
+    this._fontFamily        = s.fontFamily
+    this._bold               = s.bold
+    this._italic               = s.italic
+    this._manualSize             = s.size
+    this._justify                  = s.justify
+    this._vJustify                   = s.vJustify
+    this._manualLineSpacing            = s.lineSpacing
+    this._maskBorderPad                  = s.pad
+    this.markDirty()
+  }
+
+  // Suspend-on-touch for styleSlot — called at the start of every user-driven
+  // mutation of a style-bundle field (font, bold, italic, justify, vJustify,
+  // size, line spacing, pad), same convention as the per-field suspend calls
+  // already scattered through this file (e.g. _positionSlot in startCenterDrag).
+  private _touchStyle(): void {
+    if (this.styleSlot.state === SlotState.Bound) {
+      BindingLayer.findForSlot(this.styleSlot)?.toggle()
+    }
+  }
+
+  // True if some other live TextLayer currently has its own styleSlot bound
+  // to this one — i.e. this layer is (at least one) master's style source.
+  // Scans this.dependents (every node depending on this one via any active
+  // slot, not just styleSlot) rather than a dedicated list — masters aren't
+  // tracked separately, this is a cheap once-per-render lookup over what's
+  // already there. A layer can be master of several slaves at once; this
+  // only needs to know whether it is master of at least one.
+  private _isStyleMaster(): boolean {
+    for (const dep of this.dependents) {
+      if (dep instanceof TextLayer && dep.styleSlot.isActive && dep.styleSlot.source === this) return true
+    }
+    return false
+  }
+
+  // Overpaints the styleSlot row's label column (normally the plain word
+  // "style") with a MASTER badge, so a performer can tell at a glance which
+  // TextLayer in a style chain is currently authoritative. Only shown when
+  // this layer's own styleSlot is unbound — a layer whose own styleSlot IS
+  // bound already shows that plainly (a filled slot row), so it keeps the
+  // plain "style" label even if other layers are also bound to it (a
+  // mid-chain layer isn't authoring its own style either way). Cycles (a
+  // slave becoming its own master's master) can't occur: styleSlot is an
+  // ordinary non-feedback ParameterSlot, so Graph.bind()'s existing
+  // reachability check already rejects any bind that would close a loop —
+  // nothing extra is needed here for that.
+  private _renderStyleRoleBadge(ctx: Ctx2D): void {
+    if (this.styleSlot.isActive || !this._isStyleMaster()) return
+
+    const b = this._slotBounds.get(this.styleSlot)
+    if (b === undefined) return
+
+    const LABEL_W = 78   // must match Layer.renderSlotGroup's own LABEL_W
+    const text    = 'MASTER'
+
+    ctx.save()
+    // The badge's own fill (opaque, plain grey — not accent-tinted) is what
+    // occludes the "style" label drawn underneath by renderSlotGroup; there
+    // is no separate backing rect, so nothing paints beyond the badge's own
+    // rounded outline.
+    const pad = 4
+    const bx = b.x + pad, by = b.y + 4, bw = LABEL_W - pad * 2, bh = b.height - 8
+    ctx.fillStyle = 'rgba(60,60,66,0.92)'
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 4); ctx.fill()
+    ctx.strokeStyle = STYLE_ROLE_COL + 'aa'
+    ctx.lineWidth   = 1
+    ctx.beginPath(); ctx.roundRect(bx + 0.5, by + 0.5, bw - 1, bh - 1, 4); ctx.stroke()
+
+    ctx.font         = 'bold 9px monospace'
+    ctx.fillStyle    = 'rgba(255,255,255,0.88)'
+    ctx.textAlign    = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText(text, b.x + LABEL_W / 2, b.y + b.height / 2)
+    ctx.restore()
+  }
+
   // The implicit local mask rectangle, but only once the user has manually
   // dragged it (see _localMaskDragged) — null otherwise, including when it's
   // still sitting at its paste-time auto-centred position. Used by
@@ -442,7 +560,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // Seed a newly-created layer (via slot-click-to-create) with the value
   // currently shown by the corresponding manual control, so the binding
   // starts as a no-op.
-  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | null {
+  override getSlotDefault(slot: ParameterSlot): Point | number | Direction | Colour | TextStyleSnapshot | null {
     if (slot === this._colourSlot)   return this._colour
     if (slot === this._positionSlot) return this._manualPosition ?? this._position
     if (slot === this._sizeSlot) {
@@ -452,7 +570,33 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     if (slot === this._rotationSlot)    return { angle: this._rotation, magnitude: 1 }
     if (slot === this._opacitySlot)     return this._manualOpacity
     if (slot === this._lineSpacingSlot) return (this._manualLineSpacing + 1) / 4
+    if (slot === this.styleSlot)        return this.getStyleSnapshot()
     return null
+  }
+
+  // Called by BindingLayer.toggle() when a consumer's binding to this layer
+  // is re-enabled after a manual style edit — pushes that consumer's edited
+  // style bundle back onto this (master) layer. See getStyleSnapshot/
+  // _touchStyle and the class comment on styleSlot.
+  protected override receiveValue(
+    type: ValueType | null,
+    val: Point | number | Direction | Colour | TextStyleSnapshot,
+  ): void {
+    if (!isTextStyleSnapshot(val)) { super.receiveValue(type, val); return }
+    // If this (master) layer's own styleSlot is itself bound to a further
+    // upstream layer, suspend that binding first so the pushed value isn't
+    // immediately overwritten by the next recompute() (see "Feedback slots"
+    // / receiveValue's own doc comment in Layer.ts).
+    this._touchStyle()
+    this._fontFamily        = val.fontFamily
+    this._bold               = val.bold
+    this._italic               = val.italic
+    this._manualSize             = val.size
+    this.setJustify(val.justify)
+    this.setVJustify(val.vJustify)
+    this._manualLineSpacing        = val.lineSpacing
+    this._maskBorderPad              = val.pad
+    this.markDirty()
   }
 
   // ----------------------------------------------------------
@@ -614,6 +758,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
 
       item.append(nameEl, sampleEl)
       item.onclick = () => {
+        this._touchStyle()
         this._fontFamily = font.name
         this.markDirty()
         document.body.removeChild(overlay)
@@ -635,14 +780,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     })
   }
 
-  toggleBold(): void   { this._bold   = !this._bold;   this.markDirty() }
-  toggleItalic(): void { this._italic = !this._italic; this.markDirty() }
+  toggleBold(): void   { this._touchStyle(); this._bold   = !this._bold;   this.markDirty() }
+  toggleItalic(): void { this._touchStyle(); this._italic = !this._italic; this.markDirty() }
 
   // dir: +1 or -1. Step scales with the current size (≈10%, floor 4px) so the
   // −/+ buttons stay usable across a range that now spans MIN_SIZE up to a
   // canvas-filling maxTextSize() — a fixed 4px step would take hundreds of
   // clicks to reach the top of that range.
   adjustSize(dir: 1 | -1): void {
+    this._touchStyle()
     if (this._maskSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._maskSlot)?.toggle()
       this._manualSize = Math.round(this._size)  // seed from auto-fitted size
@@ -1023,6 +1169,24 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   protected recompute(): void {
     this._syncDebugName()
 
+    // Pull shared style from the master, if bound — live, every frame, same
+    // as any other active slot. Writes into the ordinary manual-value fields
+    // (not a separate override layer), so all the existing manual/slot
+    // priority logic below (sizeSlot vs _manualSize, etc.) picks it up
+    // unchanged: style sets the baseline, a more specific local slot still
+    // wins over it exactly like it already wins over hand-set manual values.
+    if (this.styleSlot.isActive) {
+      const s = (this.styleSlot.source as TextLayer).getStyleSnapshot()
+      this._fontFamily        = s.fontFamily
+      this._bold               = s.bold
+      this._italic               = s.italic
+      this._manualSize             = s.size
+      this.setJustify(s.justify)
+      this.setVJustify(s.vJustify)
+      this._manualLineSpacing        = s.lineSpacing
+      this._maskBorderPad              = s.pad
+    }
+
     this._opacity = this._opacitySlot.isActive
       ? (this._opacitySlot.source as AmountSource).getAmount() as Amount
       : this._manualOpacity
@@ -1328,6 +1492,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     // Scale handle — only when sizeSlot is unbound; adjusts the manual font size.
     // If the mask is currently auto-fitting, suspend it and seed from auto-fitted size.
     if (!this._sizeSlot.isActive && ptDist(point, hp.scale) <= HANDLE_HIT) {
+      this._touchStyle()
       if (this._maskSlot.state === SlotState.Bound) {
         BindingLayer.findForSlot(this._maskSlot)?.toggle()
         this._manualSize = Math.round(this._size)
@@ -1399,15 +1564,15 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     }
 
     if (boundingBoxContains(this._alignPillBounds(), point)) {
-      if (boundingBoxContains(this._paraJustifyL(), point)) { this.setJustify('left');    return true }
-      if (boundingBoxContains(this._paraJustifyC(), point)) { this.setJustify('center');  return true }
-      if (boundingBoxContains(this._paraJustifyR(), point)) { this.setJustify('right');   return true }
-      if (boundingBoxContains(this._paraJustifyJ(), point)) { this.setJustify('justify'); return true }
+      if (boundingBoxContains(this._paraJustifyL(), point)) { this._touchStyle(); this.setJustify('left');    return true }
+      if (boundingBoxContains(this._paraJustifyC(), point)) { this._touchStyle(); this.setJustify('center');  return true }
+      if (boundingBoxContains(this._paraJustifyR(), point)) { this._touchStyle(); this.setJustify('right');   return true }
+      if (boundingBoxContains(this._paraJustifyJ(), point)) { this._touchStyle(); this.setJustify('justify'); return true }
       if (this._hasMaskLayout) {
-        if (boundingBoxContains(this._vJustifyT(), point)) { this.setVJustify('top');     return true }
-        if (boundingBoxContains(this._vJustifyC(), point)) { this.setVJustify('center');  return true }
-        if (boundingBoxContains(this._vJustifyB(), point)) { this.setVJustify('bottom');  return true }
-        if (boundingBoxContains(this._vJustifyJ(), point)) { this.setVJustify('justify'); return true }
+        if (boundingBoxContains(this._vJustifyT(), point)) { this._touchStyle(); this.setVJustify('top');     return true }
+        if (boundingBoxContains(this._vJustifyC(), point)) { this._touchStyle(); this.setVJustify('center');  return true }
+        if (boundingBoxContains(this._vJustifyB(), point)) { this._touchStyle(); this.setVJustify('bottom');  return true }
+        if (boundingBoxContains(this._vJustifyJ(), point)) { this._touchStyle(); this.setVJustify('justify'); return true }
       }
       return false
     }
@@ -1432,6 +1597,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   private _setLineSpacingFromPointer(px: number): void {
+    this._touchStyle()
     if (this._lineSpacingSlot.state === SlotState.Bound) {
       BindingLayer.findForSlot(this._lineSpacingSlot)?.toggle()
     }
@@ -1446,6 +1612,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   }
 
   private _setBorderPadFromPointer(px: number): void {
+    this._touchStyle()
     const g      = this._padSliderGeom()
     const thumbR = 5
     const lo     = g.sld0 + thumbR
@@ -1632,6 +1799,7 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
     this._slotBounds.clear()
     const standard = this.slots.filter(s => s !== this._lineSpacingSlot && s !== this._opacitySlot)
     this.renderSlotGroup(ctx, standard, this.panelBottom)
+    this._renderStyleRoleBadge(ctx)
 
     // Opacity SliderSlot pill — one row below the standard slot group
     const ob = this._opacityPillBounds()

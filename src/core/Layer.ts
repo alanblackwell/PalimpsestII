@@ -18,6 +18,27 @@ const SLOT_TC: Partial<Record<ValueType, string>> = {
   [ValueType.Audio]:     '#a87ee8',
 }
 
+// A snapshot of TextLayer's shared style bundle (font, weight, justification,
+// line spacing, pad). Not tied to a ValueType — TextLayer.styleSlot reuses
+// ValueType.Mask purely so drag-drop highlighting/binding reuse the ordinary
+// slot machinery (same convention as StrokeLayer.chainSlot), and this shape
+// rides through the existing getSlotDefault/pushResumedValue/receiveValue
+// pipeline as a single "value" alongside Point/Direction/Colour/number.
+export interface TextStyleSnapshot {
+  fontFamily:  string
+  bold:        boolean
+  italic:      boolean
+  size:        number
+  justify:     'left' | 'center' | 'right' | 'justify'
+  vJustify:    'top' | 'center' | 'bottom' | 'justify'
+  lineSpacing: number
+  pad:         number
+}
+
+export function isTextStyleSnapshot(v: unknown): v is TextStyleSnapshot {
+  return typeof v === 'object' && v !== null && 'fontFamily' in v
+}
+
 // ------------------------------------------------------------
 // Layer — a full participant in the dataflow graph and the stack
 // ------------------------------------------------------------
@@ -484,7 +505,7 @@ export abstract class Layer extends Node {
   // slider value, etc) — so a layer created via the slot-click-to-create
   // gesture starts as a no-op binding. Return null to fall back to the
   // slot type's canonical default (DEFAULT_VALUE_LAYER in main.ts).
-  getSlotDefault(_slot: ParameterSlot): Point | number | Direction | Colour | null {
+  getSlotDefault(_slot: ParameterSlot): Point | number | Direction | Colour | TextStyleSnapshot | null {
     return null
   }
 
@@ -507,7 +528,7 @@ export abstract class Layer extends Node {
   //   2. Apply val as the new manual value and mark dirty.
   // Default is a no-op; only source layers with controllable outputs need it.
   // Do not call directly — use pushResumedValue on the consumer.
-  protected receiveValue(_type: ValueType | null, _val: Point | number | Direction | Colour): void {}
+  protected receiveValue(_type: ValueType | null, _val: Point | number | Direction | Colour | TextStyleSnapshot): void {}
 
   // True if `slot` is conventionally filled with a freshly-created closed
   // shape (Rect/Ellipse/Path, in outline mode) via the slot-click-to-create
