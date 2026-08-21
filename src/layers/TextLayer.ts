@@ -464,22 +464,27 @@ export class TextLayer extends Layer implements MaskSource, ImageSource {
   // ── Reference points (for PointLayer shape binding and endpoint snap) ──
 
   // 9-point grid (TL, T, TR, R, BR, B, BL, L, C) from the text content bbox
-  // (masked) or from the text half-extents about _position (unmasked). Rotation-aware.
+  // (masked) or from the text half-extents about _position (unmasked),
+  // outset by the pad slider so points land around the text boundary rather
+  // than exactly on it. Rotation-aware.
   getRefPoints(): Point[] {
     let raw: Point[]
+    const pad = this._maskBorderPad
     const bb = this._maskBBox
     if (bb !== null) {
-      const mx = (bb.minX + bb.maxX) / 2, my = (bb.minY + bb.maxY) / 2
+      const minX = bb.minX - pad, maxX = bb.maxX + pad
+      const minY = bb.minY - pad, maxY = bb.maxY + pad
+      const mx = (minX + maxX) / 2, my = (minY + maxY) / 2
       raw = [
-        { x: bb.minX, y: bb.minY }, { x: mx, y: bb.minY }, { x: bb.maxX, y: bb.minY },
-        { x: bb.maxX, y: my      },
-        { x: bb.maxX, y: bb.maxY }, { x: mx, y: bb.maxY }, { x: bb.minX, y: bb.maxY },
-        { x: bb.minX, y: my      },
-        { x: mx,      y: my      },
+        { x: minX, y: minY }, { x: mx, y: minY }, { x: maxX, y: minY },
+        { x: maxX, y: my   },
+        { x: maxX, y: maxY }, { x: mx, y: maxY }, { x: minX, y: maxY },
+        { x: minX, y: my   },
+        { x: mx,   y: my   },
       ]
     } else {
       const { x, y } = this._position
-      const hw = this._textHalfW, hh = this._textHalfH
+      const hw = this._textHalfW + pad, hh = this._textHalfH + pad
       raw = [
         { x: x - hw, y: y - hh }, { x,     y: y - hh }, { x: x + hw, y: y - hh },
         { x: x + hw, y          },
