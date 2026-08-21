@@ -819,7 +819,9 @@ export class InteractionSystem {
       // Deliver move to the captured node only.
       if (e.pointerId !== this._active.pointerId) return
       const movePoint = this._active.useVpt ? this._viewportPoint(e) : point
-      this._active.node.handlePointerMove?.(movePoint)
+      this._withPillZoneCanvasWidth(this._active.useVpt, () => {
+        this._active!.node.handlePointerMove?.(movePoint)
+      })
       if (isTouch) {
         Node.touchDragPoint = point
         Node.scheduleFrame?.()
